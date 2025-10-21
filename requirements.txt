@@ -1,0 +1,12 @@
+# --- Основные зависимости для работы фреймворка ---
+tinkoff-invest-python
+pandas
+pandas-ta
+python-dotenv
+
+# --- Зависимости для анализа и визуализации ---
+matplotlib
+seaborn
+
+# --- Зависимость для работы с форматом Parquet ---
+pyarrow
