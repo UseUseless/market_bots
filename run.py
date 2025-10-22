@@ -4,6 +4,7 @@ import os
 from datetime import datetime
 import logging
 import pandas as pd
+import sys
 
 # --- Импорт компонентов новой архитектуры ---
 from core.event import MarketEvent, SignalEvent, OrderEvent, FillEvent
@@ -11,6 +12,7 @@ from core.data_handler import HistoricTinkoffDataHandler, HistoricLocalDataHandl
 from core.portfolio import Portfolio
 from core.execution import SimulatedExecutionHandler
 from analyzer import BacktestAnalyzer
+from utils.context_logger import context_filter
 
 # --- Импорт и регистрация конкретных стратегий ---
 from strategies.triple_filter import TripleFilterStrategy
@@ -22,9 +24,17 @@ AVAILABLE_STRATEGIES = {
     # "my_awesome_strategy": MyAwesomeStrategy, # <-- Пример регистрации новой
 }
 
-def setup_logging(log_file_path: str):
+def setup_logging(log_file_path: str, backtest_mode: bool):
     """Настраивает и конфигурирует логгер."""
-    log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    
+    if backtest_mode:
+        # Для бэктеста используем время симуляции
+        log_formatter = logging.Formatter('%(sim_time)s - %(levelname)s - %(message)s')
+    else:
+        # Для live-режима или других утилит используем реальное время
+        log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    # --------------------------------
+
     os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
     
     file_handler = logging.FileHandler(log_file_path, mode='w')
@@ -41,6 +51,8 @@ def setup_logging(log_file_path: str):
         
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
+
+    logger.addFilter(context_filter)
 
 def run_backtest(strategy_class: type, days: int, trade_log_path: str, source: str, figi: str):
     """
@@ -76,7 +88,7 @@ def run_backtest(strategy_class: type, days: int, trade_log_path: str, source: s
     enriched_data = strategy.prepare_data(raw_data)
     logging.info("Этап подготовки данных завершен.")
 
-    # --- 3. ИСПРАВЛЕННЫЙ ГЛАВНЫЙ ЦИКЛ СОБЫТИЙ ---
+    # --- 3. ГЛАВНЫЙ ЦИКЛ СОБЫТИЙ ---
     logging.info("Запуск основного цикла обработки событий...")
     
     # Создаем генератор, который будет выдавать нам свечи по одной
@@ -104,6 +116,8 @@ def run_backtest(strategy_class: type, days: int, trade_log_path: str, source: s
                 # История кончилась, генератор пуст. Завершаем бэктест.
                 break
         else:
+            if isinstance(event, MarketEvent):
+                context_filter.set_sim_time(event.timestamp)
             # Маршрутизация событий
             if isinstance(event, MarketEvent):
                 portfolio.update_market_price(event)
@@ -115,6 +129,7 @@ def run_backtest(strategy_class: type, days: int, trade_log_path: str, source: s
             elif isinstance(event, FillEvent):
                 portfolio.on_fill(event)
 
+    context_filter.set_sim_time(None)
     logging.info("Основной цикл завершен.")
 
     # 4. АНАЛИЗ РЕЗУЛЬТАТОВ И ГЕНЕРАЦИЯ ОТЧЕТА
@@ -162,7 +177,8 @@ def main():
     log_file_path = os.path.join(LOGS_DIR, f"{base_filename}_run.log")
     trade_log_path = os.path.join(LOGS_DIR, f"{base_filename}_trades.csv")
 
-    setup_logging(log_file_path)
+    is_backtest = args.mode == 'backtest'
+    setup_logging(log_file_path, backtest_mode=is_backtest)
     strategy_class = AVAILABLE_STRATEGIES[args.strategy]
 
     if args.mode == 'backtest':
