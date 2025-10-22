@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from queue import Queue
 import pandas as pd
 import logging
+import os
 
 from core.event import MarketEvent
 from utils.trade_client import TinkoffTrader
