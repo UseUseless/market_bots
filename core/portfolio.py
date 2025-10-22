@@ -19,26 +19,20 @@ class Portfolio:
         self.current_capital = initial_capital
         self.commission_rate = commission_rate
 
-        # Хранит информацию о текущих открытых позициях
-        # Формат: {'FIGI': {'quantity': 1, 'entry_price': 150.0, 'direction': 'BUY', 'stop_loss': 148.5, 'take_profit': 153.0}}
         self.current_positions = {}
-        
-        # Хранит историю всех закрытых сделок для финальной статистики
+        self.pending_orders = set()
         self.closed_trades = []
-        
-        # Хранит всю последнюю свечу для каждого инструмента
         self.last_market_data = {}
 
     def update_market_price(self, event: MarketEvent):
-        """Обновляет рыночные данные И ПРОВЕРЯЕТ SL/TP на каждой новой свече."""
+        """Обновляет рыночные данные и проверяет SL/TP на каждой новой свече."""
         figi = event.figi
         self.last_market_data[figi] = event.data
         
         position = self.current_positions.get(figi)
-        if not position:
+        if not position or position.get('exit_pending'): # Если позиции нет или она уже закрывается, выходим
             return
 
-        # --- ЛОГИКА ПРОВЕРКИ SL/TP ---
         exit_reason = None
         candle_high = event.data['high']
         candle_low = event.data['low']
@@ -55,105 +49,101 @@ class Portfolio:
             order = OrderEvent(figi=figi, quantity=position['quantity'], direction="SELL")
             self.events_queue.put(order)
             
-            # Логируем сделку немедленно, используя точную цену SL/TP как цену выхода
-            exit_price = position['stop_loss'] if exit_reason == "Stop Loss" else position['take_profit']
-            entry_price = position['entry_price']
-            
-            # Рассчитываем PnL и обновляем капитал
-            pnl = (exit_price - entry_price) * position['quantity'] # Упрощенный PnL без комиссии для лога
-            self.current_capital += pnl # Приблизительное обновление капитала
-            
-            # Записываем сделку в CSV и в историю для отчета
-            log_trade(
-                trade_log_file=self.trade_log_file, strategy_name=self.strategy.name,
-                figi=figi, direction=position['direction'], entry_price=entry_price,
-                exit_price=exit_price, pnl=pnl, exit_reason=exit_reason
-            )
-            self.closed_trades.append({'pnl': pnl}) # Добавляем PnL для финального отчета
-            
-            # Удаляем позицию, чтобы избежать повторных ордеров на закрытие
-            del self.current_positions[figi]
+            # Помечаем позицию как "ожидающую закрытия", чтобы избежать дублирования ордеров.
+            self.current_positions[figi]['exit_pending'] = exit_reason
 
     def on_signal(self, event: SignalEvent):
         """Обрабатывает сигнал от стратегии и решает, отправлять ли ордер."""
         figi = event.figi
         position = self.current_positions.get(figi)
+        
+        # Фильтр: Игнорируем сигналы, если уже есть позиция, ожидающий ордер, или позиция закрывается по SL/TP
+        if (position and position.get('exit_pending')) or figi in self.pending_orders:
+            return
 
-        if event.direction == "BUY" and not position:
-            order = OrderEvent(figi=figi, quantity=1, direction="BUY")
-            self.events_queue.put(order)
-            logging.info(f"Портфель генерирует ордер на ПОКУПКУ {figi}")
-        elif event.direction == "SELL" and position and position['direction'] == 'BUY':
-            order = OrderEvent(figi=figi, quantity=position['quantity'], direction="SELL")
-            self.events_queue.put(order)
-            logging.info(f"Портфель генерирует ордер на ПРОДАЖУ (закрытие) {figi}")
+        if not position: # Логика входа в новую позицию
+            if event.direction == "BUY":
+                order = OrderEvent(figi=figi, quantity=1, direction="BUY")
+                self.events_queue.put(order)
+                self.pending_orders.add(figi)
+                logging.info(f"Портфель генерирует ордер на ПОКУПКУ {figi}")
+        else: # Логика выхода из существующей позиции по сигналу
+            if event.direction == "SELL" and position['direction'] == 'BUY':
+                order = OrderEvent(figi=figi, quantity=position['quantity'], direction="SELL")
+                self.events_queue.put(order)
+                self.pending_orders.add(figi) # Также помечаем ордер на закрытие как ожидающий
+                logging.info(f"Портфель генерирует ордер на ПРОДАЖУ (закрытие) {figi}")
 
     def on_fill(self, event: FillEvent):
-        """Обновляет состояние позиций, используя цену ОТКРЫТИЯ свечи."""
+        """Обновляет состояние позиций после фактического исполнения ордера."""
         figi = event.figi
         
-        # --- ЛОГИКА РЕАЛИСТИЧНОГО ИСПОЛНЕНИЯ ---
+        # Убираем ордер из списка ожидающих, если он там был
+        if figi in self.pending_orders:
+            self.pending_orders.remove(figi)
+        
         last_candle = self.last_market_data.get(figi)
         if last_candle is None:
             logging.error(f"Нет рыночных данных для исполнения ордера по {figi}")
             return
-        execution_price = last_candle['open'] # <-- Используем цену открытия!
-        # ---------------------------------------------------
-
-        commission = execution_price * event.quantity * self.commission_rate
+        
         position = self.current_positions.get(figi)
-
-        if not position: # Открытие новой позиции
+        
+        # Сценарий 1: Открытие новой позиции
+        if not position:
+            execution_price = last_candle['open']
             sl_percent = self.strategy.stop_loss_percent / 100.0
             tp_percent = self.strategy.take_profit_percent / 100.0
             
             if event.direction == 'BUY':
                 stop_loss_price = execution_price * (1 - sl_percent)
                 take_profit_price = execution_price * (1 + tp_percent)
-            else: # Для шорта
+            else: # Для шорта (пока не реализовано)
                 stop_loss_price = execution_price * (1 + sl_percent)
                 take_profit_price = execution_price * (1 - tp_percent)
 
             self.current_positions[figi] = {
                 'quantity': event.quantity, 'entry_price': execution_price,
                 'direction': event.direction, 'stop_loss': stop_loss_price,
-                'take_profit': take_profit_price
+                'take_profit': take_profit_price, 'exit_pending': None
             }
             logging.info(f"Позиция ОТКРЫТА: {event.direction} {event.quantity} {figi} @ {execution_price:.2f} | SL: {stop_loss_price:.2f}, TP: {take_profit_price:.2f}")
         
-        elif event.direction != position['direction']: # Закрытие позиции по сигналу
+        # Сценарий 2: Закрытие существующей позиции
+        elif event.direction != position['direction']:
             entry_price = position['entry_price']
-            pnl = (execution_price - entry_price) * event.quantity - commission
+            
+            # Определяем цену и причину выхода
+            if position.get('exit_pending') == "Stop Loss":
+                exit_price = position['stop_loss']
+                exit_reason = "Stop Loss"
+            elif position.get('exit_pending') == "Take Profit":
+                exit_price = position['take_profit']
+                exit_reason = "Take Profit"
+            else: # Закрытие по сигналу от стратегии
+                exit_price = last_candle['open']
+                exit_reason = "Signal"
+
+            # Рассчитываем комиссию за вход и выход
+            commission = (entry_price * event.quantity + exit_price * event.quantity) * self.commission_rate
+            
+            # Рассчитываем PnL
+            if position['direction'] == 'BUY':
+                pnl = (exit_price - entry_price) * event.quantity - commission
+            else: # Для шорта
+                pnl = (entry_price - exit_price) * event.quantity - commission
+            
             self.current_capital += pnl
             
+            # Логируем сделку в CSV
             log_trade(
                 trade_log_file=self.trade_log_file, strategy_name=self.strategy.name,
                 figi=figi, direction=position['direction'], entry_price=entry_price,
-                exit_price=execution_price, pnl=pnl, exit_reason="Signal"
+                exit_price=exit_price, pnl=pnl, exit_reason=exit_reason
             )
+            # Сохраняем информацию о сделке для финального отчета
             self.closed_trades.append({'pnl': pnl})
 
+            # Окончательно удаляем позицию из списка активных
             del self.current_positions[figi]
-            logging.info(f"Позиция ЗАКРЫТА по сигналу: {figi}. PnL: {pnl:.2f}. Капитал: {self.current_capital:.2f}")
-
-    def generate_performance_report(self):
-        """Генерирует и выводит отчет о результатах торговли."""
-        if not self.closed_trades:
-            print("\n--- Отчет о производительности ---")
-            print("Сделок не было совершено.")
-            return
-
-        df = pd.DataFrame(self.closed_trades)
-        total_pnl = df['pnl'].sum()
-        win_trades = (df['pnl'] > 0).sum()
-        total_trades = len(df)
-        win_rate = (win_trades / total_trades) * 100 if total_trades > 0 else 0
-
-        print("\n--- Отчет о производительности ---")
-        print(f"Начальный капитал: {self.initial_capital:.2f}")
-        print(f"Конечный капитал:  {self.current_capital:.2f}")
-        print(f"Общий PnL:         {total_pnl:.2f} ({total_pnl/self.initial_capital*100:.2f}%)")
-        print(f"Всего сделок:      {total_trades}")
-        print(f"Прибыльных сделок: {win_trades}")
-        print(f"Win Rate:          {win_rate:.2f}%")
-        print("---------------------------------")
+            logging.info(f"Позиция ЗАКРЫТА по причине '{exit_reason}': {figi}. PnL: {pnl:.2f}. Капитал: {self.current_capital:.2f}")

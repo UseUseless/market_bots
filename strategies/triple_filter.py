@@ -54,13 +54,11 @@ class TripleFilterStrategy(BaseStrategy):
         если все три "фильтра" стратегии совпадают.
         """
         self.data_history.append(event.data)
-        # Используем collections.deque(maxlen=2) было бы эффективнее,
-        # но для простоты оставим срез списка.
         if len(self.data_history) > 2:
             self.data_history.pop(0)
         
         if len(self.data_history) < 2:
-            return # Нужно как минимум 2 свечи для сравнения
+            return
 
         last_candle = self.data_history[-1]
         prev_candle = self.data_history[-2]

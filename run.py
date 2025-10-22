@@ -76,15 +76,35 @@ def run_backtest(strategy_class: type, days: int, trade_log_path: str, source: s
     enriched_data = strategy.prepare_data(raw_data)
     logging.info("Этап подготовки данных завершен.")
 
-    # 3. ЗАПУСК ГЛАВНОГО ЦИКЛА СОБЫТИЙ
+    # --- 3. ИСПРАВЛЕННЫЙ ГЛАВНЫЙ ЦИКЛ СОБЫТИЙ ---
     logging.info("Запуск основного цикла обработки событий...")
-    data_handler.start_streaming(enriched_data) 
+    
+    # Создаем генератор, который будет выдавать нам свечи по одной
+    data_generator = (MarketEvent(timestamp=row['time'], figi=figi, data=row) for i, row in enriched_data.iterrows())
+
+    # Начинаем с первой свечи
+    try:
+        first_event = next(data_generator)
+        events_queue.put(first_event)
+    except StopIteration:
+        logging.warning("Нет данных для запуска бэктеста после подготовки.")
+        return
+
     while True:
         try:
             event = events_queue.get(block=False)
         except queue.Empty:
-            break
+            # Очередь пуста, значит все последствия предыдущей свечи обработаны.
+            # Пора загружать СЛЕДУЮЩУЮ свечу из истории.
+            try:
+                market_event = next(data_generator)
+                events_queue.put(market_event)
+                continue # Возвращаемся в начало цикла, чтобы обработать эту новую свечу
+            except StopIteration:
+                # История кончилась, генератор пуст. Завершаем бэктест.
+                break
         else:
+            # Маршрутизация событий
             if isinstance(event, MarketEvent):
                 portfolio.update_market_price(event)
                 strategy.calculate_signals(event)
@@ -100,13 +120,20 @@ def run_backtest(strategy_class: type, days: int, trade_log_path: str, source: s
     # 4. АНАЛИЗ РЕЗУЛЬТАТОВ И ГЕНЕРАЦИЯ ОТЧЕТА
     if not portfolio.closed_trades:
         print("\nБэктест завершен. Сделок не было совершено.")
+        # Проверим, не осталась ли открытая позиция в конце
+        if portfolio.current_positions:
+            print("ВНИМАНИЕ: Бэктест завершился с открытой позицией:")
+            print(portfolio.current_positions)
         return
         
     trades_df = pd.DataFrame(portfolio.closed_trades)
     report_filename = os.path.basename(trade_log_path).replace('_trades.csv', '')
     
-    analyzer = BacktestAnalyzer(trades_df, portfolio.initial_capital)
-    analyzer.generate_report(report_filename)
+    try:
+        analyzer = BacktestAnalyzer(trades_df, portfolio.initial_capital)
+        analyzer.generate_report(report_filename)
+    except Exception as e:
+        logging.error(f"Ошибка при создании отчета: {e}")
 
 def main():
     parser = argparse.ArgumentParser(description="Фреймворк для запуска торговых ботов.")
