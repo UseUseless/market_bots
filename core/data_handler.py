@@ -38,17 +38,3 @@ class HistoricLocalDataHandler(DataHandler):
             logging.error(f"DataHandler (Local): Файл не найден: {self.file_path}")
             logging.error("Убедитесь, что вы скачали данные с помощью download_data.py")
             return pd.DataFrame()
-
-    def start_streaming(self, data: pd.DataFrame):
-        if data.empty:
-            logging.warning("DataHandler (Local): Получен пустой DataFrame для стриминга.")
-            return
-            
-        logging.info(f"DataHandler (Local): Начинаю потоковую передачу {len(data)} подготовленных свечей.")
-        for i, row in data.iterrows():
-            event = MarketEvent(
-                timestamp=row['time'],
-                figi=self.figi,
-                data=row
-            )
-            self.events_queue.put(event)
