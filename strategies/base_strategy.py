@@ -1,6 +1,5 @@
 from queue import Queue
 import pandas as pd
-import logging
 
 from core.event import MarketEvent
 

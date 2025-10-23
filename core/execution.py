@@ -1,10 +1,10 @@
 from queue import Queue
 from abc import ABC, abstractmethod
 from datetime import datetime
-import logging
+#import logging
 
 from core.event import OrderEvent, FillEvent
-from utils.trade_client import TinkoffTrader
+#from utils.trade_client import TinkoffTrader
 
 class ExecutionHandler(ABC):
     """

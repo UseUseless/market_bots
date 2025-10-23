@@ -4,11 +4,10 @@ import os
 from datetime import datetime
 import logging
 import pandas as pd
-import sys
 
 # --- Импорт компонентов новой архитектуры ---
 from core.event import MarketEvent, SignalEvent, OrderEvent, FillEvent
-from core.data_handler import HistoricTinkoffDataHandler, HistoricLocalDataHandler
+from core.data_handler import HistoricLocalDataHandler
 from core.portfolio import Portfolio
 from core.execution import SimulatedExecutionHandler
 from analyzer import BacktestAnalyzer
@@ -54,7 +53,7 @@ def setup_logging(log_file_path: str, backtest_mode: bool):
 
     logger.addFilter(context_filter)
 
-def run_backtest(strategy_class: type, days: int, trade_log_path: str, source: str, figi: str):
+def run_backtest(strategy_class: type, trade_log_path: str, figi: str):
     """
     Запускает полный цикл бэктестинга для выбранной стратегии.
     """
@@ -63,17 +62,10 @@ def run_backtest(strategy_class: type, days: int, trade_log_path: str, source: s
     # 1. ИНИЦИАЛИЗАЦИЯ КОМПОНЕНТОВ
     logging.info("Инициализация компонентов бэктеста...")
     strategy = strategy_class(events_queue, figi)
-    
-    if source == 'api':
-        data_handler = HistoricTinkoffDataHandler(
-            events_queue, figi, days, strategy.candle_interval
-        )
-    elif source == 'local':
-        data_handler = HistoricLocalDataHandler(
-            events_queue, figi, strategy.candle_interval
-        )
-    else:
-        raise ValueError(f"Неизвестный источник данных: {source}")
+
+    data_handler = HistoricLocalDataHandler(
+        events_queue, figi, strategy.candle_interval
+    )
     
     portfolio = Portfolio(events_queue, trade_log_path, strategy)
     execution_handler = SimulatedExecutionHandler(events_queue)
@@ -155,18 +147,12 @@ def main():
     
     parser.add_argument("--mode", type=str, required=True, choices=['backtest', 'sandbox', 'real'], help="Режим работы.")
     parser.add_argument("--strategy", type=str, required=True, help=f"Имя стратегии. Доступно: {list(AVAILABLE_STRATEGIES.keys())}")
-    parser.add_argument("--figi", type=str, help="FIGI инструмента для тестирования (обязателен для backtest).")
-    parser.add_argument("--source", type=str, default='api', choices=['api', 'local'], help="Источник данных: 'api' или 'local'.")
-    parser.add_argument("--days", type=int, default=90, help="Количество дней для бэктестинга (только для --source api).")
-    
+    parser.add_argument("--figi", type=str, required=True, help="FIGI инструмента для тестирования (обязателен для backtest).")
+
     args = parser.parse_args()
 
     if args.strategy not in AVAILABLE_STRATEGIES:
         print(f"Ошибка: Стратегия '{args.strategy}' не найдена.")
-        return
-
-    if args.mode == 'backtest' and not args.figi:
-        print("Ошибка: для режима 'backtest' необходимо указать --figi.")
         return
 
     # Генерация уникальных имен файлов для логов
@@ -184,9 +170,7 @@ def main():
     if args.mode == 'backtest':
         run_backtest(
             strategy_class=strategy_class,
-            days=args.days,
             trade_log_path=trade_log_path,
-            source=args.source,
             figi=args.figi
         )
     else:
