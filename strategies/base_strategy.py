@@ -1,9 +1,10 @@
 from queue import Queue
 import pandas as pd
+from abc import ABC, abstractmethod
 
 from core.event import MarketEvent
 
-class BaseStrategy:
+class BaseStrategy(ABC):
     """
     Абстрактный базовый класс для всех торговых стратегий.
     Определяет "контракт", которому должна следовать каждая стратегия:
@@ -13,15 +14,30 @@ class BaseStrategy:
     """
     def __init__(self, events_queue: Queue, figi: str):
         self.events_queue = events_queue
-        self.name: str = "Base"
+        self.name: str = self.__class__.__name__
         self.figi: str = figi 
         
-        # --- КОНТРАКТ: Атрибуты, которые должна определить каждая стратегия ---
-        self.candle_interval: str = ""
-        self.stop_loss_percent: float = 0.0
-        self.take_profit_percent: float = 0.0
-        # --------------------------------------------------------------------
+    # --- КОНТРАКТ: Атрибуты, которые должна определить каждая стратегия ---
+    # Любой класс, наследуемый от BaseStrategy, ДОЛЖЕН определить эти
+    # атрибуты в своих аналогичных методах
+    @property
+    @abstractmethod
+    def candle_interval(self) -> str:
+        raise NotImplementedError
 
+    @property
+    @abstractmethod
+    def stop_loss_percent(self) -> float:
+        raise NotImplementedError
+
+    @property
+    @abstractmethod
+    def take_profit_percent(self) -> float:
+        raise NotImplementedError
+
+    # --- КОНТРАКТ: Методы, которые должна определить каждая стратегия ---
+
+    @abstractmethod
     def prepare_data(self, data: pd.DataFrame) -> pd.DataFrame:
         """
         Метод для подготовки данных. Стратегия сама добавляет
@@ -30,6 +46,7 @@ class BaseStrategy:
         """
         raise NotImplementedError("Метод prepare_data должен быть реализован в дочернем классе.")
 
+    @abstractmethod
     def calculate_signals(self, event: MarketEvent):
         """
         Основной метод, который анализирует рыночные данные (MarketEvent)

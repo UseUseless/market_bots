@@ -15,15 +15,20 @@ class TripleFilterStrategy(BaseStrategy):
     """
     def __init__(self, events_queue: Queue, figi: str):
         super().__init__(events_queue, figi)
-        self.name = "TripleFilter"
-        
-        # --- Реализация контракта из BaseStrategy ---
-        self.candle_interval = "5min"
-        self.stop_loss_percent = 0.7   # Убыток 0.7%
-        self.take_profit_percent = 1.4 # Прибыль 1.4%
-        
         # Храним только 2 последние свечи для анализа
         self.data_history = []
+
+    @property
+    def candle_interval(self) -> str:
+        return "5min"
+
+    @property
+    def stop_loss_percent(self) -> float:
+        return 0.7
+
+    @property
+    def take_profit_percent(self) -> float:
+        return 1.4
 
     def prepare_data(self, data: pd.DataFrame) -> pd.DataFrame:
         """
