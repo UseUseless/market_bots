@@ -11,7 +11,7 @@ from core.data_handler import HistoricLocalDataHandler
 from core.portfolio import Portfolio
 from core.execution import SimulatedExecutionHandler
 from analyzer import BacktestAnalyzer
-from utils.context_logger import context_filter
+from utils.context_logger import backtest_time_filter
 
 # --- Импорт и регистрация конкретных стратегий ---
 from strategies.triple_filter import TripleFilterStrategy
@@ -32,7 +32,6 @@ def setup_logging(log_file_path: str, backtest_mode: bool):
     else:
         # Для live-режима или других утилит используем реальное время
         log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-    # --------------------------------
 
     os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
     
@@ -51,7 +50,8 @@ def setup_logging(log_file_path: str, backtest_mode: bool):
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
 
-    logger.addFilter(context_filter)
+    if backtest_mode:
+        logger.addFilter(backtest_time_filter)
 
 def run_backtest(strategy_class: type, trade_log_path: str, figi: str):
     """
@@ -109,7 +109,7 @@ def run_backtest(strategy_class: type, trade_log_path: str, figi: str):
                 break
         else:
             if isinstance(event, MarketEvent):
-                context_filter.set_sim_time(event.timestamp)
+                backtest_time_filter.set_sim_time(event.timestamp)
             # Маршрутизация событий
             if isinstance(event, MarketEvent):
                 portfolio.update_market_price(event)
@@ -121,7 +121,7 @@ def run_backtest(strategy_class: type, trade_log_path: str, figi: str):
             elif isinstance(event, FillEvent):
                 portfolio.on_fill(event)
 
-    context_filter.set_sim_time(None)
+    backtest_time_filter.reset_sim_time()
     logging.info("Основной цикл завершен.")
 
     # 4. АНАЛИЗ РЕЗУЛЬТАТОВ И ГЕНЕРАЦИЯ ОТЧЕТА
