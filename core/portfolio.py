@@ -43,11 +43,11 @@ class Portfolio:
                 exit_reason = "Take Profit"
         # Сюда можно добавить логику для шортов
         
-        if exit_reason:
+        if exit_reason:     # Логика выхода из существующей позиции !ПО СТОП_ЛОСС ИЛИ ТЕЙК_ПРОФИТ И ТОЛЬКО ПО НИМ!
             logging.warning(f"!!! СРАБОТАЛ {exit_reason.upper()} для {figi}. Генерирую ордер на закрытие.")
             order = OrderEvent(figi=figi, quantity=position['quantity'], direction="SELL")
             self.events_queue.put(order)
-            
+            self.pending_orders.add(figi)
             # Помечаем позицию как "ожидающую закрытия", чтобы избежать дублирования ордеров.
             self.current_positions[figi]['exit_pending'] = exit_reason
 
@@ -55,7 +55,7 @@ class Portfolio:
         """Обрабатывает сигнал от стратегии и решает, отправлять ли ордер."""
         figi = event.figi
         position = self.current_positions.get(figi)
-        
+
         # Фильтр: Игнорируем сигналы, если уже есть позиция, ожидающий ордер, или позиция закрывается по SL/TP
         if (position and position.get('exit_pending')) or figi in self.pending_orders:
             return
@@ -66,7 +66,7 @@ class Portfolio:
                 self.events_queue.put(order)
                 self.pending_orders.add(figi)
                 logging.info(f"Портфель генерирует ордер на ПОКУПКУ {figi}")
-        else: # Логика выхода из существующей позиции по сигналу
+        else: # Логика выхода из существующей позиции !ПО СИГНАЛУ И ТОЛЬКО ПО СИГНАЛУ! (если есть купленный лот, а сигнал на продажу и наоборот)
             if event.direction == "SELL" and position['direction'] == 'BUY':
                 order = OrderEvent(figi=figi, quantity=position['quantity'], direction="SELL")
                 self.events_queue.put(order)
@@ -109,6 +109,7 @@ class Portfolio:
             logging.info(f"Позиция ОТКРЫТА: {event.direction} {event.quantity} {figi} @ {execution_price:.2f} | SL: {stop_loss_price:.2f}, TP: {take_profit_price:.2f}")
         
         # Сценарий 2: Закрытие существующей позиции
+        # Да, проверка лишняя (можно просто else), но она добавляет наглядности
         elif event.direction != position['direction']:
             entry_price = position['entry_price']
             
