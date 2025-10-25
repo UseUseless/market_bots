@@ -10,6 +10,7 @@ class ExecutionHandler(ABC):
     """
     Абстрактный базовый класс для всех исполнителей ордеров.
     Определяет единый интерфейс для симулятора и реального исполнителя.
+    Впоследствии будет обращаться к API
     """
     def __init__(self, events_queue: Queue):
         self.events_queue = events_queue
@@ -39,8 +40,8 @@ class SimulatedExecutionHandler(ExecutionHandler):
             figi=event.figi,
             quantity=event.quantity,
             direction=event.direction,
-            price=0,      # Цена будет определена в Portfolio
-            commission=0.0  # Комиссия будет рассчитана в Portfolio
+            price=0,      # Цена будет определена в Portfolio. Для бэктеста не используется. Будет в Live
+            commission=0.0  # Комиссия будет рассчитана в Portfolio. Для бэктеста не используется. Будет в Live
         )
         self.events_queue.put(fill_event)
 

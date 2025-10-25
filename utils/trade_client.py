@@ -8,8 +8,6 @@ from config import TOKEN_REAL, TOKEN_SANDBOX, ACCOUNT_ID
 class TinkoffTrader:
     """
     Низкоуровневый клиент для взаимодействия с Tinkoff Invest API.
-    Корректно разделяет логику для чтения данных и для совершения сделок
-    в реальном режиме и в песочнице.
     """
     def __init__(self, trade_mode: str):
         # Для чтения данных (история, счета) всегда нужен боевой токен.

@@ -4,12 +4,11 @@ import pandas as pd
 import logging
 import os
 
-from core.event import MarketEvent
-from utils.trade_client import TinkoffTrader
-
 class DataHandler(ABC):
     """
     Абстрактный базовый класс для всех поставщиков рыночных данных.
+    Будет использоваться для создания других хэндлеров (например в Live режиме для Tinkoff, Binance)
+    Может будет дополняться
     """
     def __init__(self, events_queue: Queue, figi: str):
         self.events_queue = events_queue
@@ -17,7 +16,7 @@ class DataHandler(ABC):
             
 class HistoricLocalDataHandler(DataHandler):
     """
-    "Глупый" поставщик данных, который читает их из локальных Parquet-файлов.
+    Читает локальные Parquet-файлы и создаёт pandas df
     """
     def __init__(self, events_queue: Queue, figi: str, interval_str: str, data_path: str = "data"):
         super().__init__(events_queue, figi)
@@ -27,13 +26,15 @@ class HistoricLocalDataHandler(DataHandler):
 
     def load_raw_data(self) -> pd.DataFrame:
         """
-        Загружает 'сырые' данные из локального Parquet файла.
+        Загружает данные из локального Parquet файла.
         """
         logging.info(f"DataHandler (Local): Чтение данных из файла {self.file_path}...")
+        # Читает локальные исторические файлы и передаёт их как pd.DataFrame
         try:
             df = pd.read_parquet(self.file_path)
             logging.info(f"DataHandler (Local): Успешно загружено {len(df)} свечей из файла.")
             return df
+        # Если файла не нашлось, возвращает пустой pd.DataFrame
         except FileNotFoundError:
             logging.error(f"DataHandler (Local): Файл не найден: {self.file_path}")
             logging.error("Убедитесь, что вы скачали данные с помощью download_data.py")

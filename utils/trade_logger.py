@@ -1,6 +1,6 @@
 import csv
 import os
-from datetime import datetime
+from datetime import datetime, UTC
 import logging
 
 HEADERS = [
@@ -18,7 +18,7 @@ def log_trade(trade_log_file: str, strategy_name: str, figi: str, direction: str
         file_exists = os.path.isfile(trade_log_file)
         
         row_data = {
-            'timestamp_utc': datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
+            'timestamp_utc': datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S'),
             'strategy_name': strategy_name,
             'figi': figi,
             'direction': direction,

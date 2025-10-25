@@ -20,15 +20,15 @@ class TripleFilterStrategy(BaseStrategy):
 
     @property
     def candle_interval(self) -> str:
-        return "5min"
+        return "5min" # Таймфрейм для работы
 
     @property
     def stop_loss_percent(self) -> float:
-        return 0.7
+        return 0.7 # Убыток в %
 
     @property
     def take_profit_percent(self) -> float:
-        return 1.4
+        return 1.4 # Прибыль в %
 
     def prepare_data(self, data: pd.DataFrame) -> pd.DataFrame:
         """
