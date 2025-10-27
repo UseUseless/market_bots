@@ -31,7 +31,7 @@ def log_trade(trade_log_file: str, strategy_name: str, figi: str, direction: str
         with open(trade_log_file, 'a', newline='', encoding='utf-8') as csvfile:
             writer = csv.DictWriter(csvfile, fieldnames=HEADERS)
             if not file_exists:
-                writer.writeheader()  # Записываем заголовок, если файл новый
+                writer.writeheader()  # Записываем заголовки, если файл новый
             writer.writerow(row_data)
             
     except IOError as e:
