@@ -93,8 +93,16 @@ def run_backtest(strategy_class: type, trade_log_path: str, figi: str):
     if raw_data.empty:
         logging.error("Не удалось получить данные для бэктеста. Завершение работы.")
         return
+
     # Обработка данных стратегией (создание новых индикаторов, фичей)
     enriched_data = strategy.prepare_data(raw_data)
+
+    if enriched_data.empty:
+        logging.warning("Нет данных для запуска бэктеста после подготовки (возможно, из-за короткого периода истории).")
+        return
+
+    start_date = enriched_data['time'].iloc[0]
+    end_date = enriched_data['time'].iloc[-1]
     logging.info("Этап подготовки данных завершен.")
 
     # --- 3. ГЛАВНЫЙ ЦИКЛ СОБЫТИЙ ---
@@ -104,12 +112,8 @@ def run_backtest(strategy_class: type, trade_log_path: str, figi: str):
     data_generator = (MarketEvent(timestamp=row['time'], figi=figi, data=row) for i, row in enriched_data.iterrows())
 
     # Кладем в очередь самое первое событие - первую свечу
-    try:
-        first_event = next(data_generator)
-        events_queue.put(first_event)
-    except StopIteration:
-        logging.warning("Нет данных для запуска бэктеста после подготовки.")
-        return
+    first_event = next(data_generator)
+    events_queue.put(first_event)
 
     # Бесконечный цикл, который будет работать, пока не закончатся данные
     while True:
@@ -156,25 +160,32 @@ def run_backtest(strategy_class: type, trade_log_path: str, figi: str):
     logging.info("Основной цикл завершен.")
 
     # 4. АНАЛИЗ РЕЗУЛЬТАТОВ И ГЕНЕРАЦИЯ ОТЧЕТА
-    # Проверяем, были ли вообще закрытые сделки
-    if not portfolio.closed_trades:
-        print("\nБэктест завершен. Сделок не было совершено.")
-        # Проверим, не осталась ли открытая позиция в конце
-        if portfolio.current_positions:
-            print("ВНИМАНИЕ: Бэктест завершился с открытой позицией:")
-            print(portfolio.current_positions)
-        return
+    # Если сделки были, генерируем отчет.
+    if portfolio.closed_trades:
+        time_period_days = (end_date - start_date).days
+        logging.info(
+            f"Обнаружено {len(portfolio.closed_trades)} закрытых сделок "
+            f"за период ~{time_period_days} дней (с {start_date.date()} по {end_date.date()}). "
+            f"Запуск анализатора..."
+        )
+        trades_df = pd.DataFrame(portfolio.closed_trades)
+        report_filename = os.path.basename(trade_log_path).replace('_trades.csv', '')
+        try:
+            analyzer = BacktestAnalyzer(trades_df, portfolio.initial_capital)
+            analyzer.generate_report(report_filename)
+        except Exception as e:
+            logging.error(f"Ошибка при создании отчета: {e}")
+    # Если сделок не было, выводим сообщение.
+    else:
+        logging.info("Бэктест завершен. Закрытых сделок не было совершено.")
 
-    # Превращаем список словарей с данными о сделках в DataFrame и сохраняем .csv
-    trades_df = pd.DataFrame(portfolio.closed_trades)
-    report_filename = os.path.basename(trade_log_path).replace('_trades.csv', '')
-
-    # Создаем отчет-анализ, графики и т.п., что пропишем в BacktestAnalyzer
-    try:
-        analyzer = BacktestAnalyzer(trades_df, portfolio.initial_capital)
-        analyzer.generate_report(report_filename)
-    except Exception as e:
-        logging.error(f"Ошибка при создании отчета: {e}")
+    # Проверка на открытые позиции
+    if portfolio.current_positions:
+        # Используем logging.warning, чтобы это сообщение было хорошо заметно.
+        logging.warning("ВНИМАНИЕ: Бэктест завершился с открытой позицией:")
+        # Логируем детали открытой позиции.
+        for figi, pos_data in portfolio.current_positions.items():
+            logging.warning(f" - {figi}: {pos_data}")
 
 def main():
     # Создаем парсер аргументов командной строки и сами аргументы для запуска программы

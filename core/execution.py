@@ -1,6 +1,6 @@
 from queue import Queue
 from abc import ABC, abstractmethod
-from datetime import datetime
+from datetime import datetime, UTC
 #import logging
 
 from core.event import OrderEvent, FillEvent
@@ -36,12 +36,12 @@ class SimulatedExecutionHandler(ExecutionHandler):
         ответственность Portfolio, который знает последнюю рыночную цену.
         """
         fill_event = FillEvent(
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(UTC),
             figi=event.figi,
             quantity=event.quantity,
             direction=event.direction,
-            price=0,      # Цена будет определена в Portfolio. Для бэктеста не используется. Будет в Live
-            commission=0.0  # Комиссия будет рассчитана в Portfolio. Для бэктеста не используется. Будет в Live
+            price=0,                        # Цена будет определена в Portfolio. Для бэктеста не используется. Будет в Live
+            commission=0.0                  # Комиссия будет рассчитана в Portfolio. Для бэктеста не используется. Будет в Live
         )
         self.events_queue.put(fill_event)
 
