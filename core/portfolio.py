@@ -93,22 +93,34 @@ class Portfolio:
         candle_high = event.data['high']
         candle_low = event.data['low']
 
-        # Проверяем условия SL/TP для лонга
+        # Проверяем условия SL/TP для ЛОНГА
         if position['direction'] == 'BUY':
             # Если минимальная цена свечи коснулась или пробила наш стоп-лосс
             if candle_low <= position['stop_loss']:
                 exit_reason = "Stop Loss"
+                exit_direction = "SELL"
             # Если максимальная цена свечи коснулась или пробила наш тейк-профит
             elif candle_high >= position['take_profit']:
                 exit_reason = "Take Profit"
-        # ToDo: Добавить случай для 'Sell' - то есть для шорта
+                exit_direction = "SELL"
+
+        # Проверяем условия SL/TP для ШОРТА
+        elif position['direction'] == 'SELL':
+            # Если максимальная цена свечи коснулась или пробила наш стоп-лосс
+            if candle_high >= position['stop_loss']:
+                exit_reason = "Stop Loss"
+                exit_direction = "BUY"  # Направление ордера для закрытия
+            # Если минимальная цена свечи коснулась или пробила наш тейк-профит
+            elif candle_low <= position['take_profit']:
+                exit_reason = "Take Profit"
+                exit_direction = "BUY"
 
         # Логика выхода из существующей позиции !ПО СТОП_ЛОСС ИЛИ ТЕЙК_ПРОФИТ И ТОЛЬКО ПО НИМ!
         # Закрытие по сигналу в on_signal
         if exit_reason:
             logging.warning(f"!!! СРАБОТАЛ {exit_reason.upper()} для {figi}. Генерирую ордер на закрытие.")
-            # Создаем приказ (OrderEvent) на продажу для закрытия позиции
-            order = OrderEvent(figi=figi, quantity=position['quantity'], direction="SELL")
+            # Создаем приказ (OrderEvent) на закрытие позиции
+            order = OrderEvent(figi=figi, quantity=position['quantity'], direction=exit_direction)
             # Кладем OrderEvent в общую очередь событий
             self.events_queue.put(order)
             # Добавляем ордер в список ожидающих на исполнение, чтобы его исполнить в первую очередь
@@ -143,13 +155,20 @@ class Portfolio:
                 self.events_queue.put(order)
                 # Добавляем FIGI в список ордеров на исполнение
                 self.pending_orders.add(figi)
-                logging.info(f"Портфель генерирует ордер на ПОКУПКУ {figi}")
-            # ToDo: Сделать шорт event.direction == 'SELL'
+                logging.info(f"Портфель генерирует ордер на ПОКУПКУ (открытие лонга) {figi}")
+            elif event.direction == "SELL":
+                # В текущей версии количество лотов = 1.
+                # ToDo: Расчет размера позиции. Здесь?
+                order = OrderEvent(figi=figi, quantity=1, direction="SELL")
+                # Кладем приказ в очередь
+                self.events_queue.put(order)
+                # Добавляем FIGI в список ордеров на исполнение
+                self.pending_orders.add(figi)
+                logging.info(f"Портфель генерирует ордер на ПРОДАЖУ (открытие шорта) {figi}")
         # --- Сценарий 2: У нас ЕСТЬ открытая позиция по этому инструменту---
         else:
-            # Логика выхода из существующей позиции (лонга)
+            # Логика выхода из существующей позиции
             # Работает !ПО СИГНАЛУ И ТОЛЬКО ПО СИГНАЛУ!
-            # (если есть купленный лот, а сигнал на продажу)
             # Закрытие по SL/TP в update_market_price
             if event.direction == "SELL" and position['direction'] == 'BUY':
                 # Создаем приказ на продажу того же количества, что и в позиции
@@ -167,8 +186,15 @@ class Portfolio:
                 self.events_queue.put(order)
                 # Также помечаем ордер на закрытие как ожидающий
                 self.pending_orders.add(figi)
-                logging.info(f"Портфель генерирует ордер на ПРОДАЖУ (закрытие) {figi}")
-            # ToDo: Сделать выход из шорта event.direction == 'Buy' and position['direction'] == 'SELL'
+                logging.info(f"Портфель генерирует ордер на ПРОДАЖУ (закрытие лонга) {figi}")
+            elif event.direction == "BUY" and position['direction'] == 'SELL':
+                # Создаем приказ на продажу того же количества, что и в позиции
+                order = OrderEvent(figi=figi, quantity=position['quantity'], direction="BUY")
+                # Кладем приказ в очередь
+                self.events_queue.put(order)
+                # Также помечаем ордер на закрытие как ожидающий
+                self.pending_orders.add(figi)
+                logging.info(f"Портфель генерирует ордер на ПОКУПКУ (закрытие шорта) {figi}")
             # ToDo: Можно и докупать если была открыта позиция на Buy и пришел опять Buy. Нужно ли?
 
     def on_fill(self, event: FillEvent):
@@ -266,9 +292,9 @@ class Portfolio:
             commission = (entry_price * event.quantity + exit_price * event.quantity) * self.commission_rate
             
             # Рассчитываем PnL
-            if position['direction'] == 'BUY':
+            if position['direction'] == 'BUY': # Для лонга
                 pnl = (exit_price - entry_price) * event.quantity - commission
-            else: # ToDo: для шорта
+            else: # Для шорта
                 pnl = (entry_price - exit_price) * event.quantity - commission
 
             # Обновляем текущий капитал
