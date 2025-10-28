@@ -28,6 +28,20 @@ class Portfolio:
         # Нужно для определения цены исполнения ордера (покупка, продажа)
         self.last_market_data = {}
 
+    def _calculate_risk_levels(self, entry_price: float, direction: str) -> dict:
+        """Рассчитывает и возвращает абсолютные уровни SL и TP."""
+        sl_percent = self.strategy.stop_loss_percent / 100.0
+        tp_percent = self.strategy.take_profit_percent / 100.0
+
+        if direction == 'BUY': # Лонг
+            stop_loss_price = entry_price * (1 - sl_percent)
+            take_profit_price = entry_price * (1 + tp_percent)
+        else:  # Шорт
+            stop_loss_price = entry_price * (1 + sl_percent)
+            take_profit_price = entry_price * (1 - tp_percent)
+
+        return {"stop_loss": stop_loss_price, "take_profit": take_profit_price}
+
     def update_market_price(self, event: MarketEvent):
         """
         Вызывается на КАЖДЫЙ MarketEvent (новую свечу)
@@ -164,26 +178,20 @@ class Portfolio:
             # Допущение, что цена исполнения равна цене открытия свечи, на которой пришел сигнал.
             # ToDo: нет проскальзывания и т.п. Хоть бы рандом прикрутить на десятую долю процента
             execution_price = last_candle['open']
+
             # Получаем параметры риска из объекта стратегии и переводим их из процентов в доли.
-            sl_percent = self.strategy.stop_loss_percent / 100.0
-            tp_percent = self.strategy.take_profit_percent / 100.0
+            risk_levels = self._calculate_risk_levels(execution_price, event.direction)
 
-            # Рассчитываем абсолютные уровни цен для SL и TP
-            if event.direction == 'BUY':
-                stop_loss_price = execution_price * (1 - sl_percent)
-                take_profit_price = execution_price * (1 + tp_percent)
-            # ToDo: для шорта
-            else:
-                stop_loss_price = execution_price * (1 + sl_percent)
-                take_profit_price = execution_price * (1 - tp_percent)
-
-            # Создаем запись о новой позиции в нашем "журнале активных сделок"
             self.current_positions[figi] = {
-                'quantity': event.quantity, 'entry_price': execution_price,
-                'direction': event.direction, 'stop_loss': stop_loss_price,
-                'take_profit': take_profit_price, 'exit_reason': None
+                'quantity': event.quantity,
+                'entry_price': execution_price,
+                'direction': event.direction,
+                'stop_loss': risk_levels["stop_loss"],
+                'take_profit': risk_levels["take_profit"],
+                'exit_reason': None
             }
-            logging.info(f"Позиция ОТКРЫТА: {event.direction} {event.quantity} {figi} @ {execution_price:.2f} | SL: {stop_loss_price:.2f}, TP: {take_profit_price:.2f}")
+            logging.info(
+                f"Позиция ОТКРЫТА: ... | SL: {risk_levels['stop_loss']:.2f}, TP: {risk_levels['take_profit']:.2f}")
 
         # --- Сценарий 2: Закрытие СУЩЕСТВУЮЩЕЙ позиции ---
         # Так как позиция есть (не прошла if выше) и её направление
