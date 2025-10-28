@@ -3,12 +3,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 
+from config import PATH_CONFIG
+
 class BacktestAnalyzer:
     """
     Анализирует результаты бэктеста на основе DataFrame с закрытыми сделками.
     Рассчитывает ключевые метрики и генерирует графический отчет.
     """
-    def __init__(self, trades_df: pd.DataFrame, initial_capital: float, report_dir: str = "reports"):
+    def __init__(self, trades_df: pd.DataFrame, initial_capital: float, report_dir: str = PATH_CONFIG["REPORTS_DIR"]):
         # Проверяем, что нам вообще передали какие-то данные
         if trades_df.empty:
             raise ValueError("DataFrame со сделками не может быть пустым.")

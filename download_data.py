@@ -2,10 +2,11 @@ import argparse
 import os
 import pandas as pd # Далее используется pd.DF объекты
 from utils.trade_client import TinkoffTrader, IntervalType
+from config import DATA_LOADER_CONFIG, PATH_CONFIG
 
 # --- КОНФИГУРАЦИЯ ---
-DATA_DIR = "data" # Папка для хранения всех данных
-DAYS_TO_LOAD = 730 # Сколько дней истории загружать
+DATA_DIR = PATH_CONFIG["DATA_DIR"]
+DAYS_TO_LOAD = DATA_LOADER_CONFIG["DAYS_TO_LOAD"]
 
 def download_data(figi_list: list[str], interval_str: IntervalType):
     """

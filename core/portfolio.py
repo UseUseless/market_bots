@@ -10,7 +10,7 @@ class Portfolio:
     Управляет состоянием счета, позициями и генерирует ордера.
     Выступает в роли риск-менеджера и логического центра программы, управляющего событиями.
     """
-    def __init__(self, events_queue: Queue, trade_log_file: str, strategy: BaseStrategy, initial_capital=100000.0, commission_rate=0.0005):
+    def __init__(self, events_queue: Queue, trade_log_file: str, strategy: BaseStrategy, initial_capital: float, commission_rate: float):
         self.events_queue = events_queue        # Ссылка на общую очередь событий для отправки ордеров
         self.trade_log_file = trade_log_file    # Путь к CSV-файлу для записи сделок
         self.strategy = strategy                # Экземпляр текущей стратегии (нужен для доступа к SL/TP)
@@ -162,6 +162,7 @@ class Portfolio:
         # --- Сценарий 1: Открытие НОВОЙ позиции ---
         if not position: # Так как в position нет текущего figi
             # Допущение, что цена исполнения равна цене открытия свечи, на которой пришел сигнал.
+            # ToDo: нет проскальзывания и т.п. Хоть бы рандом прикрутить на десятую долю процента
             execution_price = last_candle['open']
             # Получаем параметры риска из объекта стратегии и переводим их из процентов в доли.
             sl_percent = self.strategy.stop_loss_percent / 100.0

@@ -11,6 +11,7 @@ from core.portfolio import Portfolio # Менеджер, контролирую�
 from core.execution import SimulatedExecutionHandler # Исполнитель любых ордеров
 from analyzer import BacktestAnalyzer # Создает аналитический отчет и график
 from utils.context_logger import backtest_time_filter # Добавляет время свечи в логи
+from config import BACKTEST_CONFIG, PATH_CONFIG
 
 # --- Импорт и регистрация конкретных стратегий ---
 from strategies.triple_filter import TripleFilterStrategy
@@ -70,6 +71,9 @@ def run_backtest(strategy_class: type, trade_log_path: str, figi: str):
     # Создаем очередь по которой будут идти все события
     events_queue = queue.Queue()
 
+    initial_capital = BACKTEST_CONFIG["INITIAL_CAPITAL"]
+    commission_rate = BACKTEST_CONFIG["COMMISSION_RATE"]
+
     # 1. ИНИЦИАЛИЗАЦИЯ КОМПОНЕНТОВ
     # Создаем экземпляры:
     logging.info("Инициализация компонентов бэктеста...")
@@ -80,7 +84,11 @@ def run_backtest(strategy_class: type, trade_log_path: str, figi: str):
         events_queue, figi, strategy.candle_interval
     )
     # Портфель - риск-менеджер (разные расчеты по портфелю и ордерам)
-    portfolio = Portfolio(events_queue, trade_log_path, strategy)
+    portfolio = Portfolio(events_queue=events_queue,
+                          trade_log_file=trade_log_path,
+                          strategy=strategy,
+                          initial_capital=initial_capital,
+                          commission_rate=commission_rate)
     # Брокер - исполнитель ордеров
     execution_handler = SimulatedExecutionHandler(events_queue)
     logging.info(f"Инициализация завершена. Стратегия: '{strategy.name}', FIGI: {figi}, Интервал: {strategy.candle_interval}")
@@ -205,7 +213,8 @@ def main():
     strategy_class = AVAILABLE_STRATEGIES[args.strategy]
 
     # Генерация уникальных имен файлов для логов
-    LOGS_DIR = "logs"
+    LOGS_DIR = PATH_CONFIG["LOGS_DIR"]
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     base_filename = f"{timestamp}_{args.strategy}_{args.figi}_{args.mode}"
 
