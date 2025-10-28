@@ -4,6 +4,7 @@ import logging
 from core.event import MarketEvent, SignalEvent, OrderEvent, FillEvent
 from utils.trade_logger import log_trade
 from strategies.base_strategy import BaseStrategy
+from config import BACKTEST_CONFIG
 
 class Portfolio:
     """
@@ -17,6 +18,10 @@ class Portfolio:
         self.initial_capital = initial_capital  # Начальный капитал для бэктеста
         self.current_capital = initial_capital  # Текущий капитал, изменяется после каждой сделки
         self.commission_rate = commission_rate  # Размер комиссии в долях Ex:(0.0005 = 0.05%)
+
+        self.slippage_config = BACKTEST_CONFIG.get("SLIPPAGE_CONFIG", {"ENABLED": False})
+        self.slippage_enabled = self.slippage_config.get("ENABLED", False)
+        self.impact_coefficient = self.slippage_config.get("IMPACT_COEFFICIENT", 0.1)
 
         # Словарь для хранения всех активных позиций. Ключ - FIGI, значение - словарь с деталями позиции.
         self.current_positions = {}
@@ -41,6 +46,28 @@ class Portfolio:
             take_profit_price = entry_price * (1 - tp_percent)
 
         return {"stop_loss": stop_loss_price, "take_profit": take_profit_price}
+
+    def _simulate_slippage(self, ideal_price: float, quantity: int, direction: str, candle_volume: int) -> float:
+        """
+        Симулирует проскальзывание цены исполнения на основе объема.
+        """
+        # Если модель проскальзывания отключена или объем на свече нулевой, возвращаем идеальную цену.
+        if not self.slippage_enabled or candle_volume == 0:
+            return ideal_price
+
+        # Рассчитываем долю нашей сделки в общем объеме свечи
+        volume_ratio = quantity / candle_volume
+
+        # Модель "квадратного корня" (Проскальзывание = Coeff * (Объем_сделки / Объем_на_свече) ^ 0.5)
+        slippage_percent = self.impact_coefficient * (volume_ratio ** 0.5)
+
+        # Применяем проскальзывание. Цена всегда двигается "против нас".
+        if direction == 'BUY':
+            # При покупке цена становится ВЫШЕ
+            return ideal_price * (1 + slippage_percent)
+        else:  # Для SELL
+            # При продаже цена становится НИЖЕ
+            return ideal_price * (1 - slippage_percent)
 
     def update_market_price(self, event: MarketEvent):
         """
@@ -175,9 +202,16 @@ class Portfolio:
         
         # --- Сценарий 1: Открытие НОВОЙ позиции ---
         if not position: # Так как в position нет текущего figi
-            # Допущение, что цена исполнения равна цене открытия свечи, на которой пришел сигнал.
-            # ToDo: нет проскальзывания и т.п. Хоть бы рандом прикрутить на десятую долю процента
-            execution_price = last_candle['open']
+            ideal_price = last_candle['open']
+            candle_volume = last_candle['volume']
+
+            # --- ИЗМЕНЕНИЕ: Рассчитываем цену с учетом проскальзывания ---
+            execution_price = self._simulate_slippage(
+                ideal_price=ideal_price,
+                quantity=event.quantity,
+                direction=event.direction,
+                candle_volume=candle_volume
+            )
 
             # Получаем параметры риска из объекта стратегии и переводим их из процентов в доли.
             risk_levels = self._calculate_risk_levels(execution_price, event.direction)
@@ -203,22 +237,30 @@ class Portfolio:
         elif event.direction != position['direction']:
 
             entry_price = position['entry_price']
+            candle_volume = last_candle['volume']
 
-            # ToDo: нет проскальзывания и т.п. Хоть бы рандом прикрутить на десятую долю процента
             # Определяем цену в зависимости от причины выхода
             if position.get('exit_reason') == "Stop Loss":
                 # Если позиция закрывается по стопу, цена выхода равна уровню стопа
-                exit_price = position['stop_loss']
+                ideal_exit_price = position['stop_loss']
                 exit_reason = "Stop Loss"
             elif position.get('exit_reason') == "Take Profit":
                 # Если по тейку - то цена равна уровню тейка
-                exit_price = position['take_profit']
+                ideal_exit_price = position['take_profit']
                 exit_reason = "Take Profit"
             else: # Закрытие по сигналу от стратегии
                 # Если причина не указана, значит, это закрытие по сигналу от стратегии.
                 # Цена выхода - цена открытия текущей свечи.
-                exit_price = last_candle['open']
+                ideal_exit_price = last_candle['open']
                 exit_reason = "Signal"
+
+            # Рассчитываем цену выхода с учетом проскальзывания ---
+            exit_price = self._simulate_slippage(
+                ideal_price=ideal_exit_price,
+                quantity=event.quantity,
+                direction=event.direction,
+                candle_volume=candle_volume
+            )
 
             # Рассчитываем комиссию за вход и выход
             commission = (entry_price * event.quantity + exit_price * event.quantity) * self.commission_rate
