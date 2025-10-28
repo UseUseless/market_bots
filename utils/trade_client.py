@@ -2,6 +2,9 @@ import pandas as pd
 from datetime import timedelta
 import logging
 from typing import Literal
+from tqdm import tqdm
+
+from grpc import StatusCode
 from tinkoff.invest import Client, RequestError, OrderDirection, OrderType, CandleInterval
 from tinkoff.invest.utils import now
 from config import TOKEN_READONLY, TOKEN_FULL_ACCESS, TOKEN_SANDBOX, ACCOUNT_ID
@@ -9,7 +12,21 @@ from config import TOKEN_READONLY, TOKEN_FULL_ACCESS, TOKEN_SANDBOX, ACCOUNT_ID
 # Этот тип описывает все возможные торговые режимы.
 TradeModeType = Literal["REAL", "SANDBOX"]
 # Этот тип описывает все валидные интервалы свечей.
-IntervalType = Literal["1min", "5min", "15min", "1hour", "1day"]
+IntervalType = Literal[
+    "1min",
+    "2min",
+    "3min",
+    "5min",
+    "10min",
+    "15min",
+    "30min",
+    "1hour",
+    "2hour",
+    "4hour",
+    "1day",
+    "1week",
+    "1month",
+]
 
 class TinkoffTrader:
     """
@@ -92,36 +109,98 @@ class TinkoffTrader:
         # Словарь для преобразования нашей строки-интервала (напр., "5min")
         # в специальный формат, который понимает Tinkoff API.
         interval_map = {
-            "1min": CandleInterval.CANDLE_INTERVAL_1_MIN, "5min": CandleInterval.CANDLE_INTERVAL_5_MIN,
-            "15min": CandleInterval.CANDLE_INTERVAL_15_MIN, "1hour": CandleInterval.CANDLE_INTERVAL_HOUR,
+            "1min": CandleInterval.CANDLE_INTERVAL_1_MIN,
+            "2min": CandleInterval.CANDLE_INTERVAL_2_MIN,
+            "3min": CandleInterval.CANDLE_INTERVAL_3_MIN,
+            "5min": CandleInterval.CANDLE_INTERVAL_5_MIN,
+            "10min": CandleInterval.CANDLE_INTERVAL_10_MIN,
+            "15min": CandleInterval.CANDLE_INTERVAL_15_MIN,
+            "30min": CandleInterval.CANDLE_INTERVAL_30_MIN,
+            "1hour": CandleInterval.CANDLE_INTERVAL_HOUR,
+            "2hour": CandleInterval.CANDLE_INTERVAL_2_HOUR,
+            "4hour": CandleInterval.CANDLE_INTERVAL_4_HOUR,
             "1day": CandleInterval.CANDLE_INTERVAL_DAY,
+            "1week": CandleInterval.CANDLE_INTERVAL_WEEK,
+            "1month": CandleInterval.CANDLE_INTERVAL_MONTH,
         }
         interval = interval_map.get(interval_str)
         if not interval:
             logging.error(f"Неподдерживаемый интервал: {interval_str}")
             return pd.DataFrame() # Возвращаем пустой DataFrame в случае ошибки
-        
-        candles_data = []
+
+        all_candles = []
+        start_date = now() - timedelta(days=days)
+
+        print(f"Запрос данных для {figi} с {start_date.date()}...")
+
         try:
             with Client(self.read_token) as client:
-                # client.get_all_candles - это удобная функция-генератор из библиотеки,
-                # которая сама обрабатывает "склейку" данных, если их нужно запросить несколькими частями.
-                for candle in client.get_all_candles(figi=figi, from_=now() - timedelta(days=days), interval=interval):
-                    # Собираем данные в список словарей, приводя денежный формат Tinkoff к обычному float
-                    candles_data.append({
-                        "time": candle.time, "open": self._cast_money(candle.open),
-                        "high": self._cast_money(candle.high), "low": self._cast_money(candle.low),
-                        "close": self._cast_money(candle.close), "volume": candle.volume,
-                    })
+
+                # Создаем индикатор прогресса. total=days задает "цель" в 100%.
+                # desc - это текст, который будет отображаться слева от полосы.
+                with tqdm(total=days, desc="Прогресс загрузки", unit="дн.", colour="green") as pbar:
+                    # client.get_all_candles - это удобная функция-генератор из библиотеки,
+                    # которая сама обрабатывает "склейку" данных, если их нужно запросить несколькими частями.
+                    for candle in client.get_all_candles(figi=figi, from_=start_date, interval=interval):
+                        # Рассчитываем, сколько дней прошло от начала запроса до текущей свечи
+                        current_progress_days = (candle.time.date() - start_date.date()).days
+                        # Обновляем индикатор. `pbar.n` - текущее значение.
+                        if current_progress_days > pbar.n:
+                            pbar.update(current_progress_days - pbar.n)
+
+                        all_candles.append({
+                            "time": candle.time, "open": self._cast_money(candle.open),
+                            "high": self._cast_money(candle.high), "low": self._cast_money(candle.low),
+                            "close": self._cast_money(candle.close), "volume": candle.volume,
+                        })
+                if pbar.n < days:
+                    pbar.update(days - pbar.n)
+
         except RequestError as e:
-            logging.error(f"Ошибка получения исторических данных для {figi}: {e}")
+            # Ловим специфичные ошибки API и выводим понятные сообщения
+            logging.error(f"Ошибка API при получении данных для {figi}: {e.details} (код: {e.code.name})")
+            if e.code == StatusCode.NOT_FOUND:  # Код 50002
+                logging.error(f"-> Инструмент не найден. Проверьте правильность FIGI: {figi}")
+            elif e.code == StatusCode.RESOURCE_EXHAUSTED:  # Код 80002
+                # Примечание: RESOURCE_EXHAUSTED может быть и по другим причинам,
+                # но в контексте загрузки данных это почти всегда лимит запросов.
+                logging.error("-> Превышен лимит запросов к API. Попробуйте позже или уменьшите период.")
+            elif e.code == StatusCode.INVALID_ARGUMENT:  # Коды 3xxxx
+                # Ошибка 30084 (превышен период) попадает сюда.
+                # Можно проверить детали, если нужно.
+                if "Maximum request period has been exceeded" in e.details:
+                    logging.error(f"-> Превышен максимальный период запроса для интервала '{interval_str}'.")
+                else:
+                    logging.error(f"-> Неверный аргумент в запросе: {e.details}")
+
+            return pd.DataFrame()
+        except Exception as e:
+            # Ловим любые другие непредвиденные ошибки
+            logging.error(f"Непредвиденная ошибка при загрузке {figi}: {e}")
             return pd.DataFrame()
 
         # Превращаем список словарей в DataFrame
-        df = pd.DataFrame(candles_data)
-        if not df.empty:
-            # Убеждаемся, что колонка 'time' имеет правильный тип данных
+        df = pd.DataFrame(all_candles)
+
+        # Проверка на пустой результат
+        if df.empty:
+            logging.warning(f"Для {figi} не было возвращено ни одной свечи.")
+            logging.warning(
+                "-> Возможные причины: неторговый период, неверный FIGI или ограничения API по глубине истории.")
+        # Проверка на неполные данные
+        else:
             df['time'] = pd.to_datetime(df['time'])
+            # Проверяем, сколько дней данных мы ФАКТИЧЕСКИ получили
+            actual_start_date = df['time'].iloc[0].date()
+            actual_days_loaded = (df['time'].iloc[-1].date() - actual_start_date).days + 1
+
+            # Сравниваем запрошенное с полученным
+            if actual_days_loaded < days - 14:  # Даем погрешность в 2 недели на выходные и праздники
+                logging.warning(
+                    f"Запрошено {days} дней, но фактически загружено только ~{actual_days_loaded} дней, начиная с {actual_start_date}.")
+                logging.warning("-> Это может быть связано с ограничениями API по глубине истории для интервала "
+                                f"'{interval_str}'.")
+
         return df
 
     def place_market_order(self, figi: str, quantity: int, direction: str):
