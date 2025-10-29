@@ -12,28 +12,13 @@ class BaseStrategy(ABC):
     - Уметь подготавливать данные (рассчитывать индикаторы).
     - Уметь генерировать сигналы на основе рыночных данных.
     """
+
+    candle_interval: str
+
     def __init__(self, events_queue: Queue, figi: str):
         self.events_queue = events_queue
         self.name: str = self.__class__.__name__
-        self.figi: str = figi 
-        
-    # --- КОНТРАКТ: Атрибуты, которые должна определить каждая стратегия ---
-    # Любой класс, наследуемый от BaseStrategy, ДОЛЖЕН определить эти
-    # атрибуты в своих аналогичных методах
-    @property
-    @abstractmethod
-    def candle_interval(self) -> str:
-        raise NotImplementedError
-
-    @property
-    @abstractmethod
-    def stop_loss_percent(self) -> float:
-        raise NotImplementedError
-
-    @property
-    @abstractmethod
-    def take_profit_percent(self) -> float:
-        raise NotImplementedError
+        self.figi: str = figi
 
     # --- КОНТРАКТ: Методы, которые должна определить каждая стратегия ---
 

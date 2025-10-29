@@ -4,14 +4,18 @@ import os
 from datetime import datetime
 import logging
 import pandas as pd
+from typing import get_args
 
 from core.event import MarketEvent, SignalEvent, OrderEvent, FillEvent # События, которые становятся в очередь
 from core.data_handler import HistoricLocalDataHandler # Для загрузки данных из файла
 from core.portfolio import Portfolio # Менеджер, контролирующий, логику и события
 from core.execution import SimulatedExecutionHandler # Исполнитель любых ордеров
+from core.feature_engine import FeatureEngine
+from core.risk_manager import RiskManagerType
 from analyzer import BacktestAnalyzer # Создает аналитический отчет и график
 from utils.context_logger import backtest_time_filter # Добавляет время свечи в логи
-from config import BACKTEST_CONFIG, PATH_CONFIG
+from utils.trade_client import IntervalType
+from config import BACKTEST_CONFIG, PATH_CONFIG, RISK_CONFIG
 
 # --- Импорт и регистрация конкретных стратегий ---
 from strategies.triple_filter import TripleFilterStrategy
@@ -59,7 +63,7 @@ def setup_logging(log_file_path: str, backtest_mode: bool):
     if backtest_mode:
         logger.addFilter(backtest_time_filter)
 
-def run_backtest(strategy_class: type, trade_log_path: str, figi: str):
+def run_backtest(strategy_class: type, trade_log_path: str, figi: str, backtest_params: dict):
     """
     Запускает полный цикл бэктестинга для выбранной стратегии.
     Полный цикл, это:
@@ -77,21 +81,36 @@ def run_backtest(strategy_class: type, trade_log_path: str, figi: str):
     # 1. ИНИЦИАЛИЗАЦИЯ КОМПОНЕНТОВ
     # Создаем экземпляры:
     logging.info("Инициализация компонентов бэктеста...")
+    # Для расчета ATR (на сколько входить в позицию относительно волатильности рынка)
+    feature_engine = FeatureEngine()
     # Стратегия
     strategy = strategy_class(events_queue, figi)
     # Обработка данных
-    data_handler = HistoricLocalDataHandler(
-        events_queue, figi, strategy.candle_interval
-    )
+    data_handler = HistoricLocalDataHandler(events_queue, figi, backtest_params["interval"])
     # Портфель - риск-менеджер (разные расчеты по портфелю и ордерам)
     portfolio = Portfolio(events_queue=events_queue,
                           trade_log_file=trade_log_path,
                           strategy=strategy,
                           initial_capital=initial_capital,
-                          commission_rate=commission_rate)
+                          commission_rate=commission_rate,
+                          backtest_params=backtest_params
+                          )
     # Брокер - исполнитель ордеров
     execution_handler = SimulatedExecutionHandler(events_queue)
-    logging.info(f"Инициализация завершена. Стратегия: '{strategy.name}', FIGI: {figi}, Интервал: {strategy.candle_interval}")
+
+    risk_params_info = (
+        f"Risk % (L/S): {RISK_CONFIG['DEFAULT_RISK_PERCENT_LONG']}%/"
+        f"{RISK_CONFIG['DEFAULT_RISK_PERCENT_SHORT']}%"
+    )
+    if backtest_params["risk_manager"] == "ATR":
+        risk_params_info += (
+            f", ATR Period: {RISK_CONFIG['ATR_PERIOD']}, "
+            f"SL/TP Multipliers: {RISK_CONFIG['ATR_MULTIPLIER_SL']}/"
+            f"{RISK_CONFIG['ATR_MULTIPLIER_TP']}"
+        )
+
+    logging.info(f"Инициализация завершена. Стратегия: '{strategy.name}', FIGI: {figi}, Интервал: {backtest_params["interval"]}")
+    logging.info(f"Параметры риска ({backtest_params["risk_manager"]}): {risk_params_info}")
 
     # 2. ЭТАП ПОДГОТОВКИ ДАННЫХ
     logging.info("Начало этапа подготовки данных...")
@@ -102,8 +121,10 @@ def run_backtest(strategy_class: type, trade_log_path: str, figi: str):
         logging.error("Не удалось получить данные для бэктеста. Завершение работы.")
         return
 
-    # Обработка данных стратегией (создание новых индикаторов, фичей)
-    enriched_data = strategy.prepare_data(raw_data)
+    # Этап 1: Добавляем общие фичи
+    common_features_data = feature_engine.add_common_features(raw_data)
+    # Этап 2: Стратегия добавляет свои специфичные фичи
+    enriched_data = strategy.prepare_data(common_features_data)
 
     if enriched_data.empty:
         logging.warning("Нет данных для запуска бэктеста после подготовки (возможно, из-за короткого периода истории).")
@@ -179,7 +200,11 @@ def run_backtest(strategy_class: type, trade_log_path: str, figi: str):
         trades_df = pd.DataFrame(portfolio.closed_trades)
         report_filename = os.path.basename(trade_log_path).replace('_trades.csv', '')
         try:
-            analyzer = BacktestAnalyzer(trades_df, portfolio.initial_capital)
+            analyzer = BacktestAnalyzer(
+                trades_df=trades_df,
+                initial_capital=initial_capital,
+                backtest_params=portfolio.backtest_params
+            )
             analyzer.generate_report(report_filename)
         except Exception as e:
             logging.error(f"Ошибка при создании отчета: {e}")
@@ -198,10 +223,39 @@ def run_backtest(strategy_class: type, trade_log_path: str, figi: str):
 def main():
     # Создаем парсер аргументов командной строки и сами аргументы для запуска программы
     parser = argparse.ArgumentParser(description="Фреймворк для запуска торговых ботов.")
-    
-    parser.add_argument("--mode", type=str, required=True, choices=['backtest', 'sandbox', 'real'], help="Режим работы.")
-    parser.add_argument("--strategy", type=str, required=True, help=f"Имя стратегии. Доступно: {list(AVAILABLE_STRATEGIES.keys())}")
-    parser.add_argument("--figi", type=str, required=True, help="FIGI инструмента для тестирования (обязателен для backtest).")
+
+
+    parser.add_argument("--mode",
+                        type=str,
+                        required=True,
+                        choices=['backtest', 'sandbox', 'real'],
+                        help="Режим работы.")
+    parser.add_argument("--strategy",
+                        type=str,
+                        required=True,
+                        help=f"Имя стратегии. Доступно: {list(AVAILABLE_STRATEGIES.keys())}")
+    parser.add_argument("--figi",
+                        type=str,
+                        required=True,
+                        help="FIGI инструмента для тестирования (обязателен для backtest).")
+    valid_rms = get_args(RiskManagerType)
+    parser.add_argument(
+        "--rm",
+        "--risk_manager",  # Добавляем короткое имя --rm
+        dest="risk_manager_type",
+        type=str,
+        default="FIXED",
+        choices=valid_rms,
+        help="Модель управления риском (расчета SL/TP)."
+    )
+    valid_intervals = get_args(IntervalType)
+    parser.add_argument(
+        "--interval",
+        type=str,
+        default=None,  # По умолчанию не задан, что и включает нашу гибридную логику
+        choices=valid_intervals,
+        help="Переопределяет таймфрейм для бэктеста. Если не указан, используется рекомендуемый из стратегии."
+    )
 
     args = parser.parse_args()
 
@@ -212,11 +266,21 @@ def main():
 
     strategy_class = AVAILABLE_STRATEGIES[args.strategy]
 
+    final_interval = args.interval or strategy_class.candle_interval
+
+    backtest_params = {
+        "interval": final_interval,
+        "risk_manager": args.risk_manager_type,
+    }
+
     # Генерация уникальных имен файлов для логов
     LOGS_DIR = PATH_CONFIG["LOGS_DIR"]
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    base_filename = f"{timestamp}_{args.strategy}_{args.figi}_{args.mode}"
+    base_filename = (
+        f"{timestamp}_{args.strategy}_{args.figi}_{final_interval}_"
+        f"RM-{args.risk_manager_type}_{args.mode}"
+    )
 
     # Создаем полные пути для файла с логами выполнения и файла с логами сделок
     log_file_path = os.path.join(LOGS_DIR, f"{base_filename}_run.log")
@@ -234,7 +298,8 @@ def main():
         run_backtest(
             strategy_class=strategy_class,
             trade_log_path=trade_log_path,
-            figi=args.figi
+            figi=args.figi,
+            backtest_params=backtest_params
         )
     else:
         # ToDo: Реализовать sandbox

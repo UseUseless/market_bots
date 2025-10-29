@@ -36,15 +36,23 @@ BACKTEST_CONFIG = {
         "IMPACT_COEFFICIENT": 0.1,
     },
 }
+# Настройки для управления риском и размером позиции
+RISK_CONFIG = {
+    # Процент риска от капитала по умолчанию
+    "DEFAULT_RISK_PERCENT_LONG": 3,  # 1% для длинных позиций
+    "DEFAULT_RISK_PERCENT_SHORT": 2,  # 0.8% для коротких позиций
 
-# --- 3. НАСТРОЙКИ КОНКРЕТНЫХ СТРАТЕГИЙ ---
+    # Параметры для модели на основе ATR
+    "ATR_PERIOD": 14,
+    "ATR_MULTIPLIER_SL": 4.0, # Ставить стоп на расстоянии *значение* * ATR
+    "ATR_MULTIPLIER_TP": 8.0, # Ставить тейк на расстоянии *значение* * ATR (sl:tp = 1:2)
+}
+
+# --- НАСТРОЙКИ КОНКРЕТНЫХ СТРАТЕГИЙ ---
 # Свой собственный словарь с настройками для каждой стратегии.
-
 STRATEGY_CONFIG = {
     "TripleFilterStrategy": {
-        "candle_interval": "5min",
-        "stop_loss_percent": 0.7,
-        "take_profit_percent": 1.4,
+        "candle_interval": "5min", # Рекомендуемый свечной интервал
         # Специфичные параметры для этой стратегии
         "ema_fast_period": 9,
         "ema_slow_period": 21,

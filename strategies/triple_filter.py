@@ -16,18 +16,7 @@ class TripleFilterStrategy(BaseStrategy):
     """
 
     _config = STRATEGY_CONFIG["TripleFilterStrategy"]
-
-    @property
-    def candle_interval(self) -> str:
-        return self._config["candle_interval"]
-
-    @property
-    def stop_loss_percent(self) -> float:
-        return self._config["stop_loss_percent"]
-
-    @property
-    def take_profit_percent(self) -> float:
-        return self._config["take_profit_percent"]
+    candle_interval: str = _config["candle_interval"]
 
     def __init__(self, events_queue: Queue, figi: str):
         super().__init__(events_queue, figi)
@@ -60,6 +49,7 @@ class TripleFilterStrategy(BaseStrategy):
             data.ta.sma(length=self.volume_sma_period, close='volume', append=True, col_names=(self.volume_sma_name,))
             
             # Удаляем строки с NaN, которые образуются в начале из-за расчета EMA
+            # И именно после всех расчетов
             data.dropna(inplace=True)
             data.reset_index(drop=True, inplace=True)
             logging.info("Подготовка данных для TripleFilterStrategy завершена.")

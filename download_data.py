@@ -2,8 +2,11 @@ import argparse
 import os
 from typing import get_args
 import pandas as pd # Далее используется pd.DF объекты
+import logging
 from utils.trade_client import TinkoffTrader, IntervalType
 from config import DATA_LOADER_CONFIG, PATH_CONFIG
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # --- КОНФИГУРАЦИЯ ---
 DATA_DIR = PATH_CONFIG["DATA_DIR"]
@@ -15,6 +18,8 @@ def download_data(figi_list: list[str], interval_str: IntervalType, days_to_load
     Загружает исторические данные для указанных инструментов и интервала
     и сохраняет их в формате Parquet.
     """
+
+    logging.info(f"--- Загрузка данных за {days_to_load} дней для интервала: {interval_str} ---")
 
     # Создаем экземпляр нашего API-клиента.
     trader = TinkoffTrader()
@@ -40,7 +45,7 @@ def download_data(figi_list: list[str], interval_str: IntervalType, days_to_load
         if not df.empty:
             # Сохраняем DataFrame в файл в формате Parquet.
             df.to_parquet(file_path)
-            print(f"Успешно сохранено {len(df)} свечей в файл: {file_path}")
+            logging.info(f"Успешно сохранено {len(df)} свечей для {figi} в файл: {file_path}")
 
 def main():
     # Настраиваем парсер аргументов командной строки

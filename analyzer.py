@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import os
+import logging
 
 from config import PATH_CONFIG
 
@@ -10,13 +11,14 @@ class BacktestAnalyzer:
     Анализирует результаты бэктеста на основе DataFrame с закрытыми сделками.
     Рассчитывает ключевые метрики и генерирует графический отчет.
     """
-    def __init__(self, trades_df: pd.DataFrame, initial_capital: float, report_dir: str = PATH_CONFIG["REPORTS_DIR"]):
+    def __init__(self, trades_df: pd.DataFrame, initial_capital: float, backtest_params: dict, report_dir: str = PATH_CONFIG["REPORTS_DIR"]):
         # Проверяем, что нам вообще передали какие-то данные
         if trades_df.empty:
             raise ValueError("DataFrame со сделками не может быть пустым.")
             
         self.trades = trades_df
         self.initial_capital = initial_capital
+        self.backtest_params = backtest_params
         self.report_dir = report_dir
         os.makedirs(self.report_dir, exist_ok=True)
         
@@ -56,15 +58,21 @@ class BacktestAnalyzer:
         # sqrt(252) - это годовая поправка (примерное число торговых дней в году).
         sharpe_ratio = (daily_returns.mean() / daily_returns.std()) * np.sqrt(252) if daily_returns.std() != 0 else 0
 
-        # Возвращаем все метрики в виде словаря
-        return {
-            "Total PnL": f"{total_pnl:.2f} ({total_pnl/self.initial_capital*100:.2f}%)",
+        metrics = {
+            # --- Параметры запуска ---
+            "Interval": self.backtest_params.get("interval", "N/A"),
+            "Risk Manager": self.backtest_params.get("risk_manager", "N/A"),
+            "---": "---",
+            "Total PnL": f"{total_pnl:.2f} ({total_pnl / self.initial_capital * 100:.2f}%)",
             "Win Rate": f"{win_rate:.2f}%",
             "Max Drawdown": f"{max_drawdown:.2f}%",
             "Profit Factor": f"{profit_factor:.2f}",
             "Sharpe Ratio": f"{sharpe_ratio:.2f}",
             "Total Trades": len(self.trades)
         }
+
+        # Возвращаем все метрики
+        return metrics
 
     def generate_report(self, report_filename: str):
         """Создает и сохраняет отчет с графиком и метриками."""
@@ -95,7 +103,7 @@ class BacktestAnalyzer:
         plt.close(fig) # Очищаем график из памяти
 
         # --- Вывод метрик в консоль ---
-        print(f"\n--- Отчет о производительности сохранен в файл: {full_path} ---")
+        logging.info(f"--- Отчет о производительности сохранен в файл: {full_path} ---")
         for key, value in metrics.items():
-            print(f"{key:<15}: {value}")
-        print("-----------------------------------------------------------------")
+            logging.info(f"{key:<15}: {value}")
+        logging.info("-----------------------------------------------------------------")

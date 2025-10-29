@@ -4,20 +4,27 @@ import logging
 from core.event import MarketEvent, SignalEvent, OrderEvent, FillEvent
 from utils.trade_logger import log_trade
 from strategies.base_strategy import BaseStrategy
-from config import BACKTEST_CONFIG
+from config import BACKTEST_CONFIG, RISK_CONFIG
+from core.sizer import FixedRiskSizer
+from core.risk_manager import BaseRiskManager, FixedRiskManager, AtrRiskManager
 
 class Portfolio:
     """
     Управляет состоянием счета, позициями и генерирует ордера.
     Выступает в роли риск-менеджера и логического центра программы, управляющего событиями.
     """
-    def __init__(self, events_queue: Queue, trade_log_file: str, strategy: BaseStrategy, initial_capital: float, commission_rate: float):
+    def __init__(self, events_queue: Queue, trade_log_file: str, strategy: BaseStrategy,
+                 initial_capital: float, commission_rate: float, backtest_params: dict):
         self.events_queue = events_queue        # Ссылка на общую очередь событий для отправки ордеров
         self.trade_log_file = trade_log_file    # Путь к CSV-файлу для записи сделок
         self.strategy = strategy                # Экземпляр текущей стратегии (нужен для доступа к SL/TP)
         self.initial_capital = initial_capital  # Начальный капитал для бэктеста
         self.current_capital = initial_capital  # Текущий капитал, изменяется после каждой сделки
         self.commission_rate = commission_rate  # Размер комиссии в долях Ex:(0.0005 = 0.05%)
+        self.position_sizer = FixedRiskSizer()
+        self.backtest_params = backtest_params
+        self.risk_manager_type = self.backtest_params["risk_manager"]
+        self.risk_manager: BaseRiskManager | None = None
 
         self.slippage_config = BACKTEST_CONFIG.get("SLIPPAGE_CONFIG", {"ENABLED": False})
         self.slippage_enabled = self.slippage_config.get("ENABLED", False)
@@ -32,20 +39,6 @@ class Portfolio:
         # Словарь для хранения последней полученной свечи по каждому инструменту.
         # Нужно для определения цены исполнения ордера (покупка, продажа)
         self.last_market_data = {}
-
-    def _calculate_risk_levels(self, entry_price: float, direction: str) -> dict:
-        """Рассчитывает и возвращает абсолютные уровни SL и TP."""
-        sl_percent = self.strategy.stop_loss_percent / 100.0
-        tp_percent = self.strategy.take_profit_percent / 100.0
-
-        if direction == 'BUY': # Лонг
-            stop_loss_price = entry_price * (1 - sl_percent)
-            take_profit_price = entry_price * (1 + tp_percent)
-        else:  # Шорт
-            stop_loss_price = entry_price * (1 + sl_percent)
-            take_profit_price = entry_price * (1 - tp_percent)
-
-        return {"stop_loss": stop_loss_price, "take_profit": take_profit_price}
 
     def _simulate_slippage(self, ideal_price: float, quantity: int, direction: str, candle_volume: int) -> float:
         """
@@ -68,6 +61,17 @@ class Portfolio:
         else:  # Для SELL
             # При продаже цена становится НИЖЕ
             return ideal_price * (1 - slippage_percent)
+
+    def _get_risk_manager(self, last_candle) -> BaseRiskManager | None:
+        """Фабрика, создающая нужный экземпляр риск-менеджера."""
+        if self.risk_manager_type == "FIXED":
+            return FixedRiskManager()
+        elif self.risk_manager_type == "ATR":
+            atr_period = RISK_CONFIG["ATR_PERIOD"]
+            atr_value = last_candle.get(f'ATR_{atr_period}')
+            if atr_value:
+                return AtrRiskManager(atr_value=atr_value)
+        return None
 
     def update_market_price(self, event: MarketEvent):
         """
@@ -129,7 +133,8 @@ class Portfolio:
             self.current_positions[figi]['exit_reason'] = exit_reason
 
     def on_signal(self, event: SignalEvent):
-        """Обрабатывает сигнал от стратегии и решает, отправлять ли ордер."""
+        """Обрабатывает сигнал от стратегии, рассчитывает размер позиции
+        с помощью PositionSizer и решает, отправлять ли ордер."""
         figi = event.figi
         position = self.current_positions.get(figi)
 
@@ -145,26 +150,42 @@ class Portfolio:
             return
 
         # --- Сценарий 1: У нас НЕТ открытой позиции по этому инструменту ---
-        if not position:
-            # Логика входа в новую позицию
-            if event.direction == "BUY":
-                # В текущей версии количество лотов = 1.
-                # ToDo: Расчет размера позиции. Здесь?
-                order = OrderEvent(figi=figi, quantity=1, direction="BUY")
-                # Кладем приказ в очередь
+        if not position: # Логика входа в новую позицию
+            # Получаем последнюю свечу, чтобы иметь доступ к цене и ATR
+            last_candle = self.last_market_data.get(figi)
+            if last_candle is None:
+                logging.warning(f"Нет рыночных данных для обработки сигнала по {figi}, сигнал проигнорирован.")
+                return
+
+            self.risk_manager = self._get_risk_manager(last_candle)
+            if not self.risk_manager:
+                logging.error(f"Не удалось создать RiskManager '{self.risk_manager_type}'.")
+                return
+
+            ideal_entry_price = last_candle['open']
+
+            # Рассчитываем SL
+            stop_loss_price = self.risk_manager.calculate_stop_loss(ideal_entry_price, event.direction)
+
+            # 3. Рассчитываем размер позиции
+            quantity = self.position_sizer.calculate_size(
+                capital=self.current_capital,
+                entry_price=ideal_entry_price,
+                stop_loss_price=stop_loss_price,
+                direction=event.direction
+            )
+
+            # TODO: Для акций нужно округление до целого лота. Для крипты - нет.
+            # Пока оставляем округление. Можно вынести в конфиг.
+            quantity = int(quantity)
+
+            # Если расчет показал, что можно открыть позицию (quantity > 0)
+            if quantity > 0:
+                order = OrderEvent(figi=figi, quantity=quantity, direction=event.direction)
                 self.events_queue.put(order)
-                # Добавляем FIGI в список ордеров на исполнение
                 self.pending_orders.add(figi)
-                logging.info(f"Портфель генерирует ордер на ПОКУПКУ (открытие лонга) {figi}")
-            elif event.direction == "SELL":
-                # В текущей версии количество лотов = 1.
-                # ToDo: Расчет размера позиции. Здесь?
-                order = OrderEvent(figi=figi, quantity=1, direction="SELL")
-                # Кладем приказ в очередь
-                self.events_queue.put(order)
-                # Добавляем FIGI в список ордеров на исполнение
-                self.pending_orders.add(figi)
-                logging.info(f"Портфель генерирует ордер на ПРОДАЖУ (открытие шорта) {figi}")
+                logging.info(f"Портфель генерирует ордер на {event.direction} {quantity} лот(ов) {figi}")
+
         # --- Сценарий 2: У нас ЕСТЬ открытая позиция по этому инструменту---
         else:
             # Логика выхода из существующей позиции
@@ -231,7 +252,7 @@ class Portfolio:
             ideal_price = last_candle['open']
             candle_volume = last_candle['volume']
 
-            # --- ИЗМЕНЕНИЕ: Рассчитываем цену с учетом проскальзывания ---
+            # Рассчитываем цену с учетом проскальзывания ---
             execution_price = self._simulate_slippage(
                 ideal_price=ideal_price,
                 quantity=event.quantity,
@@ -239,19 +260,26 @@ class Portfolio:
                 candle_volume=candle_volume
             )
 
-            # Получаем параметры риска из объекта стратегии и переводим их из процентов в доли.
-            risk_levels = self._calculate_risk_levels(execution_price, event.direction)
+            # Рассчитываем ФИНАЛЬНЫЕ уровни SL и TP здесь на основе реальной цены входа
+            self.risk_manager = self._get_risk_manager(last_candle)
+            if not self.risk_manager: return
+
+            # 1Считаем финальный стоп-лосс на основе РЕАЛЬНОЙ цены входа
+            final_stop_loss = self.risk_manager.calculate_stop_loss(execution_price, event.direction)
+
+            # Считаем финальный тейк-профит
+            final_take_profit = self.risk_manager.calculate_take_profit(execution_price, event.direction,
+                                                                        final_stop_loss)
 
             self.current_positions[figi] = {
                 'quantity': event.quantity,
                 'entry_price': execution_price,
                 'direction': event.direction,
-                'stop_loss': risk_levels["stop_loss"],
-                'take_profit': risk_levels["take_profit"],
+                'stop_loss': final_stop_loss,
+                'take_profit': final_take_profit,
                 'exit_reason': None
             }
-            logging.info(
-                f"Позиция ОТКРЫТА: ... | SL: {risk_levels['stop_loss']:.2f}, TP: {risk_levels['take_profit']:.2f}")
+            logging.info(f"Позиция ОТКРЫТА: {event.direction} {event.quantity} {figi} @ {execution_price:.2f} | SL: {final_stop_loss:.2f}, TP: {final_take_profit:.2f}")
 
         # --- Сценарий 2: Закрытие СУЩЕСТВУЮЩЕЙ позиции ---
         # Так как позиция есть (не прошла if выше) и её направление
@@ -302,9 +330,16 @@ class Portfolio:
             
             # Логируем сделку в CSV
             log_trade(
-                trade_log_file=self.trade_log_file, strategy_name=self.strategy.name,
-                figi=figi, direction=position['direction'], entry_price=entry_price,
-                exit_price=exit_price, pnl=pnl, exit_reason=exit_reason
+                trade_log_file=self.trade_log_file,
+                strategy_name=self.strategy.name,
+                figi=figi,
+                direction=position['direction'],
+                entry_price=entry_price,
+                exit_price=exit_price,
+                pnl=pnl,
+                exit_reason=exit_reason,
+                interval=self.backtest_params["interval"],
+                risk_manager=self.backtest_params["risk_manager"]
             )
             # Сохраняем информацию о сделке для финального отчета
             self.closed_trades.append({'pnl': pnl})

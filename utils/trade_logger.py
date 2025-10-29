@@ -5,10 +5,15 @@ import logging
 
 HEADERS = [
     'timestamp_utc', 'strategy_name', 'figi', 'direction', 
-    'entry_price', 'exit_price', 'pnl', 'exit_reason'
+    'entry_price', 'exit_price', 'pnl', 'exit_reason',
+    'interval', 'risk_manager'
 ]
 
-def log_trade(trade_log_file: str, strategy_name: str, figi: str, direction: str, entry_price: float, exit_price: float, pnl: float, exit_reason: str):
+def log_trade(
+    trade_log_file: str, strategy_name: str, figi: str, direction: str,
+    entry_price: float, exit_price: float, pnl: float, exit_reason: str,
+    interval: str, risk_manager: str
+):
     """
     Записывает информацию о завершенной сделке в указанный CSV-файл.
     """
@@ -16,7 +21,7 @@ def log_trade(trade_log_file: str, strategy_name: str, figi: str, direction: str
         # Убедимся, что папка для логов существует
         os.makedirs(os.path.dirname(trade_log_file), exist_ok=True)
         file_exists = os.path.isfile(trade_log_file)
-        
+
         row_data = {
             'timestamp_utc': datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S'),
             'strategy_name': strategy_name,
@@ -25,7 +30,9 @@ def log_trade(trade_log_file: str, strategy_name: str, figi: str, direction: str
             'entry_price': round(entry_price, 4),
             'exit_price': round(exit_price, 4),
             'pnl': round(pnl, 4),
-            'exit_reason': exit_reason
+            'exit_reason': exit_reason,
+            'interval': interval,
+            'risk_manager': risk_manager
         }
 
         with open(trade_log_file, 'a', newline='', encoding='utf-8') as csvfile:
