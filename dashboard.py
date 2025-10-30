@@ -45,9 +45,17 @@ def load_all_backtests(logs_dir: str) -> pd.DataFrame:
                 interval = parts[4]
                 risk_manager = parts[5].replace('RM-', '')
 
+                # Загружаем исторические данные для бенчмарка.
+                data_path = os.path.join(PATH_CONFIG["DATA_DIR"], interval, f"{figi}.parquet")
+                if not os.path.exists(data_path):
+                    print(f"Warning: Data file not found for benchmark: {data_path}")
+                    continue
+                historical_data = pd.read_parquet(data_path)
+
                 # Рассчитываем метрики для этого бэктеста
                 analyzer = BacktestAnalyzer(
                     trades_df=trades_df,
+                    historical_data=historical_data,
                     initial_capital=BACKTEST_CONFIG["INITIAL_CAPITAL"],
                     interval=interval,
                     risk_manager_type=risk_manager
@@ -61,7 +69,8 @@ def load_all_backtests(logs_dir: str) -> pd.DataFrame:
                     "FIGI": figi,
                     "Interval": interval,
                     "Risk Manager": risk_manager,
-                    "Total PnL (%)": float(metrics["Total PnL"].split(' ')[1].replace('(', '').replace('%)', '')),
+                    "PnL (Strategy %)": float(metrics["Total PnL (Strategy)"].split(' ')[1].replace('(', '').replace('%)', '')),
+                    "PnL (B&H %)": float(metrics["Total PnL (Buy & Hold)"].split(' ')[1].replace('(', '').replace('%)', '')),
                     "Win Rate (%)": float(metrics["Win Rate"].replace('%', '')),
                     "Max Drawdown (%)": float(metrics["Max Drawdown"].replace('%', '')),
                     "Profit Factor": float(metrics["Profit Factor"]),
@@ -84,6 +93,12 @@ def plot_equity_and_drawdown(analyzer: BacktestAnalyzer):
     # График капитала
     fig.add_trace(go.Scatter(x=analyzer.trades.index, y=analyzer.trades['equity_curve'],
                              mode='lines', name='Equity Curve'), row=1, col=1)
+
+    # График Buy & Hold
+    benchmark_resampled = analyzer.benchmark_equity.reset_index(drop=True)
+    benchmark_resampled.index = np.linspace(0, len(analyzer.trades) - 1, len(benchmark_resampled))
+    fig.add_trace(go.Scatter(x=benchmark_resampled.index, y=benchmark_resampled.values,
+                             mode='lines', name='Buy & Hold', line=dict(dash='dash', color='grey')), row=1, col=1)
 
     # График просадок (Underwater Plot)
     fig.add_trace(go.Scatter(x=analyzer.trades.index, y=analyzer.trades['drawdown_percent'],
@@ -159,7 +174,8 @@ else:
     # --- Основной экран ---
     st.header("Сводная таблица результатов")
     st.dataframe(filtered_df.style.format({
-        "Total PnL (%)": "{:.2f}%",
+        "PnL (Strategy %)": "{:.2f}%",
+        "PnL (B&H %)": "{:.2f}%",
         "Win Rate (%)": "{:.2f}%",
         "Max Drawdown (%)": "{:.2f}%",
         "Profit Factor": "{:.2f}",
@@ -179,12 +195,19 @@ else:
 
         # Создаем экземпляр анализатора для выбранного бэктеста
         row = filtered_df[filtered_df["File"] == selected_file].iloc[0]
+
+        #  Загружаем исторические данные так же, как мы это делали в load_all_backtests
+        data_path = os.path.join(PATH_CONFIG["DATA_DIR"], row["Interval"], f"{row['FIGI']}.parquet")
+        historical_data = pd.read_parquet(data_path)
+
         analyzer = BacktestAnalyzer(
             trades_df=trades_df,
+            historical_data=historical_data,
             initial_capital=BACKTEST_CONFIG["INITIAL_CAPITAL"],
             interval=row["Interval"],
             risk_manager_type=row["Risk Manager"]
         )
+
         # Дополнительно рассчитаем просадку в % для графика
         analyzer.trades['drawdown_percent'] = (analyzer.trades['equity_curve'] / analyzer.trades[
             'equity_curve'].cummax() - 1) * 100

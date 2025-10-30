@@ -214,6 +214,7 @@ def run_backtest(trade_log_path: str,
         try:
             analyzer = BacktestAnalyzer(
                 trades_df=trades_df,
+                historical_data=enriched_data,
                 initial_capital=initial_capital,
                 interval=interval,
                 risk_manager_type=risk_manager_type

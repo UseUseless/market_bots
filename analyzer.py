@@ -13,12 +13,16 @@ class BacktestAnalyzer:
     Анализирует результаты бэктеста на основе DataFrame с закрытыми сделками.
     Рассчитывает ключевые метрики и генерирует графический отчет.
     """
-    def __init__(self, trades_df: pd.DataFrame, initial_capital: float, interval: str, risk_manager_type: str, report_dir: str = PATH_CONFIG["REPORTS_DIR"]):
+
+    def __init__(self, trades_df: pd.DataFrame, historical_data: pd.DataFrame,
+                 initial_capital: float, interval: str, risk_manager_type: str,
+                 report_dir: str = PATH_CONFIG["REPORTS_DIR"]):
         # Проверяем, что нам вообще передали какие-то данные
         if trades_df.empty:
             raise ValueError("DataFrame со сделками не может быть пустым.")
             
         self.trades = trades_df
+        self.historical_data = historical_data
         self.initial_capital = initial_capital
         self.interval = interval
         self.risk_manager_type = risk_manager_type
@@ -29,6 +33,24 @@ class BacktestAnalyzer:
         self.trades['cumulative_pnl'] = self.trades['pnl'].cumsum()
         # Прибавляем накопительный PnL к начальному капиталу, чтобы получить кривую роста
         self.trades['equity_curve'] = self.initial_capital + self.trades['cumulative_pnl']
+
+        self.benchmark_equity = self._calculate_buy_and_hold()
+
+    def _calculate_buy_and_hold(self) -> pd.Series:
+        """
+        Рассчитывает кривую капитала для стратегии "Купи и держи".
+        """
+        # Цена покупки - цена открытия самой первой свечи в истории
+        entry_price = self.historical_data['open'].iloc[0]
+
+        # Рассчитываем, сколько акций мы могли бы купить на начальный капитал
+        quantity = self.initial_capital / entry_price
+
+        # Создаем новую колонку, где стоимость портфеля пересчитывается на каждой свече
+        # по цене закрытия (close)
+        equity_curve = self.historical_data['close'] * quantity
+
+        return equity_curve
 
     def calculate_metrics(self) -> dict:
         """Рассчитывает ключевые метрики производительности стратегии."""
@@ -61,12 +83,18 @@ class BacktestAnalyzer:
         # sqrt(252) - это годовая поправка (примерное число торговых дней в году).
         sharpe_ratio = (daily_returns.mean() / daily_returns.std()) * np.sqrt(252) if daily_returns.std() != 0 else 0
 
+        # Расчет метрик для "Buy and Hold
+        benchmark_pnl = self.benchmark_equity.iloc[-1] - self.initial_capital
+        benchmark_pnl_percent = (benchmark_pnl / self.initial_capital) * 100
+
         metrics = {
             # --- Параметры запуска ---
             "Interval": self.interval,
             "Risk Manager Type": self.risk_manager_type,
-            "---": "---",
-            "Total PnL": f"{total_pnl:.2f} ({total_pnl / self.initial_capital * 100:.2f}%)",
+            "---": "---", # Разделитель
+            "Total PnL (Strategy)": f"{total_pnl:.2f} ({total_pnl / self.initial_capital * 100:.2f}%)",
+            "Total PnL (Buy & Hold)": f"{benchmark_pnl:.2f} ({benchmark_pnl_percent:.2f}%)", # Новая метрика
+            "--- ": "--- ", # Разделитель
             "Win Rate": f"{win_rate:.2f}%",
             "Max Drawdown": f"{max_drawdown:.2f}%",
             "Profit Factor": f"{profit_factor:.2f}",
@@ -80,15 +108,21 @@ class BacktestAnalyzer:
     def generate_report(self, report_filename: str):
         """Создает и сохраняет отчет с графиком и метриками."""
         metrics = self.calculate_metrics()
-        
-        # Создание графика
+
         plt.style.use('seaborn-v0_8-darkgrid')
-        fig, ax = plt.subplots(figsize=(15, 7)) # Создаем основу графика
+        fig, ax = plt.subplots(figsize=(15, 7))
+        
+        # Создание графиков
+        # График нашей стратегии. Важно: используем индекс сделок.
+        self.trades['equity_curve'].plot(ax=ax, label='Strategy Equity Curve', color='blue', lw=2)
 
-        # Рисуем кривую капитала
-        self.trades['equity_curve'].plot(ax=ax, label='Equity Curve', color='blue')
+        # График "Buy and Hold". Важно: нужно привести его индекс к тому же масштабу,
+        # что и у графика сделок, чтобы они корректно наложились.
+        # Мы "растягиваем" индекс от 0 до N-1 сделок на всю длину исторических данных.
+        benchmark_resampled = self.benchmark_equity.reset_index(drop=True)
+        benchmark_resampled.index = np.linspace(0, len(self.trades) - 1, len(benchmark_resampled))
+        benchmark_resampled.plot(ax=ax, label='Buy & Hold Benchmark', color='gray', linestyle='--', lw=1.5)
 
-        # Настраиваем заголовок и подписи осей
         ax.set_title(f"Результаты бэктеста: {report_filename}", fontsize=16)
         ax.set_xlabel("Количество сделок")
         ax.set_ylabel("Капитал")
@@ -98,7 +132,8 @@ class BacktestAnalyzer:
         report_text = "\n".join([f"{key}: {value}" for key, value in metrics.items()])
         # Размещаем этот текст в левом верхнем углу графика
         ax.text(0.02, 0.98, report_text, transform=ax.transAxes, fontsize=10,
-                verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+                verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5),
+                fontfamily='monospace')
 
         # Сохранение отчета в файл
         full_path = os.path.join(self.report_dir, f"{report_filename}.png")
