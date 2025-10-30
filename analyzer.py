@@ -11,14 +11,15 @@ class BacktestAnalyzer:
     Анализирует результаты бэктеста на основе DataFrame с закрытыми сделками.
     Рассчитывает ключевые метрики и генерирует графический отчет.
     """
-    def __init__(self, trades_df: pd.DataFrame, initial_capital: float, backtest_params: dict, report_dir: str = PATH_CONFIG["REPORTS_DIR"]):
+    def __init__(self, trades_df: pd.DataFrame, initial_capital: float, interval: str, risk_manager_type: str, report_dir: str = PATH_CONFIG["REPORTS_DIR"]):
         # Проверяем, что нам вообще передали какие-то данные
         if trades_df.empty:
             raise ValueError("DataFrame со сделками не может быть пустым.")
             
         self.trades = trades_df
         self.initial_capital = initial_capital
-        self.backtest_params = backtest_params
+        self.interval = interval
+        self.risk_manager_type = risk_manager_type
         self.report_dir = report_dir
         os.makedirs(self.report_dir, exist_ok=True)
         
@@ -60,8 +61,8 @@ class BacktestAnalyzer:
 
         metrics = {
             # --- Параметры запуска ---
-            "Interval": self.backtest_params.get("interval", "N/A"),
-            "Risk Manager": self.backtest_params.get("risk_manager", "N/A"),
+            "Interval": self.interval,
+            "Risk Manager Type": self.risk_manager_type,
             "---": "---",
             "Total PnL": f"{total_pnl:.2f} ({total_pnl / self.initial_capital * 100:.2f}%)",
             "Win Rate": f"{win_rate:.2f}%",

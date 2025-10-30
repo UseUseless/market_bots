@@ -1,49 +1,71 @@
 from queue import Queue
 import logging
+import pandas as pd # Добавлено для type hinting
+from typing import Any # Добавлено для type hinting
 
-from core.event import MarketEvent, SignalEvent, OrderEvent, FillEvent
+from core.event import MarketEvent, SignalEvent, OrderEvent, FillEvent, Event # Типы события для обмена в очереди
 from utils.trade_logger import log_trade
 from strategies.base_strategy import BaseStrategy
-from config import BACKTEST_CONFIG, RISK_CONFIG
-from core.sizer import FixedRiskSizer
+from config import BACKTEST_CONFIG
+from core.sizer import BasePositionSizer, FixedRiskSizer
 from core.risk_manager import BaseRiskManager, FixedRiskManager, AtrRiskManager
 
 class Portfolio:
     """
-    Управляет состоянием счета, позициями и генерирует ордера.
-    Выступает в роли риск-менеджера и логического центра программы, управляющего событиями.
+    1.  **Управление состоянием**: Отслеживает текущий капитал, открытые позиции и ордера в обработке.
+    2.  **Управление рисками**: Проверяет условия стоп-лосса и тейк-профита на каждой новой свече.
+    3.  **Бухгалтерия**: Рассчитывает PnL по закрытым сделкам и обновляет капитал.
+    4.  **Оркестрация**: Принимает события и на основе их генерирует новые при выполнении условия
     """
+
     def __init__(self, events_queue: Queue, trade_log_file: str, strategy: BaseStrategy,
-                 initial_capital: float, commission_rate: float, backtest_params: dict):
-        self.events_queue = events_queue        # Ссылка на общую очередь событий для отправки ордеров
-        self.trade_log_file = trade_log_file    # Путь к CSV-файлу для записи сделок
-        self.strategy = strategy                # Экземпляр текущей стратегии (нужен для доступа к SL/TP)
-        self.initial_capital = initial_capital  # Начальный капитал для бэктеста
-        self.current_capital = initial_capital  # Текущий капитал, изменяется после каждой сделки
-        self.commission_rate = commission_rate  # Размер комиссии в долях Ex:(0.0005 = 0.05%)
-        self.position_sizer = FixedRiskSizer()
-        self.backtest_params = backtest_params
-        self.risk_manager_type = self.backtest_params["risk_manager"]
-        self.risk_manager: BaseRiskManager | None = None
+                 initial_capital: float, commission_rate: float, interval: str, risk_manager_type: str):
+        self.events_queue: Queue[Event] = events_queue  # Ссылка на общую очередь событий для отправки ордеров
+        self.trade_log_file: str = trade_log_file       # Путь к CSV-файлу для записи сделок
+        self.strategy: BaseStrategy = strategy          # Экземпляр текущей стратегии (нужен для доступа к SL/TP)
+        self.initial_capital: float = initial_capital   # Начальный капитал для бэктеста
+        self.commission_rate: float = commission_rate   # Размер комиссии в долях Ex:(0.0005 = 0.05%)
+        self.interval: str = interval                   # Текущий таймфрейм (например, '5min'). Нужен для логирования.
 
-        self.slippage_config = BACKTEST_CONFIG.get("SLIPPAGE_CONFIG", {"ENABLED": False})
-        self.slippage_enabled = self.slippage_config.get("ENABLED", False)
-        self.impact_coefficient = self.slippage_config.get("IMPACT_COEFFICIENT", 0.1)
+        # Создаем экземпляр калькулятора размера позиции.
+        self.position_sizer: BasePositionSizer = FixedRiskSizer()
+        # Тип риск-менеджера ('FIXED' или 'ATR'). Нужен для создания экземпляра риск-менеджера и логирования
+        self.risk_manager_type: str = risk_manager_type
+        self.risk_manager: BaseRiskManager
+        if self.risk_manager_type == "FIXED":
+            self.risk_manager: BaseRiskManager = FixedRiskManager()
+        elif self.risk_manager_type == "ATR":
+            self.risk_manager: BaseRiskManager = AtrRiskManager()
+        else:
+            # Если тип не распознан, система не сможет работать.
+            raise ValueError(f"Unknown risk manager type: {risk_manager_type}")
 
-        # Словарь для хранения всех активных позиций. Ключ - FIGI, значение - словарь с деталями позиции.
-        self.current_positions = {}
-        # Set для хранения FIGI, по которым был отправлен ордер, но еще не пришел отчет об исполнении (FillEvent).
-        self.pending_orders = set()
+        # Настройки проскальзывания
+        self.slippage_config: dict[str, Any] = BACKTEST_CONFIG.get("SLIPPAGE_CONFIG", {"ENABLED": False})
+        self.slippage_enabled: bool = self.slippage_config.get("ENABLED", False)                # Включено ли проскальзывание
+        self.impact_coefficient: float = self.slippage_config.get("IMPACT_COEFFICIENT", 0.1)    # Коэфф влияния проскальзывания
+
+        # Динамические аттрибуты (меняются в ходе бэктеста)
+        self.current_capital: float = initial_capital   # Текущий капитал, изменяется после каждой сделки
+        # Словарь для хранения всех активных позиций.
+        # Ключ - FIGI, значение - словарь с деталями позиции (цена входа, SL, TP и т.д.).
+        self.current_positions: dict[str, dict[str, Any]] = {}
+        # Множество (set) для хранения FIGI, по которым был отправлен ордер, но еще не пришел отчет об исполнении (FillEvent).
+        # Это критически важный механизм для предотвращения отправки дублирующих ордеров по одному и тому же инструменту.
+        self.pending_orders: set[str] = set()
         # Информация о всех закрытых сделках для финального отчета.
-        self.closed_trades = []
+        self.closed_trades: list[dict[str, float]] = []
         # Словарь для хранения последней полученной свечи по каждому инструменту.
         # Нужно для определения цены исполнения ордера (покупка, продажа)
-        self.last_market_data = {}
+        self.last_market_data: dict[str, pd.Series] = {}
 
     def _simulate_slippage(self, ideal_price: float, quantity: int, direction: str, candle_volume: int) -> float:
         """
-        Симулирует проскальзывание цены исполнения на основе объема.
+        Приватный метод для симуляции проскальзывания (slippage).
+        Проскальзывание — это разница между ожидаемой ценой сделки и ценой, по которой сделка фактически исполняется.
+        Эта модель делает бэктест более реалистичным, так как в реальной торговле крупные ордера влияют на цену.
         """
+
         # Если модель проскальзывания отключена или объем на свече нулевой, возвращаем идеальную цену.
         if not self.slippage_enabled or candle_volume == 0:
             return ideal_price
@@ -51,10 +73,12 @@ class Portfolio:
         # Рассчитываем долю нашей сделки в общем объеме свечи
         volume_ratio = quantity / candle_volume
 
+        # Используем модель "квадратного корня" — это стандартная аппроксимация в индустрии.
+        # Она симулирует нелинейное влияние на цену: чем больше наш ордер, тем непропорционально сильнее он двигает цену.
         # Модель "квадратного корня" (Проскальзывание = Coeff * (Объем_сделки / Объем_на_свече) ^ 0.5)
         slippage_percent = self.impact_coefficient * (volume_ratio ** 0.5)
 
-        # Применяем проскальзывание. Цена всегда двигается "против нас".
+        # Применяем проскальзывание. Важно, что оно ВСЕГДА работает против нас.
         if direction == 'BUY':
             # При покупке цена становится ВЫШЕ
             return ideal_price * (1 + slippage_percent)
@@ -62,18 +86,7 @@ class Portfolio:
             # При продаже цена становится НИЖЕ
             return ideal_price * (1 - slippage_percent)
 
-    def _get_risk_manager(self, last_candle) -> BaseRiskManager | None:
-        """Фабрика, создающая нужный экземпляр риск-менеджера."""
-        if self.risk_manager_type == "FIXED":
-            return FixedRiskManager()
-        elif self.risk_manager_type == "ATR":
-            atr_period = RISK_CONFIG["ATR_PERIOD"]
-            atr_value = last_candle.get(f'ATR_{atr_period}')
-            if atr_value:
-                return AtrRiskManager(atr_value=atr_value)
-        return None
-
-    def update_market_price(self, event: MarketEvent):
+    def update_market_price(self, event: MarketEvent) -> None:
         """
         Вызывается на КАЖДЫЙ MarketEvent (новую свечу)
         Обновляет рыночные данные
@@ -132,7 +145,7 @@ class Portfolio:
             # Помечаем позицию как "ожидающую закрытия", чтобы избежать дублирования ордеров и пишем причину
             self.current_positions[figi]['exit_reason'] = exit_reason
 
-    def on_signal(self, event: SignalEvent):
+    def on_signal(self, event: SignalEvent) -> None:
         """Обрабатывает сигнал от стратегии, рассчитывает размер позиции
         с помощью PositionSizer и решает, отправлять ли ордер."""
         figi = event.figi
@@ -157,34 +170,47 @@ class Portfolio:
                 logging.warning(f"Нет рыночных данных для обработки сигнала по {figi}, сигнал проигнорирован.")
                 return
 
-            self.risk_manager = self._get_risk_manager(last_candle)
-            if not self.risk_manager:
-                logging.error(f"Не удалось создать RiskManager '{self.risk_manager_type}'.")
-                return
-
+            # В качестве "идеальной" цены входа мы берем цену открытия текущей свечи.
             ideal_entry_price = last_candle['open']
 
-            # Рассчитываем SL
-            stop_loss_price = self.risk_manager.calculate_stop_loss(ideal_entry_price, event.direction)
+            try:
+                # Размер позиции (Quantity) зависит от риска на акцию (расстояния до стоп-лосса).
+                # Стоп-лосс (Stop-Loss) зависит от фактической цены входа (Execution Price).
+                # Фактическая цена входа (Execution Price) зависит от проскальзывания (Slippage).
+                # Проскальзывание (Slippage), в нашей модели, зависит от размера позиции (Quantity).
 
-            # 3. Рассчитываем размер позиции
-            quantity = self.position_sizer.calculate_size(
-                capital=self.current_capital,
-                entry_price=ideal_entry_price,
-                stop_loss_price=stop_loss_price,
-                direction=event.direction
-            )
+                # Чтобы избавиться от этого замкнутого круга принимаем допущение об идеальной цене входа
+                # для расчета размера позиции (по предварительной цене)
+                # Считаем риск профиль: стоп-лосс, риск на акцию и как следствие размер позиции
+                # При исполнении on_fill посчитаем проскальзывание-реальную цену исполнения на основе размера позиции
 
-            # TODO: Для акций нужно округление до целого лота. Для крипты - нет.
-            # Пока оставляем округление. Можно вынести в конфиг.
-            quantity = int(quantity)
+                # Считаем риск-профиль
+                risk_profile = self.risk_manager.calculate_risk_profile(
+                    entry_price=ideal_entry_price,
+                    direction=event.direction,
+                    capital=self.current_capital,
+                    last_candle=last_candle
+                )
 
-            # Если расчет показал, что можно открыть позицию (quantity > 0)
-            if quantity > 0:
-                order = OrderEvent(figi=figi, quantity=quantity, direction=event.direction)
-                self.events_queue.put(order)
-                self.pending_orders.add(figi)
-                logging.info(f"Портфель генерирует ордер на {event.direction} {quantity} лот(ов) {figi}")
+                # Передаем этот профиль в sizer для расчета количества лотов.
+                quantity_float = self.position_sizer.calculate_size(risk_profile)
+
+                # Для торговли акциями количество лотов должно быть целым.
+                # Округляем вниз (floor), чтобы не превысить расчетный риск.
+                # TODO: Для криптовалют нужно будет использовать дробное значение (quantity_float)
+                #   и, возможно, учитывать минимальный размер ордера (min_order_size).
+                quantity = int(quantity_float)
+
+                # Если расчет показал, что мы можем купить хотя бы 1 лот, генерируем ордер.
+                if quantity > 0:
+                    order = OrderEvent(figi=event.figi, quantity=quantity, direction=event.direction)
+                    self.events_queue.put(order)
+                    self.pending_orders.add(event.figi)
+                    logging.info(f"Портфель генерирует ордер на {event.direction} {quantity} лот(ов) {event.figi}")
+
+            except ValueError as e:
+                # Ловим ошибку от AtrRiskManager, если, например, ATR некорректен.
+                logging.warning(f"Не удалось рассчитать профиль риска для {event.figi}: {e}. Сигнал проигнорирован.")
 
         # --- Сценарий 2: У нас ЕСТЬ открытая позиция по этому инструменту---
         else:
@@ -218,7 +244,7 @@ class Portfolio:
                 logging.info(f"Портфель генерирует ордер на ПОКУПКУ (закрытие шорта) {figi}")
             # ToDo: Можно и докупать если была открыта позиция на Buy и пришел опять Buy. Нужно ли?
 
-    def on_fill(self, event: FillEvent):
+    def on_fill(self, event: FillEvent) -> None:
         """
         Выполняется после фактического исполнения ордера (FillEvent).
         Обновляются позиции и капитал. Сохраняется инфо для отчета.
@@ -252,7 +278,8 @@ class Portfolio:
             ideal_price = last_candle['open']
             candle_volume = last_candle['volume']
 
-            # Рассчитываем цену с учетом проскальзывания ---
+            # Рассчитываем цену с учетом проскальзывания
+            # Так как мы уже знаем размер позиции
             execution_price = self._simulate_slippage(
                 ideal_price=ideal_price,
                 quantity=event.quantity,
@@ -260,26 +287,26 @@ class Portfolio:
                 candle_volume=candle_volume
             )
 
-            # Рассчитываем ФИНАЛЬНЫЕ уровни SL и TP здесь на основе реальной цены входа
-            self.risk_manager = self._get_risk_manager(last_candle)
-            if not self.risk_manager: return
+            # Ключевой момент: мы ПЕРЕСЧИТЫВАЕМ профиль риска на основе РЕАЛЬНОЙ цены входа (execution_price).
+            # Это гарантирует, что наши уровни SL/TP будут установлены максимально точно относительно фактической точки входа.
+            final_risk_profile = self.risk_manager.calculate_risk_profile(
+                entry_price=execution_price,
+                direction=event.direction,
+                capital=self.current_capital,
+                last_candle=last_candle
+            )
 
-            # 1Считаем финальный стоп-лосс на основе РЕАЛЬНОЙ цены входа
-            final_stop_loss = self.risk_manager.calculate_stop_loss(execution_price, event.direction)
-
-            # Считаем финальный тейк-профит
-            final_take_profit = self.risk_manager.calculate_take_profit(execution_price, event.direction,
-                                                                        final_stop_loss)
-
-            self.current_positions[figi] = {
+            # Сохраняем позицию, используя данные из профиля
+            self.current_positions[event.figi] = {
                 'quantity': event.quantity,
                 'entry_price': execution_price,
                 'direction': event.direction,
-                'stop_loss': final_stop_loss,
-                'take_profit': final_take_profit,
+                'stop_loss': final_risk_profile.stop_loss_price,
+                'take_profit': final_risk_profile.take_profit_price,
                 'exit_reason': None
             }
-            logging.info(f"Позиция ОТКРЫТА: {event.direction} {event.quantity} {figi} @ {execution_price:.2f} | SL: {final_stop_loss:.2f}, TP: {final_take_profit:.2f}")
+            logging.info(f"Позиция ОТКРЫТА: {event.direction} {event.quantity} {event.figi} @ {execution_price:.2f} | "
+                         f"SL: {final_risk_profile.stop_loss_price:.2f}, TP: {final_risk_profile.take_profit_price:.2f}")
 
         # --- Сценарий 2: Закрытие СУЩЕСТВУЮЩЕЙ позиции ---
         # Так как позиция есть (не прошла if выше) и её направление
@@ -308,7 +335,7 @@ class Portfolio:
                 ideal_exit_price = last_candle['open']
                 exit_reason = "Signal"
 
-            # Рассчитываем цену выхода с учетом проскальзывания ---
+            # Рассчитываем РЕАЛЬНУЮ цену выхода с учетом проскальзывания.
             exit_price = self._simulate_slippage(
                 ideal_price=ideal_exit_price,
                 quantity=event.quantity,
@@ -338,8 +365,8 @@ class Portfolio:
                 exit_price=exit_price,
                 pnl=pnl,
                 exit_reason=exit_reason,
-                interval=self.backtest_params["interval"],
-                risk_manager=self.backtest_params["risk_manager"]
+                interval=self.interval,
+                risk_manager=self.risk_manager_type
             )
             # Сохраняем информацию о сделке для финального отчета
             self.closed_trades.append({'pnl': pnl})

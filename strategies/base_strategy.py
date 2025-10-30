@@ -17,8 +17,9 @@ class BaseStrategy(ABC):
 
     def __init__(self, events_queue: Queue, figi: str):
         self.events_queue = events_queue
-        self.name: str = self.__class__.__name__
         self.figi: str = figi
+
+        self.name: str = self.__class__.__name__
 
     # --- КОНТРАКТ: Методы, которые должна определить каждая стратегия ---
 
