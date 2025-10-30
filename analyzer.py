@@ -3,6 +3,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 import logging
+from rich.console import Console
+from rich.table import Table
 
 from config import PATH_CONFIG
 
@@ -104,7 +106,30 @@ class BacktestAnalyzer:
         plt.close(fig) # Очищаем график из памяти
 
         # --- Вывод метрик в консоль ---
-        logging.info(f"--- Отчет о производительности сохранен в файл: {full_path} ---")
+        console = Console()
+        table = Table(title=f"Отчет о производительности: {report_filename}", show_header=True,
+                      header_style="bold magenta")
+        table.add_column("Метрика", style="dim", width=20)
+        table.add_column("Значение", justify="right")
+
         for key, value in metrics.items():
-            logging.info(f"{key:<15}: {value}")
-        logging.info("-----------------------------------------------------------------")
+            if key == "---":
+                table.add_section()
+            else:
+                table.add_row(key, str(value))
+
+        console.print(table)
+        logging.info(f"Графический отчет сохранен в файл: {full_path}")
+
+    @staticmethod
+    def load_trades_from_file(file_path: str) -> pd.DataFrame:
+        """Загружает сделки из файла, поддерживая .csv и .jsonl форматы."""
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"Файл с логами сделок не найден: {file_path}")
+
+        if file_path.endswith('.jsonl'):
+            return pd.read_json(file_path, lines=True)
+        elif file_path.endswith('.csv'):
+            return pd.read_csv(file_path)
+        else:
+            raise ValueError("Неподдерживаемый формат файла логов. Используйте .jsonl или .csv")

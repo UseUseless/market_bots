@@ -7,6 +7,11 @@ from utils.trade_client import TinkoffTrader, IntervalType
 from config import DATA_LOADER_CONFIG, PATH_CONFIG
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Получаем доступ к логгеру библиотеки 'tinkoff' и повышаем его уровень до WARNING.
+# Это скроет все информационные сообщения (INFO) от API, но оставит важные предупреждения (WARNING) и ошибки (ERROR).
+# Будет высвечиваться только одна строка и на том же месте обновляться.
+# Без этого каждый день скачки свечей была бы новая строка в консоли
+logging.getLogger('tinkoff').setLevel(logging.WARNING)
 
 # --- КОНФИГУРАЦИЯ ---
 DATA_DIR = PATH_CONFIG["DATA_DIR"]

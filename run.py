@@ -210,13 +210,13 @@ def run_backtest(trade_log_path: str,
             f"Запуск анализатора..."
         )
         trades_df = pd.DataFrame(portfolio.closed_trades)
-        report_filename = os.path.basename(trade_log_path).replace('_trades.csv', '')
+        report_filename = os.path.basename(trade_log_path).replace('_trades.jsonl', '')
         try:
             analyzer = BacktestAnalyzer(
                 trades_df=trades_df,
                 initial_capital=initial_capital,
                 interval=interval,
-                risk_manager_type= risk_manager_type
+                risk_manager_type=risk_manager_type
             )
             analyzer.generate_report(report_filename)
         except Exception as e:
@@ -302,14 +302,11 @@ def main():
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     # Имена логов для текущего запуска бэктеста
-    base_filename = (
-        f"{timestamp}_{strategy_class}_{figi}_{current_interval}_"
-        f"RM-{risk_manager_type}_{args.mode}"
-    )
+    base_filename = f"{timestamp}_{strategy_class.__name__}_{figi}_{current_interval}_RM-{risk_manager_type}_{args.mode}"
 
     # Создаем полные пути для файла с логами выполнения и файла с логами сделок
     log_file_path = os.path.join(LOGS_DIR, f"{base_filename}_run.log")
-    trade_log_path = os.path.join(LOGS_DIR, f"{base_filename}_trades.csv")
+    trade_log_path = os.path.join(LOGS_DIR, f"{base_filename}_trades.jsonl")
 
     is_backtest = args.mode == 'backtest'
 

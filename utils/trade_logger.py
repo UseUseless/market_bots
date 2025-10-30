@@ -1,13 +1,7 @@
-import csv
+import json
 import os
 from datetime import datetime, UTC
 import logging
-
-HEADERS = [
-    'timestamp_utc', 'strategy_name', 'figi', 'direction', 
-    'entry_price', 'exit_price', 'pnl', 'exit_reason',
-    'interval', 'risk_manager'
-]
 
 def log_trade(
     trade_log_file: str, strategy_name: str, figi: str, direction: str,
@@ -15,15 +9,13 @@ def log_trade(
     interval: str, risk_manager: str
 ):
     """
-    Записывает информацию о завершенной сделке в указанный CSV-файл.
+    Записывает информацию о завершенной сделке в указанный файл в формате JSONL.
     """
     try:
-        # Убедимся, что папка для логов существует
         os.makedirs(os.path.dirname(trade_log_file), exist_ok=True)
-        file_exists = os.path.isfile(trade_log_file)
 
         row_data = {
-            'timestamp_utc': datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S'),
+            'timestamp_utc': datetime.now(UTC).isoformat(),
             'strategy_name': strategy_name,
             'figi': figi,
             'direction': direction,
@@ -35,13 +27,10 @@ def log_trade(
             'risk_manager': risk_manager
         }
 
-        with open(trade_log_file, 'a', newline='', encoding='utf-8') as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=HEADERS)
-            if not file_exists:
-                writer.writeheader()  # Записываем заголовки, если файл новый
-            writer.writerow(row_data)
+        with open(trade_log_file, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(row_data) + '\n')
             
-    except IOError as e:
+    except (IOError, TypeError) as e:
         logging.error(f"Не удалось записать сделку в файл {trade_log_file}: {e}")
     except Exception as e:
         logging.error(f"Непредвиденная ошибка при записи лога сделки: {e}")
