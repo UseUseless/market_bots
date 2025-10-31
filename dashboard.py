@@ -4,6 +4,8 @@ import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import numpy as np
+from typing import Dict, Any, Optional
 
 from analyzer import BacktestAnalyzer
 from config import PATH_CONFIG, BACKTEST_CONFIG
@@ -15,6 +17,58 @@ st.set_page_config(
     layout="wide",  # Используем всю ширину экрана
 )
 
+def _process_single_backtest_file(file_path: str) -> Optional[Dict[str, Any]]:
+    """
+    Обрабатывает один .jsonl файл с результатами бэктеста.
+    Возвращает словарь с ключевыми метриками или None в случае ошибки.
+    """
+    try:
+        filename = os.path.basename(file_path)
+        trades_df = BacktestAnalyzer.load_trades_from_file(file_path)
+        if trades_df.empty:
+            return None
+
+        # 1. Парсим метаданные из имени файла
+        parts = filename.replace('_trades.jsonl', '').split('_')
+        strategy_name = parts[2]
+        figi = parts[3]
+        interval = parts[4]
+        risk_manager = parts[5].replace('RM-', '')
+
+        # 2. Загружаем исторические данные для расчета бенчмарка
+        data_path = os.path.join(PATH_CONFIG["DATA_DIR"], interval, f"{figi}.parquet")
+        if not os.path.exists(data_path):
+            print(f"Warning: Data file not found for benchmark: {data_path}")
+            return None
+        historical_data = pd.read_parquet(data_path)
+
+        # 3. Создаем анализатор и рассчитываем метрики
+        analyzer = BacktestAnalyzer(
+            trades_df=trades_df,
+            historical_data=historical_data,
+            initial_capital=BACKTEST_CONFIG["INITIAL_CAPITAL"],
+            interval=interval,
+            risk_manager_type=risk_manager
+        )
+        metrics = analyzer.calculate_metrics()
+
+        # 4. Формируем и возвращаем итоговый словарь
+        return {
+            "File": filename,
+            "Strategy": strategy_name,
+            "FIGI": figi,
+            "Interval": interval,
+            "Risk Manager": risk_manager,
+            "PnL (Strategy %)": float(metrics["Total PnL (Strategy)"].split(' ')[1].replace('(', '').replace('%)', '')),
+            "PnL (B&H %)": float(metrics["Total PnL (Buy & Hold)"].split(' ')[1].replace('(', '').replace('%)', '')),
+            "Win Rate (%)": float(metrics["Win Rate"].replace('%', '')),
+            "Max Drawdown (%)": float(metrics["Max Drawdown"].replace('%', '')),
+            "Profit Factor": float(metrics["Profit Factor"]),
+            "Total Trades": int(metrics["Total Trades"]),
+        }
+    except Exception as e:
+        print(f"Warning: Could not process file {os.path.basename(file_path)}. Error: {e}")
+        return None
 
 # --- Кэшированная функция для загрузки данных ---
 # @st.cache_data говорит Streamlit'у выполнять эту функцию только один раз,
@@ -22,64 +76,20 @@ st.set_page_config(
 @st.cache_data
 def load_all_backtests(logs_dir: str) -> pd.DataFrame:
     """
-    Сканирует директорию с логами, загружает все _trades.jsonl файлы
-    и возвращает DataFrame со сводной информацией по каждому бэктесту.
+    Сканирует директорию с логами, делегируя обработку каждого файла
+    helper-функции, и возвращает итоговый DataFrame.
     """
     all_results = []
     if not os.path.isdir(logs_dir):
-        return pd.DataFrame()  # Возвращаем пустой DF, если папки нет
+        return pd.DataFrame()
 
     for filename in os.listdir(logs_dir):
         if filename.endswith("_trades.jsonl"):
             file_path = os.path.join(logs_dir, filename)
-            try:
-                # Используем наш статический метод из BacktestAnalyzer!
-                trades_df = BacktestAnalyzer.load_trades_from_file(file_path)
-                if trades_df.empty:
-                    continue
-
-                # Парсим имя файла, чтобы извлечь метаданные
-                parts = filename.replace('_trades.jsonl', '').split('_')
-                strategy_name = parts[2]
-                figi = parts[3]
-                interval = parts[4]
-                risk_manager = parts[5].replace('RM-', '')
-
-                # Загружаем исторические данные для бенчмарка.
-                data_path = os.path.join(PATH_CONFIG["DATA_DIR"], interval, f"{figi}.parquet")
-                if not os.path.exists(data_path):
-                    print(f"Warning: Data file not found for benchmark: {data_path}")
-                    continue
-                historical_data = pd.read_parquet(data_path)
-
-                # Рассчитываем метрики для этого бэктеста
-                analyzer = BacktestAnalyzer(
-                    trades_df=trades_df,
-                    historical_data=historical_data,
-                    initial_capital=BACKTEST_CONFIG["INITIAL_CAPITAL"],
-                    interval=interval,
-                    risk_manager_type=risk_manager
-                )
-                metrics = analyzer.calculate_metrics()
-
-                # Собираем все в одну строку
-                result_row = {
-                    "File": filename,
-                    "Strategy": strategy_name,
-                    "FIGI": figi,
-                    "Interval": interval,
-                    "Risk Manager": risk_manager,
-                    "PnL (Strategy %)": float(metrics["Total PnL (Strategy)"].split(' ')[1].replace('(', '').replace('%)', '')),
-                    "PnL (B&H %)": float(metrics["Total PnL (Buy & Hold)"].split(' ')[1].replace('(', '').replace('%)', '')),
-                    "Win Rate (%)": float(metrics["Win Rate"].replace('%', '')),
-                    "Max Drawdown (%)": float(metrics["Max Drawdown"].replace('%', '')),
-                    "Profit Factor": float(metrics["Profit Factor"]),
-                    "Total Trades": int(metrics["Total Trades"]),
-                }
+            # Делегируем всю сложную работу helper'у
+            result_row = _process_single_backtest_file(file_path)
+            if result_row:
                 all_results.append(result_row)
-            except Exception as e:
-                # Игнорируем "битые" файлы, но выводим предупреждение в консоль
-                print(f"Warning: Could not process file {filename}. Error: {e}")
 
     return pd.DataFrame(all_results)
 

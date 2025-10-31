@@ -1,7 +1,7 @@
 from queue import Queue
 import logging
 import pandas as pd # Добавлено для type hinting
-from typing import Any # Добавлено для type hinting
+from typing import Any, Dict
 
 from core.event import MarketEvent, SignalEvent, OrderEvent, FillEvent, Event # Типы события для обмена в очереди
 from utils.trade_logger import log_trade
@@ -86,26 +86,10 @@ class Portfolio:
             # При продаже цена становится НИЖЕ
             return ideal_price * (1 - slippage_percent)
 
-    def update_market_price(self, event: MarketEvent) -> None:
-        """
-        Вызывается на КАЖДЫЙ MarketEvent (новую свечу)
-        Обновляет рыночные данные
-        Проверяет SL/TP на каждой новой свече (если есть позиция).
-        """
-        # Получаем FIGI и данные из события
-        figi = event.figi
-        self.last_market_data[figi] = event.data
-
-        # Данные получили
-        # Код дальше выполняется только если есть позиция по какому-то инструменту
-
-        # Получаем текущую позицию по этому инструменту
-        position = self.current_positions.get(figi)
-        # Если позиции нет или по этому инструменту есть ордер, то ничего не делаем больше
-        if not position or figi in self.pending_orders:
-            return
-
+    def _check_stop_loss_take_profit(self, event: MarketEvent, position: Dict[str, Any]) -> None:
+        """Проверяет, не сработал ли SL или TP на текущей свече."""
         exit_reason = None
+        exit_direction = None
         # Получаем максимальную и минимальную цену за период свечи
         candle_high = event.data['high']
         candle_low = event.data['low']
@@ -114,110 +98,90 @@ class Portfolio:
         if position['direction'] == 'BUY':
             # Если минимальная цена свечи коснулась или пробила наш стоп-лосс
             if candle_low <= position['stop_loss']:
-                exit_reason = "Stop Loss"
-                exit_direction = "SELL"
+                exit_reason, exit_direction = "Stop Loss", "SELL"
             # Если максимальная цена свечи коснулась или пробила наш тейк-профит
             elif candle_high >= position['take_profit']:
-                exit_reason = "Take Profit"
-                exit_direction = "SELL"
+                exit_reason, exit_direction = "Take Profit", "SELL"
 
         # Проверяем условия SL/TP для ШОРТА
         elif position['direction'] == 'SELL':
             # Если максимальная цена свечи коснулась или пробила наш стоп-лосс
             if candle_high >= position['stop_loss']:
-                exit_reason = "Stop Loss"
-                exit_direction = "BUY"  # Направление ордера для закрытия
+                exit_reason, exit_direction = "Stop Loss", "BUY"
             # Если минимальная цена свечи коснулась или пробила наш тейк-профит
             elif candle_low <= position['take_profit']:
-                exit_reason = "Take Profit"
-                exit_direction = "BUY"
+                exit_reason, exit_direction = "Take Profit", "BUY"
 
         # Логика выхода из существующей позиции !ПО СТОП_ЛОСС ИЛИ ТЕЙК_ПРОФИТ И ТОЛЬКО ПО НИМ!
         # Закрытие по сигналу в on_signal
         if exit_reason:
-            logging.warning(f"!!! СРАБОТАЛ {exit_reason.upper()} для {figi}. Генерирую ордер на закрытие.")
+            logging.warning(f"!!! СРАБОТАЛ {exit_reason.upper()} для {event.figi}. Генерирую ордер на закрытие.")
             # Создаем приказ (OrderEvent) на закрытие позиции
-            order = OrderEvent(figi=figi, quantity=position['quantity'], direction=exit_direction)
+            order = OrderEvent(figi=event.figi, quantity=position['quantity'], direction=exit_direction)
             # Кладем OrderEvent в общую очередь событий
             self.events_queue.put(order)
             # Добавляем ордер в список ожидающих на исполнение, чтобы его исполнить в первую очередь
-            self.pending_orders.add(figi)
+            self.pending_orders.add(event.figi)
             # Помечаем позицию как "ожидающую закрытия", чтобы избежать дублирования ордеров и пишем причину
-            self.current_positions[figi]['exit_reason'] = exit_reason
+            self.current_positions[event.figi]['exit_reason'] = exit_reason
 
-    def on_signal(self, event: SignalEvent) -> None:
-        """Обрабатывает сигнал от стратегии, рассчитывает размер позиции
-        с помощью PositionSizer и решает, отправлять ли ордер."""
-        figi = event.figi
-        position = self.current_positions.get(figi)
-
-        # Фильтр: Игнорируем сигналы, если ордер по инструменту в обработке.
-        # Так как мы могли в очередь добавить через update_market_price OrderEvent
-        # Но мы еще не до конца обработали MarketEvent и от него пришел SignalEvent в очередь
-        # У нас в очереди в таком порядке два события: OrderEvent, SignalEvent
-        # Мы обрабатываем OrderEvent и он превращается в FillEvent и становится вторым
-        # У нас в очереди в таком порядке два события: SignalEvent, FillEvent
-        # Запускается этот метод и для игнорирования SignalEvent проверяем pending_orders
-        # Переменная pending_orders не пуста, так как она всегда заполняется когда создается OrderEvent
-        if figi in self.pending_orders:
+    def _handle_new_position_signal(self, event: SignalEvent) -> None:
+        """Обрабатывает сигнал на открытие новой позиции."""
+        # Получаем последнюю свечу, чтобы иметь доступ к цене и ATR
+        last_candle = self.last_market_data.get(event.figi)
+        if last_candle is None:
+            logging.warning(f"Нет рыночных данных для обработки сигнала по {event.figi}, сигнал проигнорирован.")
             return
 
-        # --- Сценарий 1: У нас НЕТ открытой позиции по этому инструменту ---
-        if not position: # Логика входа в новую позицию
-            # Получаем последнюю свечу, чтобы иметь доступ к цене и ATR
-            last_candle = self.last_market_data.get(figi)
-            if last_candle is None:
-                logging.warning(f"Нет рыночных данных для обработки сигнала по {figi}, сигнал проигнорирован.")
-                return
+        # В качестве "идеальной" цены входа мы берем цену открытия текущей свечи.
+        ideal_entry_price = last_candle['open']
 
-            # В качестве "идеальной" цены входа мы берем цену открытия текущей свечи.
-            ideal_entry_price = last_candle['open']
+        try:
+            # Размер позиции (Quantity) зависит от риска на акцию (расстояния до стоп-лосса).
+            # Стоп-лосс (Stop-Loss) зависит от фактической цены входа (Execution Price).
+            # Фактическая цена входа (Execution Price) зависит от проскальзывания (Slippage).
+            # Проскальзывание (Slippage), в нашей модели, зависит от размера позиции (Quantity).
 
-            try:
-                # Размер позиции (Quantity) зависит от риска на акцию (расстояния до стоп-лосса).
-                # Стоп-лосс (Stop-Loss) зависит от фактической цены входа (Execution Price).
-                # Фактическая цена входа (Execution Price) зависит от проскальзывания (Slippage).
-                # Проскальзывание (Slippage), в нашей модели, зависит от размера позиции (Quantity).
+            # Чтобы избавиться от этого замкнутого круга принимаем допущение об идеальной цене входа
+            # для расчета размера позиции (по предварительной цене)
+            # Считаем риск профиль: стоп-лосс, риск на акцию и как следствие размер позиции
+            # При исполнении on_fill посчитаем проскальзывание-реальную цену исполнения на основе размера позиции
 
-                # Чтобы избавиться от этого замкнутого круга принимаем допущение об идеальной цене входа
-                # для расчета размера позиции (по предварительной цене)
-                # Считаем риск профиль: стоп-лосс, риск на акцию и как следствие размер позиции
-                # При исполнении on_fill посчитаем проскальзывание-реальную цену исполнения на основе размера позиции
+            # Считаем риск-профиль
+            risk_profile = self.risk_manager.calculate_risk_profile(
+                entry_price=ideal_entry_price,
+                direction=event.direction,
+                capital=self.current_capital,
+                last_candle=last_candle
+            )
 
-                # Считаем риск-профиль
-                risk_profile = self.risk_manager.calculate_risk_profile(
-                    entry_price=ideal_entry_price,
-                    direction=event.direction,
-                    capital=self.current_capital,
-                    last_candle=last_candle
-                )
+            # Передаем этот профиль в sizer для расчета количества лотов.
+            quantity_float = self.position_sizer.calculate_size(risk_profile)
 
-                # Передаем этот профиль в sizer для расчета количества лотов.
-                quantity_float = self.position_sizer.calculate_size(risk_profile)
+            # Для торговли акциями количество лотов должно быть целым.
+            # Округляем вниз (floor), чтобы не превысить расчетный риск.
+            # TODO: Для криптовалют нужно будет использовать дробное значение (quantity_float)
+            #   и, возможно, учитывать минимальный размер ордера (min_order_size).
+            quantity = int(quantity_float)
 
-                # Для торговли акциями количество лотов должно быть целым.
-                # Округляем вниз (floor), чтобы не превысить расчетный риск.
-                # TODO: Для криптовалют нужно будет использовать дробное значение (quantity_float)
-                #   и, возможно, учитывать минимальный размер ордера (min_order_size).
-                quantity = int(quantity_float)
+            # Если расчет показал, что мы можем купить хотя бы 1 лот, генерируем ордер.
+            if quantity > 0:
+                order = OrderEvent(figi=event.figi, quantity=quantity, direction=event.direction)
+                self.events_queue.put(order)
+                self.pending_orders.add(event.figi)
+                logging.info(f"Портфель генерирует ордер на {event.direction} {quantity} лот(ов) {event.figi}")
 
-                # Если расчет показал, что мы можем купить хотя бы 1 лот, генерируем ордер.
-                if quantity > 0:
-                    order = OrderEvent(figi=event.figi, quantity=quantity, direction=event.direction)
-                    self.events_queue.put(order)
-                    self.pending_orders.add(event.figi)
-                    logging.info(f"Портфель генерирует ордер на {event.direction} {quantity} лот(ов) {event.figi}")
+        except ValueError as e:
+            # Ловим ошибку от AtrRiskManager, если, например, ATR некорректен.
+            logging.warning(f"Не удалось рассчитать профиль риска для {event.figi}: {e}. Сигнал проигнорирован.")
 
-            except ValueError as e:
-                # Ловим ошибку от AtrRiskManager, если, например, ATR некорректен.
-                logging.warning(f"Не удалось рассчитать профиль риска для {event.figi}: {e}. Сигнал проигнорирован.")
-
-        # --- Сценарий 2: У нас ЕСТЬ открытая позиция по этому инструменту---
-        else:
-            # Логика выхода из существующей позиции
-            # Работает !ПО СИГНАЛУ И ТОЛЬКО ПО СИГНАЛУ!
-            # Закрытие по SL/TP в update_market_price
-            if event.direction == "SELL" and position['direction'] == 'BUY':
+    def _handle_exit_position_signal(self, event: SignalEvent, position: Dict[str, Any]) -> None:
+        """Обрабатывает сигнал на закрытие существующей позиции."""
+        # Логика выхода из существующей позиции
+        # Работает !ПО СИГНАЛУ И ТОЛЬКО ПО СИГНАЛУ!
+        # Закрытие по SL/TP в update_market_price
+        if (event.direction == "SELL" and position['direction'] == 'BUY') or \
+                (event.direction == "BUY" and position['direction'] == 'SELL'):
                 # Создаем приказ на продажу того же количества, что и в позиции
 
                 # !!Можно и побольше написать, чтобы не только продал, но и закупил для разворота!!
@@ -228,36 +192,67 @@ class Portfolio:
                 # И оба в очередь-конвейер
                 # Портфель бы их последовательно обработал.
 
-                order = OrderEvent(figi=figi, quantity=position['quantity'], direction="SELL")
+                order = OrderEvent(figi=event.figi, quantity=position['quantity'], direction=event.direction)
                 # Кладем приказ в очередь
                 self.events_queue.put(order)
                 # Также помечаем ордер на закрытие как ожидающий
-                self.pending_orders.add(figi)
-                logging.info(f"Портфель генерирует ордер на ПРОДАЖУ (закрытие лонга) {figi}")
-            elif event.direction == "BUY" and position['direction'] == 'SELL':
-                # Создаем приказ на продажу того же количества, что и в позиции
-                order = OrderEvent(figi=figi, quantity=position['quantity'], direction="BUY")
-                # Кладем приказ в очередь
-                self.events_queue.put(order)
-                # Также помечаем ордер на закрытие как ожидающий
-                self.pending_orders.add(figi)
-                logging.info(f"Портфель генерирует ордер на ПОКУПКУ (закрытие шорта) {figi}")
+                self.pending_orders.add(event.figi)
+                logging.info(f"Портфель генерирует ордер на ЗАКРЫТИЕ позиции по {event.figi}")
             # ToDo: Можно и докупать если была открыта позиция на Buy и пришел опять Buy. Нужно ли?
+
+    def update_market_price(self, event: MarketEvent) -> None:
+        """
+        Вызывается на КАЖДЫЙ MarketEvent (новую свечу)
+        Обновляет рыночные данные
+        Проверяет SL/TP на каждой новой свече (если есть позиция).
+        """
+        # Получаем FIGI и данные из события
+        self.last_market_data[event.figi] = event.data
+
+        # Получаем текущую позицию по этому инструменту
+        position = self.current_positions.get(event.figi)
+        # Если позиции нет или по этому инструменту есть ордер, то ничего не делаем больше
+        if not position or event.figi in self.pending_orders:
+            return
+        # Функция вызывается только если есть позиция по какому-то инструменту
+        self._check_stop_loss_take_profit(event, position)
+
+
+    def on_signal(self, event: SignalEvent) -> None:
+        """Обрабатывает сигнал от стратегии, рассчитывает размер позиции
+        с помощью PositionSizer и решает, отправлять ли ордер."""
+        position = self.current_positions.get(event.figi)
+
+        # Фильтр: Игнорируем сигналы, если ордер по инструменту в обработке.
+        # Так как мы могли в очередь добавить через update_market_price OrderEvent
+        # Но мы еще не до конца обработали MarketEvent и от него пришел SignalEvent в очередь
+        # У нас в очереди в таком порядке два события: OrderEvent, SignalEvent
+        # Мы обрабатываем OrderEvent и он превращается в FillEvent и становится вторым
+        # У нас в очереди в таком порядке два события: SignalEvent, FillEvent
+        # Запускается этот метод и для игнорирования SignalEvent проверяем pending_orders
+        # Переменная pending_orders не пуста, так как она всегда заполняется когда создается OrderEvent
+        if event.figi in self.pending_orders:
+            return
+
+        # --- Сценарий 1: У нас НЕТ открытой позиции по этому инструменту ---
+        if not position: # Логика входа в новую позицию
+            self._handle_new_position_signal(event)
+        # --- Сценарий 2: У нас ЕСТЬ открытая позиция по этому инструменту---
+        else:
+            self._handle_exit_position_signal(event, position)
 
     def on_fill(self, event: FillEvent) -> None:
         """
         Выполняется после фактического исполнения ордера (FillEvent).
         Обновляются позиции и капитал. Сохраняется инфо для отчета.
         """
-        figi = event.figi
-        
         # Убираем ордер из списка ожидающих, если он там был
         # Если пришел FillEvent, то ордер исполнен
-        if figi in self.pending_orders:
-            self.pending_orders.remove(figi)
+        if event.figi in self.pending_orders:
+            self.pending_orders.remove(event.figi)
 
         # Получаем последнюю известную свечу, чтобы определить цену исполнения
-        last_candle = self.last_market_data.get(figi)
+        last_candle = self.last_market_data.get(event.figi)
 
         # На всякий случай эта проверка. Но я честно не понимаю зачем. Только как защита от ошибок при рефакторинге
         # Такие пояснения еще нравятся:
@@ -268,46 +263,14 @@ class Portfolio:
         # чтобы last_market_data содержал данные по этому figi". Это самодокументируемый код.
 
         if last_candle is None:
-            logging.error(f"Нет рыночных данных для исполнения ордера по {figi}")
+            logging.error(f"Нет рыночных данных для исполнения ордера по {event.figi}")
             return
         
-        position = self.current_positions.get(figi)
+        position = self.current_positions.get(event.figi)
         
         # --- Сценарий 1: Открытие НОВОЙ позиции ---
         if not position: # Так как в position нет текущего figi
-            ideal_price = last_candle['open']
-            candle_volume = last_candle['volume']
-
-            # Рассчитываем цену с учетом проскальзывания
-            # Так как мы уже знаем размер позиции
-            execution_price = self._simulate_slippage(
-                ideal_price=ideal_price,
-                quantity=event.quantity,
-                direction=event.direction,
-                candle_volume=candle_volume
-            )
-
-            # Ключевой момент: мы ПЕРЕСЧИТЫВАЕМ профиль риска на основе РЕАЛЬНОЙ цены входа (execution_price).
-            # Это гарантирует, что наши уровни SL/TP будут установлены максимально точно относительно фактической точки входа.
-            final_risk_profile = self.risk_manager.calculate_risk_profile(
-                entry_price=execution_price,
-                direction=event.direction,
-                capital=self.current_capital,
-                last_candle=last_candle
-            )
-
-            # Сохраняем позицию, используя данные из профиля
-            self.current_positions[event.figi] = {
-                'quantity': event.quantity,
-                'entry_price': execution_price,
-                'direction': event.direction,
-                'stop_loss': final_risk_profile.stop_loss_price,
-                'take_profit': final_risk_profile.take_profit_price,
-                'exit_reason': None
-            }
-            logging.info(f"Позиция ОТКРЫТА: {event.direction} {event.quantity} {event.figi} @ {execution_price:.2f} | "
-                         f"SL: {final_risk_profile.stop_loss_price:.2f}, TP: {final_risk_profile.take_profit_price:.2f}")
-
+            self._handle_fill_open(event, last_candle)
         # --- Сценарий 2: Закрытие СУЩЕСТВУЮЩЕЙ позиции ---
         # Так как позиция есть (не прошла if выше) и её направление
         # противоположно направлению исполненного ордера (FillEvent).
@@ -316,61 +279,98 @@ class Portfolio:
         # так как если направление позиции совпадает с сигналом,
         # то on_signal ордер не откроет.
         elif event.direction != position['direction']:
+            self._handle_fill_close(event, position, last_candle)
 
-            entry_price = position['entry_price']
-            candle_volume = last_candle['volume']
+    def _handle_fill_open(self, event: FillEvent, last_candle: pd.Series) -> None:
+        """Обрабатывает исполнение ордера на открытие позиции."""
+        # Рассчитываем цену с учетом проскальзывания
+        # Так как мы уже знаем размер позиции
+        execution_price = self._simulate_slippage(
+            ideal_price=last_candle['open'],
+            quantity=event.quantity,
+            direction=event.direction,
+            candle_volume=last_candle['volume']
+        )
 
-            # Определяем цену в зависимости от причины выхода
-            if position.get('exit_reason') == "Stop Loss":
-                # Если позиция закрывается по стопу, цена выхода равна уровню стопа
-                ideal_exit_price = position['stop_loss']
-                exit_reason = "Stop Loss"
-            elif position.get('exit_reason') == "Take Profit":
-                # Если по тейку - то цена равна уровню тейка
-                ideal_exit_price = position['take_profit']
-                exit_reason = "Take Profit"
-            else: # Закрытие по сигналу от стратегии
-                # Если причина не указана, значит, это закрытие по сигналу от стратегии.
-                # Цена выхода - цена открытия текущей свечи.
-                ideal_exit_price = last_candle['open']
-                exit_reason = "Signal"
+        # Ключевой момент: мы ПЕРЕСЧИТЫВАЕМ профиль риска на основе РЕАЛЬНОЙ цены входа (execution_price).
+        # Это гарантирует, что наши уровни SL/TP будут установлены максимально точно относительно фактической точки входа.
+        final_risk_profile = self.risk_manager.calculate_risk_profile(
+            entry_price=execution_price,
+            direction=event.direction,
+            capital=self.current_capital,
+            last_candle=last_candle
+        )
 
-            # Рассчитываем РЕАЛЬНУЮ цену выхода с учетом проскальзывания.
-            exit_price = self._simulate_slippage(
-                ideal_price=ideal_exit_price,
-                quantity=event.quantity,
-                direction=event.direction,
-                candle_volume=candle_volume
-            )
+        # Сохраняем позицию, используя данные из профиля
+        self.current_positions[event.figi] = {
+            'quantity': event.quantity,
+            'entry_price': execution_price,
+            'direction': event.direction,
+            'stop_loss': final_risk_profile.stop_loss_price,
+            'take_profit': final_risk_profile.take_profit_price,
+            'exit_reason': None
+        }
+        logging.info(f"Позиция ОТКРЫТА: {event.direction} {event.quantity} {event.figi} @ {execution_price:.2f} | "
+                     f"SL: {final_risk_profile.stop_loss_price:.2f}, TP: {final_risk_profile.take_profit_price:.2f}")
 
-            # Рассчитываем комиссию за вход и выход
-            commission = (entry_price * event.quantity + exit_price * event.quantity) * self.commission_rate
-            
-            # Рассчитываем PnL
-            if position['direction'] == 'BUY': # Для лонга
-                pnl = (exit_price - entry_price) * event.quantity - commission
-            else: # Для шорта
-                pnl = (entry_price - exit_price) * event.quantity - commission
 
-            # Обновляем текущий капитал
-            self.current_capital += pnl
-            
-            # Логируем сделку в CSV
-            log_trade(
-                trade_log_file=self.trade_log_file,
-                strategy_name=self.strategy.name,
-                figi=figi,
-                direction=position['direction'],
-                entry_price=entry_price,
-                exit_price=exit_price,
-                pnl=pnl,
-                exit_reason=exit_reason,
-                interval=self.interval,
-                risk_manager=self.risk_manager_type
-            )
-            # Сохраняем информацию о сделке для финального отчета
-            self.closed_trades.append({'pnl': pnl})
 
-            # Окончательно удаляем позицию из списка активных
-            del self.current_positions[figi]
-            logging.info(f"Позиция ЗАКРЫТА по причине '{exit_reason}': {figi}. PnL: {pnl:.2f}. Капитал: {self.current_capital:.2f}")
+    def _handle_fill_close(self, event: FillEvent, position: Dict[str, Any], last_candle: pd.Series) -> None:
+        """Обрабатывает исполнение ордера на закрытие позиции."""
+
+        entry_price = position['entry_price']
+
+        # Определяем цену в зависимости от причины выхода
+        if position.get('exit_reason') == "Stop Loss":
+            # Если позиция закрывается по стопу, цена выхода равна уровню стопа
+            ideal_exit_price = position['stop_loss']
+            exit_reason = "Stop Loss"
+        elif position.get('exit_reason') == "Take Profit":
+            # Если по тейку - то цена равна уровню тейка
+            ideal_exit_price = position['take_profit']
+            exit_reason = "Take Profit"
+        else: # Закрытие по сигналу от стратегии
+            # Если причина не указана, значит, это закрытие по сигналу от стратегии.
+            # Цена выхода - цена открытия текущей свечи.
+            ideal_exit_price = last_candle['open']
+            exit_reason = "Signal"
+
+        # Рассчитываем РЕАЛЬНУЮ цену выхода с учетом проскальзывания.
+        exit_price = self._simulate_slippage(
+            ideal_price=ideal_exit_price,
+            quantity=event.quantity,
+            direction=event.direction,
+            candle_volume=last_candle['volume']
+        )
+
+        # Рассчитываем комиссию за вход и выход
+        commission = (entry_price * event.quantity + exit_price * event.quantity) * self.commission_rate
+
+        # Рассчитываем PnL
+        if position['direction'] == 'BUY': # Для лонга
+            pnl = (exit_price - entry_price) * event.quantity - commission
+        else: # Для шорта
+            pnl = (entry_price - exit_price) * event.quantity - commission
+
+        # Обновляем текущий капитал
+        self.current_capital += pnl
+
+        # Логируем сделку в CSV
+        log_trade(
+            trade_log_file=self.trade_log_file,
+            strategy_name=self.strategy.name,
+            figi=event.figi,
+            direction=position['direction'],
+            entry_price=entry_price,
+            exit_price=exit_price,
+            pnl=pnl,
+            exit_reason=exit_reason,
+            interval=self.interval,
+            risk_manager=self.risk_manager_type
+        )
+        # Сохраняем информацию о сделке для финального отчета
+        self.closed_trades.append({'pnl': pnl})
+
+        # Окончательно удаляем позицию из списка активных
+        del self.current_positions[event.figi]
+        logging.info(f"Позиция ЗАКРЫТА по причине '{exit_reason}': {event.figi}. PnL: {pnl:.2f}. Капитал: {self.current_capital:.2f}")
