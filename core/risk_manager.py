@@ -47,8 +47,7 @@ class FixedRiskManager(BaseRiskManager):
                                last_candle: pd.Series) -> TradeRiskProfile:
 
         # На каком проценте от входной стоимости ставим стоп-лосс (например на вход число 3)
-        risk_percent = RISK_CONFIG["DEFAULT_RISK_PERCENT_LONG"] if direction == 'BUY' else RISK_CONFIG[
-            "DEFAULT_RISK_PERCENT_SHORT"]
+        risk_percent = RISK_CONFIG["DEFAULT_RISK_PERCENT_LONG"] if direction == 'BUY' else RISK_CONFIG["DEFAULT_RISK_PERCENT_SHORT"]
 
         # Перевод процент во float 3-> 0.03
         sl_percent = risk_percent / 100.0

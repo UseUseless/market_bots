@@ -16,7 +16,7 @@ DATA_DIR = PATH_CONFIG["DATA_DIR"]
 DEFAULT_DAYS_TO_LOAD = DATA_LOADER_CONFIG["DAYS_TO_LOAD"]
 
 
-def download_data(exchange: str, instrument_list: list[str], interval: str, days_to_load: int):
+def download_data(exchange: str, instrument_list: list[str], interval: str, days_to_load: int, data_dir: str = DATA_DIR):
     """
     Загружает исторические данные для указанных инструментов, используя
     клиент для выбранной биржи.
@@ -35,7 +35,7 @@ def download_data(exchange: str, instrument_list: list[str], interval: str, days
         return
 
     # Создаем путь к подпапке для конкретного интервала
-    interval_path = os.path.join(DATA_DIR, interval)
+    interval_path = os.path.join(data_dir, interval)
     os.makedirs(interval_path, exist_ok=True)
 
     for instrument in instrument_list:
@@ -80,8 +80,13 @@ def main():
         help=f"Количество дней истории для загрузки (по умолчанию: {DEFAULT_DAYS_TO_LOAD})."
     )
 
+    parser.add_argument(
+        "--data_dir", type=str, default=DATA_DIR,
+        help="Путь к папке для сохранения данных."
+    )
+
     args = parser.parse_args()
-    download_data(args.exchange, args.instrument, args.interval, args.days)
+    download_data(args.exchange, args.instrument, args.interval, args.days, args.data_dir)
 
 
 if __name__ == "__main__":

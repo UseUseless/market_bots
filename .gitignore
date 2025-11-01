@@ -6,6 +6,7 @@
 venv/
 __pycache__/
 
+
 # Файлы IDE
 .idea/
 .vscode/
@@ -23,3 +24,6 @@ logs/
 
 # Папка с отчетами
 reports/
+
+# Кэш тестов
+.pytest_cache
