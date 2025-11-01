@@ -4,7 +4,7 @@ from datetime import datetime, UTC
 import logging
 
 def log_trade(
-    trade_log_file: str, strategy_name: str, figi: str, direction: str,
+    trade_log_file: str, strategy_name: str, instrument: str, direction: str,
     entry_price: float, exit_price: float, pnl: float, exit_reason: str,
     interval: str, risk_manager: str
 ):
@@ -17,7 +17,7 @@ def log_trade(
         row_data = {
             'timestamp_utc': datetime.now(UTC).isoformat(),
             'strategy_name': strategy_name,
-            'figi': figi,
+            'instrument': instrument,
             'direction': direction,
             'entry_price': round(entry_price, 4),
             'exit_price': round(exit_price, 4),

@@ -31,12 +31,12 @@ def _process_single_backtest_file(file_path: str) -> Optional[Dict[str, Any]]:
         # 1. Парсим метаданные из имени файла
         parts = filename.replace('_trades.jsonl', '').split('_')
         strategy_name = parts[2]
-        figi = parts[3]
+        instrument = parts[3]
         interval = parts[4]
         risk_manager = parts[5].replace('RM-', '')
 
         # 2. Загружаем исторические данные для расчета бенчмарка
-        data_path = os.path.join(PATH_CONFIG["DATA_DIR"], interval, f"{figi}.parquet")
+        data_path = os.path.join(PATH_CONFIG["DATA_DIR"], interval, f"{instrument}.parquet")
         if not os.path.exists(data_path):
             print(f"Warning: Data file not found for benchmark: {data_path}")
             return None
@@ -56,7 +56,7 @@ def _process_single_backtest_file(file_path: str) -> Optional[Dict[str, Any]]:
         return {
             "File": filename,
             "Strategy": strategy_name,
-            "FIGI": figi,
+            "Instrument": instrument,
             "Interval": interval,
             "Risk Manager": risk_manager,
             "PnL (Strategy %)": float(metrics["Total PnL (Strategy)"].split(' ')[1].replace('(', '').replace('%)', '')),
@@ -163,10 +163,10 @@ else:
         options=summary_df["Strategy"].unique(),
         default=summary_df["Strategy"].unique()
     )
-    selected_figis = st.sidebar.multiselect(
-        "Инструменты (FIGI)",
-        options=summary_df["FIGI"].unique(),
-        default=summary_df["FIGI"].unique()
+    selected_instruments = st.sidebar.multiselect(
+        "Инструменты",
+        options=summary_df["Instrument"].unique(),
+        default=summary_df["Instrument"].unique()
     )
     selected_rms = st.sidebar.multiselect(
         "Риск-менеджеры",
@@ -177,7 +177,7 @@ else:
     # Применяем фильтры
     filtered_df = summary_df[
         (summary_df["Strategy"].isin(selected_strategies)) &
-        (summary_df["FIGI"].isin(selected_figis)) &
+        (summary_df["Instrument"].isin(selected_instruments)) &
         (summary_df["Risk Manager"].isin(selected_rms))
         ]
 
@@ -207,7 +207,7 @@ else:
         row = filtered_df[filtered_df["File"] == selected_file].iloc[0]
 
         #  Загружаем исторические данные так же, как мы это делали в load_all_backtests
-        data_path = os.path.join(PATH_CONFIG["DATA_DIR"], row["Interval"], f"{row['FIGI']}.parquet")
+        data_path = os.path.join(PATH_CONFIG["DATA_DIR"], row["Interval"], f"{row['Instrument']}.parquet")
         historical_data = pd.read_parquet(data_path)
 
         analyzer = BacktestAnalyzer(

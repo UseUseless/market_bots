@@ -37,7 +37,7 @@ class SimulatedExecutionHandler(ExecutionHandler):
         """
         fill_event = FillEvent(
             timestamp=datetime.now(UTC),
-            figi=event.figi,
+            instrument=event.instrument,
             quantity=event.quantity,
             direction=event.direction,
             price=0,                        # Цена будет определена в Portfolio. Для бэктеста не используется. Будет в Live
@@ -46,31 +46,41 @@ class SimulatedExecutionHandler(ExecutionHandler):
         self.events_queue.put(fill_event)
 
 # --- Этот класс является заготовкой для будущей реализации live-торговли ---
-# class TinkoffExecutionHandler(ExecutionHandler):
+
+# from utils.trade_clients import TinkoffTradeClient, BybitTradeClient, BaseTradeClient
+
+# class LiveExecutionHandler(ExecutionHandler):
 #     """
-#     Исполняет ордера через Tinkoff Invest API.
+#     Исполняет ордера через API реальной биржи.
 #     """
-#     def __init__(self, events_queue: Queue, trade_mode: str):
+#     def __init__(self, events_queue: Queue, exchange: str, trade_mode: str):
 #         super().__init__(events_queue)
-#         self.trader = TinkoffTrader(trade_mode=trade_mode)
+#         self.client: BaseTradeClient
+#         if exchange == 'tinkoff':
+#             # Для Tinkoff instrument_id в OrderEvent должен быть instrument
+#             self.client = TinkoffTradeClient(trade_mode=trade_mode)
+#         elif exchange == 'bybit':
+#             # Для Bybit instrument_id в OrderEvent должен быть символ (BTCUSDT)
+#             self.client = BybitTradeClient(trade_mode=trade_mode)
+#         else:
+#             raise ValueError(f"Неподдерживаемая биржа для live-торговли: {exchange}")
 
 #     def execute_order(self, event: OrderEvent):
 #         """
 #         Отправляет реальный рыночный ордер через API.
-#         В реальной системе после этого нужно было бы слушать стрим сделок,
-#         чтобы получить точную цену исполнения и сгенерировать FillEvent.
 #         """
 #         try:
-#             order_result = self.trader.place_market_order(
-#                 figi=event.figi,
+#             # Обрати внимание, что мы передаем event.instrument как instrument_id.
+#             # В реальной системе нужно будет убедиться, что для Tinkoff это instrument, а для Bybit - тикер.
+#             # Это можно решить, добавив в OrderEvent поле instrument_id.
+#             order_result = self.client.place_market_order(
+#                 instrument_id=event.instrument,
 #                 quantity=event.quantity,
 #                 direction=event.direction
 #             )
 #             if order_result:
-#                 logging.info(f"Ордер {order_result.order_id} отправлен на биржу.")
+#                 logging.info(f"Ордер отправлен на биржу.")
 #                 # ПРИМЕЧАНИЕ: Здесь должна быть логика обработки ответа от биржи
 #                 # и генерации FillEvent на основе реальных данных.
-#                 # Для простоты, в асинхронной версии это будет реализовано
-#                 # через подписку на orders_stream.
 #         except Exception as e:
 #             logging.error(f"Критическая ошибка при исполнении ордера: {e}")

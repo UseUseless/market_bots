@@ -16,7 +16,6 @@ from core.risk_manager import RiskManagerType # Модель риск-менед
 from analyzer import BacktestAnalyzer # Создает аналитический отчет и график
 from utils.context_logger import backtest_time_filter # Добавляет время свечи в логи
 
-from utils.trade_client import IntervalType
 from config import BACKTEST_CONFIG, PATH_CONFIG, RISK_CONFIG
 from strategies.base_strategy import BaseStrategy
 
@@ -32,7 +31,7 @@ AVAILABLE_STRATEGIES: Dict[str, Type[BaseStrategy]] = {
 
 def _initialize_components(
         strategy_class: Type[BaseStrategy],
-        figi: str,
+        instrument: str,
         interval: str,
         risk_manager_type: str,
         trade_log_path: str,
@@ -45,9 +44,9 @@ def _initialize_components(
     # Создаем очередь по которой будут идти все события
     events_queue = queue.Queue()
     # Стратегия
-    strategy = strategy_class(events_queue, figi)
+    strategy = strategy_class(events_queue, instrument)
     # Обработка данных
-    data_handler = HistoricLocalDataHandler(events_queue, figi, interval)
+    data_handler = HistoricLocalDataHandler(events_queue, instrument, interval)
     # Для расчета ATR (на сколько входить в позицию относительно волатильности рынка)
     # В целом добавляет обшие расчетные данные в pd.DF
     feature_engine = FeatureEngine()
@@ -75,7 +74,7 @@ def _initialize_components(
             f"{RISK_CONFIG['ATR_MULTIPLIER_TP']}"
         )
 
-    logging.info(f"Инициализация завершена. Стратегия: '{strategy.name}', FIGI: {figi}, Интервал: {risk_manager_type}")
+    logging.info(f"Инициализация завершена. Стратегия: '{strategy.name}', Инструмент: {instrument}, Интервал: {risk_manager_type}")
     logging.info(f"Параметры риска ({risk_manager_type}): {risk_params_info}")
 
     return {
@@ -113,7 +112,7 @@ def _prepare_data(
 
 def _run_event_loop(
         enriched_data: pd.DataFrame,
-        figi: str,
+        instrument: str,
         events_queue: queue.Queue,
         portfolio: Portfolio,
         strategy: BaseStrategy,
@@ -123,7 +122,7 @@ def _run_event_loop(
     logging.info("Запуск основного цикла обработки событий...")
 
     # Создаем генератор, который будет выдавать нам свечи (строки pd.df, то есть и другие данные в строке) по одной
-    data_generator = (MarketEvent(timestamp=row['time'], figi=figi, data=row) for i, row in enriched_data.iterrows())
+    data_generator = (MarketEvent(timestamp=row['time'], instrument=instrument, data=row) for i, row in enriched_data.iterrows())
 
     # Бесконечный цикл, который будет работать, пока не закончатся данные
     while True:
@@ -212,8 +211,8 @@ def _analyze_results(
         # Используем logging.warning, чтобы это сообщение было хорошо заметно.
         logging.warning("ВНИМАНИЕ: Бэктест завершился с открытой позицией:")
         # Логируем детали открытой позиции.
-        for figi, pos_data in portfolio.current_positions.items():
-            logging.warning(f" - {figi}: {pos_data}")
+        for instrument, pos_data in portfolio.current_positions.items():
+            logging.warning(f" - {instrument}: {pos_data}")
     else:
         logging.info("Открытые позиции отсутствуют.")
 
@@ -257,7 +256,7 @@ def run_backtest(trade_log_path: str,
                  interval: str,
                  risk_manager_type: str,
                  strategy_class: Type[BaseStrategy],
-                 figi: str) -> None:
+                 instrument: str) -> None:
     """
     Запускает полный цикл бэктестинга для выбранной стратегии.
     Полный цикл, это:
@@ -271,7 +270,7 @@ def run_backtest(trade_log_path: str,
 
     # Создаём экземпляры необходимых компонентов
     components = _initialize_components(
-        strategy_class, figi, interval, risk_manager_type,
+        strategy_class, instrument, interval, risk_manager_type,
         trade_log_path, initial_capital, commission_rate
     )
 
@@ -287,7 +286,7 @@ def run_backtest(trade_log_path: str,
 
     # Запускаем основной цикл
     _run_event_loop(
-        enriched_data, figi, components["events_queue"],
+        enriched_data, instrument, components["events_queue"],
         components["portfolio"], components["strategy"], components["execution_handler"]
     )
 
@@ -308,12 +307,11 @@ def main():
 
     # Возможные варианты для командной строки
     valid_rms = get_args(RiskManagerType)
-    valid_intervals = get_args(IntervalType)
 
     parser.add_argument(
         "--mode",
         type=str,
-        required=True,
+        default="backtest",
         choices=['backtest', 'sandbox', 'real'],
         help="Режим работы.")
     parser.add_argument(
@@ -322,10 +320,10 @@ def main():
         required=True,
         help=f"Имя стратегии. Доступно: {list(AVAILABLE_STRATEGIES.keys())}")
     parser.add_argument(
-        "--figi",
+        "--instrument",
         type=str,
         required=True,
-        help="FIGI инструмента для тестирования (обязателен для backtest).")
+        help="Тикер/символ инструмента для тестирования (например: SBER, BTCUSDT).")
     parser.add_argument(
         "--rm", # Добавляем короткое имя --rm
         "--risk_manager",
@@ -339,7 +337,6 @@ def main():
         "--interval",
         type=str,
         default=None,
-        choices=valid_intervals,
         help="Переопределяет таймфрейм для бэктеста. Если не указан, используется рекомендуемый из стратегии."
     )
 
@@ -355,7 +352,7 @@ def main():
     current_interval = args.interval or AVAILABLE_STRATEGIES[args.strategy].candle_interval
     risk_manager_type = args.risk_manager_type
     strategy_class = AVAILABLE_STRATEGIES[args.strategy]
-    figi = args.figi
+    instrument = args.instrument
 
 
     # Генерация уникальных имен файлов для логов
@@ -363,7 +360,7 @@ def main():
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     # Имена логов для текущего запуска бэктеста
-    base_filename = f"{timestamp}_{strategy_class.__name__}_{figi}_{current_interval}_RM-{risk_manager_type}_{args.mode}"
+    base_filename = f"{timestamp}_{strategy_class.__name__}_{instrument}_{current_interval}_RM-{risk_manager_type}_{args.mode}"
 
     # Создаем полные пути для файла с логами выполнения и файла с логами сделок
     log_file_path = os.path.join(LOGS_DIR, f"{base_filename}_run.log")
@@ -382,7 +379,7 @@ def main():
             interval=current_interval,
             risk_manager_type=risk_manager_type,
             strategy_class=strategy_class,
-            figi=figi,
+            instrument=instrument,
         )
     else:
         # ToDo: Реализовать sandbox

@@ -17,7 +17,7 @@ class MarketEvent(Event):
     Генерируется DataHandler'ом.
     """
     timestamp: datetime
-    figi: str
+    instrument: str
     data: pd.Series # Строка DataFrame с ценами (OHLCV) и индикаторами
 
 @dataclass
@@ -26,7 +26,7 @@ class SignalEvent(Event):
     Событие генерации торгового сигнала стратегией.
     Генерируется Strategy.
     """
-    figi: str
+    instrument: str
     direction: str  # 'BUY' или 'SELL'
 
     # На будущее, если будут одновременно работать две стратегии,
@@ -40,7 +40,7 @@ class OrderEvent(Event):
     Событие для отправки ордера на исполнение.
     Генерируется Portfolio.
     """
-    figi: str
+    instrument: str
     quantity: int
     direction: str  # 'BUY' или 'SELL'
 
@@ -51,7 +51,7 @@ class FillEvent(Event):
     Генерируется ExecutionHandler'ом.
     """
     timestamp: datetime
-    figi: str
+    instrument: str
     quantity: int
     direction: str  # 'BUY' или 'SELL'
     price: float    # Фактическая цена исполнения

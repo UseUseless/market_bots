@@ -18,8 +18,8 @@ class TripleFilterStrategy(BaseStrategy):
     _config = STRATEGY_CONFIG["TripleFilterStrategy"]
     candle_interval: str = _config["candle_interval"]
 
-    def __init__(self, events_queue: Queue, figi: str):
-        super().__init__(events_queue, figi)
+    def __init__(self, events_queue: Queue, instrument: str):
+        super().__init__(events_queue, instrument)
 
         # Периоды
         self.ema_fast_period = self._config["ema_fast_period"]
@@ -82,7 +82,7 @@ class TripleFilterStrategy(BaseStrategy):
         buy_volume = last_candle['volume'] > last_candle[self.volume_sma_name]
         
         if buy_trend and buy_impulse and buy_volume:
-            signal = SignalEvent(figi=self.figi, direction="BUY", strategy_id=self.name)
+            signal = SignalEvent(instrument=self.instrument, direction="BUY", strategy_id=self.name)
             self.events_queue.put(signal)
             return
 
@@ -93,6 +93,6 @@ class TripleFilterStrategy(BaseStrategy):
         sell_volume = last_candle['volume'] > last_candle[self.volume_sma_name]
         
         if sell_trend and sell_impulse and sell_volume:
-            signal = SignalEvent(figi=self.figi, direction="SELL", strategy_id=self.name)
+            signal = SignalEvent(instrument=self.instrument, direction="SELL", strategy_id=self.name)
             self.events_queue.put(signal)
             return

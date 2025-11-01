@@ -48,9 +48,9 @@ class Portfolio:
         # Динамические аттрибуты (меняются в ходе бэктеста)
         self.current_capital: float = initial_capital   # Текущий капитал, изменяется после каждой сделки
         # Словарь для хранения всех активных позиций.
-        # Ключ - FIGI, значение - словарь с деталями позиции (цена входа, SL, TP и т.д.).
+        # Ключ - instrument, значение - словарь с деталями позиции (цена входа, SL, TP и т.д.).
         self.current_positions: dict[str, dict[str, Any]] = {}
-        # Множество (set) для хранения FIGI, по которым был отправлен ордер, но еще не пришел отчет об исполнении (FillEvent).
+        # Множество (set) для хранения instrument, по которым был отправлен ордер, но еще не пришел отчет об исполнении (FillEvent).
         # Это критически важный механизм для предотвращения отправки дублирующих ордеров по одному и тому же инструменту.
         self.pending_orders: set[str] = set()
         # Информация о всех закрытых сделках для финального отчета.
@@ -115,22 +115,22 @@ class Portfolio:
         # Логика выхода из существующей позиции !ПО СТОП_ЛОСС ИЛИ ТЕЙК_ПРОФИТ И ТОЛЬКО ПО НИМ!
         # Закрытие по сигналу в on_signal
         if exit_reason:
-            logging.warning(f"!!! СРАБОТАЛ {exit_reason.upper()} для {event.figi}. Генерирую ордер на закрытие.")
+            logging.warning(f"!!! СРАБОТАЛ {exit_reason.upper()} для {event.instrument}. Генерирую ордер на закрытие.")
             # Создаем приказ (OrderEvent) на закрытие позиции
-            order = OrderEvent(figi=event.figi, quantity=position['quantity'], direction=exit_direction)
+            order = OrderEvent(instrument=event.instrument, quantity=position['quantity'], direction=exit_direction)
             # Кладем OrderEvent в общую очередь событий
             self.events_queue.put(order)
             # Добавляем ордер в список ожидающих на исполнение, чтобы его исполнить в первую очередь
-            self.pending_orders.add(event.figi)
+            self.pending_orders.add(event.instrument)
             # Помечаем позицию как "ожидающую закрытия", чтобы избежать дублирования ордеров и пишем причину
-            self.current_positions[event.figi]['exit_reason'] = exit_reason
+            self.current_positions[event.instrument]['exit_reason'] = exit_reason
 
     def _handle_new_position_signal(self, event: SignalEvent) -> None:
         """Обрабатывает сигнал на открытие новой позиции."""
         # Получаем последнюю свечу, чтобы иметь доступ к цене и ATR
-        last_candle = self.last_market_data.get(event.figi)
+        last_candle = self.last_market_data.get(event.instrument)
         if last_candle is None:
-            logging.warning(f"Нет рыночных данных для обработки сигнала по {event.figi}, сигнал проигнорирован.")
+            logging.warning(f"Нет рыночных данных для обработки сигнала по {event.instrument}, сигнал проигнорирован.")
             return
 
         # В качестве "идеальной" цены входа мы берем цену открытия текущей свечи.
@@ -166,14 +166,14 @@ class Portfolio:
 
             # Если расчет показал, что мы можем купить хотя бы 1 лот, генерируем ордер.
             if quantity > 0:
-                order = OrderEvent(figi=event.figi, quantity=quantity, direction=event.direction)
+                order = OrderEvent(instrument=event.instrument, quantity=quantity, direction=event.direction)
                 self.events_queue.put(order)
-                self.pending_orders.add(event.figi)
-                logging.info(f"Портфель генерирует ордер на {event.direction} {quantity} лот(ов) {event.figi}")
+                self.pending_orders.add(event.instrument)
+                logging.info(f"Портфель генерирует ордер на {event.direction} {quantity} лот(ов) {event.instrument}")
 
         except ValueError as e:
             # Ловим ошибку от AtrRiskManager, если, например, ATR некорректен.
-            logging.warning(f"Не удалось рассчитать профиль риска для {event.figi}: {e}. Сигнал проигнорирован.")
+            logging.warning(f"Не удалось рассчитать профиль риска для {event.instrument}: {e}. Сигнал проигнорирован.")
 
     def _handle_exit_position_signal(self, event: SignalEvent, position: Dict[str, Any]) -> None:
         """Обрабатывает сигнал на закрытие существующей позиции."""
@@ -192,12 +192,12 @@ class Portfolio:
                 # И оба в очередь-конвейер
                 # Портфель бы их последовательно обработал.
 
-                order = OrderEvent(figi=event.figi, quantity=position['quantity'], direction=event.direction)
+                order = OrderEvent(instrument=event.instrument, quantity=position['quantity'], direction=event.direction)
                 # Кладем приказ в очередь
                 self.events_queue.put(order)
                 # Также помечаем ордер на закрытие как ожидающий
-                self.pending_orders.add(event.figi)
-                logging.info(f"Портфель генерирует ордер на ЗАКРЫТИЕ позиции по {event.figi}")
+                self.pending_orders.add(event.instrument)
+                logging.info(f"Портфель генерирует ордер на ЗАКРЫТИЕ позиции по {event.instrument}")
             # ToDo: Можно и докупать если была открыта позиция на Buy и пришел опять Buy. Нужно ли?
 
     def update_market_price(self, event: MarketEvent) -> None:
@@ -206,13 +206,13 @@ class Portfolio:
         Обновляет рыночные данные
         Проверяет SL/TP на каждой новой свече (если есть позиция).
         """
-        # Получаем FIGI и данные из события
-        self.last_market_data[event.figi] = event.data
+        # Получаем instrument и данные из события
+        self.last_market_data[event.instrument] = event.data
 
         # Получаем текущую позицию по этому инструменту
-        position = self.current_positions.get(event.figi)
+        position = self.current_positions.get(event.instrument)
         # Если позиции нет или по этому инструменту есть ордер, то ничего не делаем больше
-        if not position or event.figi in self.pending_orders:
+        if not position or event.instrument in self.pending_orders:
             return
         # Функция вызывается только если есть позиция по какому-то инструменту
         self._check_stop_loss_take_profit(event, position)
@@ -221,7 +221,7 @@ class Portfolio:
     def on_signal(self, event: SignalEvent) -> None:
         """Обрабатывает сигнал от стратегии, рассчитывает размер позиции
         с помощью PositionSizer и решает, отправлять ли ордер."""
-        position = self.current_positions.get(event.figi)
+        position = self.current_positions.get(event.instrument)
 
         # Фильтр: Игнорируем сигналы, если ордер по инструменту в обработке.
         # Так как мы могли в очередь добавить через update_market_price OrderEvent
@@ -231,7 +231,7 @@ class Portfolio:
         # У нас в очереди в таком порядке два события: SignalEvent, FillEvent
         # Запускается этот метод и для игнорирования SignalEvent проверяем pending_orders
         # Переменная pending_orders не пуста, так как она всегда заполняется когда создается OrderEvent
-        if event.figi in self.pending_orders:
+        if event.instrument in self.pending_orders:
             return
 
         # --- Сценарий 1: У нас НЕТ открытой позиции по этому инструменту ---
@@ -248,11 +248,11 @@ class Portfolio:
         """
         # Убираем ордер из списка ожидающих, если он там был
         # Если пришел FillEvent, то ордер исполнен
-        if event.figi in self.pending_orders:
-            self.pending_orders.remove(event.figi)
+        if event.instrument in self.pending_orders:
+            self.pending_orders.remove(event.instrument)
 
         # Получаем последнюю известную свечу, чтобы определить цену исполнения
-        last_candle = self.last_market_data.get(event.figi)
+        last_candle = self.last_market_data.get(event.instrument)
 
         # На всякий случай эта проверка. Но я честно не понимаю зачем. Только как защита от ошибок при рефакторинге
         # Такие пояснения еще нравятся:
@@ -260,16 +260,16 @@ class Portfolio:
         # update_market_price всегда вызывается раньше. Он должен быть самодостаточным.
         # А также
         # Этот блок кода явно декларирует: "Для работы этого метода необходимо,
-        # чтобы last_market_data содержал данные по этому figi". Это самодокументируемый код.
+        # чтобы last_market_data содержал данные по этому instrument". Это самодокументируемый код.
 
         if last_candle is None:
-            logging.error(f"Нет рыночных данных для исполнения ордера по {event.figi}")
+            logging.error(f"Нет рыночных данных для исполнения ордера по {event.instrument}")
             return
         
-        position = self.current_positions.get(event.figi)
+        position = self.current_positions.get(event.instrument)
         
         # --- Сценарий 1: Открытие НОВОЙ позиции ---
-        if not position: # Так как в position нет текущего figi
+        if not position: # Так как в position нет текущего instrument
             self._handle_fill_open(event, last_candle)
         # --- Сценарий 2: Закрытие СУЩЕСТВУЮЩЕЙ позиции ---
         # Так как позиция есть (не прошла if выше) и её направление
@@ -302,7 +302,7 @@ class Portfolio:
         )
 
         # Сохраняем позицию, используя данные из профиля
-        self.current_positions[event.figi] = {
+        self.current_positions[event.instrument] = {
             'quantity': event.quantity,
             'entry_price': execution_price,
             'direction': event.direction,
@@ -310,7 +310,7 @@ class Portfolio:
             'take_profit': final_risk_profile.take_profit_price,
             'exit_reason': None
         }
-        logging.info(f"Позиция ОТКРЫТА: {event.direction} {event.quantity} {event.figi} @ {execution_price:.2f} | "
+        logging.info(f"Позиция ОТКРЫТА: {event.direction} {event.quantity} {event.instrument} @ {execution_price:.2f} | "
                      f"SL: {final_risk_profile.stop_loss_price:.2f}, TP: {final_risk_profile.take_profit_price:.2f}")
 
 
@@ -359,7 +359,7 @@ class Portfolio:
         log_trade(
             trade_log_file=self.trade_log_file,
             strategy_name=self.strategy.name,
-            figi=event.figi,
+            instrument=event.instrument,
             direction=position['direction'],
             entry_price=entry_price,
             exit_price=exit_price,
@@ -372,5 +372,5 @@ class Portfolio:
         self.closed_trades.append({'pnl': pnl})
 
         # Окончательно удаляем позицию из списка активных
-        del self.current_positions[event.figi]
-        logging.info(f"Позиция ЗАКРЫТА по причине '{exit_reason}': {event.figi}. PnL: {pnl:.2f}. Капитал: {self.current_capital:.2f}")
+        del self.current_positions[event.instrument]
+        logging.info(f"Позиция ЗАКРЫТА по причине '{exit_reason}': {event.instrument}. PnL: {pnl:.2f}. Капитал: {self.current_capital:.2f}")

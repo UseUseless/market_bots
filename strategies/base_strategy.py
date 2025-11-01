@@ -8,16 +8,16 @@ class BaseStrategy(ABC):
     """
     Абстрактный базовый класс для всех торговых стратегий.
     Определяет "контракт", которому должна следовать каждая стратегия:
-    - Предоставлять информацию о себе (figi, interval, sl/tp).
+    - Предоставлять информацию о себе (instrument, interval, sl/tp).
     - Уметь подготавливать данные (рассчитывать индикаторы).
     - Уметь генерировать сигналы на основе рыночных данных.
     """
 
     candle_interval: str
 
-    def __init__(self, events_queue: Queue, figi: str):
+    def __init__(self, events_queue: Queue, instrument: str):
         self.events_queue = events_queue
-        self.figi: str = figi
+        self.instrument: str = instrument
 
         self.name: str = self.__class__.__name__
 

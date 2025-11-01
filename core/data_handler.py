@@ -3,6 +3,7 @@ from queue import Queue
 import pandas as pd
 import logging
 import os
+from core.event import Event
 
 class DataHandler(ABC):
     """
@@ -10,19 +11,19 @@ class DataHandler(ABC):
     Будет использоваться для создания других хэндлеров (например в Live режиме для Tinkoff, Binance)
     Может будет дополняться
     """
-    def __init__(self, events_queue: Queue, figi: str):
+    def __init__(self, events_queue: Queue['Event'], instrument_id: str):
         self.events_queue = events_queue
-        self.figi = figi
+        self.instrument_id = instrument_id
             
 class HistoricLocalDataHandler(DataHandler):
     """
     Читает локальные Parquet-файлы и создаёт pandas df
     """
-    def __init__(self, events_queue: Queue, figi: str, interval_str: str, data_path: str = "data"):
-        super().__init__(events_queue, figi)
+    def __init__(self, events_queue: Queue['Event'], instrument_id: str, interval_str: str, data_path: str = "data"):
+        super().__init__(events_queue, instrument_id)
         self.interval = interval_str
         self.data_path = data_path
-        self.file_path = os.path.join(self.data_path, self.interval, f"{self.figi}.parquet")
+        self.file_path = os.path.join(self.data_path, self.interval, f"{self.instrument_id.upper()}.parquet")
 
     def load_raw_data(self) -> pd.DataFrame:
         """

@@ -61,12 +61,19 @@ pip install -r requirements.txt
 
 Используйте скрипт `download_data.py` для скачивания исторических данных. Период загрузки и папка для сохранения настраиваются в `config.py`.
 
-**Пример:** Скачать 5-минутные свечи для Сбербанка (`BBG004730N88`).
+**Примеры:**
+Скачать данные по акции Сбербанка с Tinkoff (используя тикер):
 ```bash
-python download_data.py --figi BBG004730N88 --interval 5min
+# python download_data.py --exchange tinkoff --instrument SBER --interval 5min --days 365
 ```
-*   `--figi`: Один или несколько FIGI через пробел.
-*   `--interval`: Таймфрейм (`1min`, `5min`, `15min`, `1hour`, `1day` и т.д.).
+Скачать данные по BTC/USDT с Bybit:
+```bash
+# python download_data.py --exchange bybit --instrument BTCUSDT --interval 1hour --days 700
+```
+Скачать данные сразу по нескольким криптовалютам:
+```bash
+# python download_data.py --exchange bybit --instrument BTCUSDT ETHUSDT --interval 1day --days 1000
+```
 
 ### Шаг 3: Создание своей стратегии
 
@@ -90,27 +97,21 @@ python download_data.py --figi BBG004730N88 --interval 5min
 ```bash
 # Запустить TripleFilterStrategy на Сбербанке.
 # Будет использован таймфрейм из конфига стратегии (5min) и риск-менеджер по умолчанию (FIXED).
-python run.py --mode backtest --strategy triple_filter --figi BBG004730N88
+python run.py --strategy triple_filter --instrument SBER --interval 5min
 ```
 
 **Запуск с риск-менеджером на основе ATR:**
 ```bash
 # Используем флаг --rm (или --risk_manager) для выбора модели риска.
 # Параметры для ATR (период, множители) берутся из RISK_CONFIG.
-python run.py --mode backtest --strategy triple_filter --figi BBG004730N88 --rm ATR
+python run.py --strategy triple_filter --instrument BTCUSDT --rm ATR
 ```
 
 **Запуск на другом таймфрейме:**
 ```bash
 # Используем флаг --interval, чтобы переопределить таймфрейм из конфига стратегии.
 # Убедитесь, что данные для этого интервала предварительно скачаны.
-python run.py --mode backtest --strategy triple_filter --figi BBG004730N88 --interval 15min
-```
-
-**Комбинированный запуск (максимальная гибкость):**
-```bash
-# Тестируем стратегию на 15-минутном интервале с моделью риска ATR.
-python run.py --mode backtest --strategy triple_filter --figi BBG004730N88 --rm ATR --interval 15min
+python run.py --strategy triple_filter --instrument BTCUSDT --interval 15min
 ```
 
 #### Массовый запуск
