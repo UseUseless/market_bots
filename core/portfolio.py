@@ -200,6 +200,100 @@ class Portfolio:
                 logging.info(f"Портфель генерирует ордер на ЗАКРЫТИЕ позиции по {event.instrument}")
             # ToDo: Можно и докупать если была открыта позиция на Buy и пришел опять Buy. Нужно ли?
 
+    def _handle_fill_open(self, event: FillEvent, last_candle: pd.Series) -> None:
+        """Обрабатывает исполнение ордера на открытие позиции."""
+        # Рассчитываем цену с учетом проскальзывания
+        # Так как мы уже знаем размер позиции
+        execution_price = self._simulate_slippage(
+            ideal_price=last_candle['open'],
+            quantity=event.quantity,
+            direction=event.direction,
+            candle_volume=last_candle['volume']
+        )
+
+        # Ключевой момент: мы ПЕРЕСЧИТЫВАЕМ профиль риска на основе РЕАЛЬНОЙ цены входа (execution_price).
+        # Это гарантирует, что наши уровни SL/TP будут установлены максимально точно относительно фактической точки входа.
+        final_risk_profile = self.risk_manager.calculate_risk_profile(
+            entry_price=execution_price,
+            direction=event.direction,
+            capital=self.current_capital,
+            last_candle=last_candle
+        )
+
+        # Сохраняем позицию, используя данные из профиля
+        self.current_positions[event.instrument] = {
+            'quantity': event.quantity,
+            'entry_price': execution_price,
+            'direction': event.direction,
+            'stop_loss': final_risk_profile.stop_loss_price,
+            'take_profit': final_risk_profile.take_profit_price,
+            'exit_reason': None
+        }
+        logging.info(
+            f"Позиция ОТКРЫТА: {event.direction} {event.quantity} {event.instrument} @ {execution_price:.2f} | "
+            f"SL: {final_risk_profile.stop_loss_price:.2f}, TP: {final_risk_profile.take_profit_price:.2f}")
+
+    def _handle_fill_close(self, event: FillEvent, position: Dict[str, Any], last_candle: pd.Series) -> None:
+        """Обрабатывает исполнение ордера на закрытие позиции."""
+
+        entry_price = position['entry_price']
+
+        # Определяем цену в зависимости от причины выхода
+        if position.get('exit_reason') == "Stop Loss":
+            # Если позиция закрывается по стопу, цена выхода равна уровню стопа
+            ideal_exit_price = position['stop_loss']
+            exit_reason = "Stop Loss"
+        elif position.get('exit_reason') == "Take Profit":
+            # Если по тейку - то цена равна уровню тейка
+            ideal_exit_price = position['take_profit']
+            exit_reason = "Take Profit"
+        else:  # Закрытие по сигналу от стратегии
+            # Если причина не указана, значит, это закрытие по сигналу от стратегии.
+            # Цена выхода - цена открытия текущей свечи.
+            ideal_exit_price = last_candle['open']
+            exit_reason = "Signal"
+
+        # Рассчитываем РЕАЛЬНУЮ цену выхода с учетом проскальзывания.
+        exit_price = self._simulate_slippage(
+            ideal_price=ideal_exit_price,
+            quantity=event.quantity,
+            direction=event.direction,
+            candle_volume=last_candle['volume']
+        )
+
+        # Рассчитываем комиссию за вход и выход
+        commission = (entry_price * event.quantity + exit_price * event.quantity) * self.commission_rate
+
+        # Рассчитываем PnL
+        if position['direction'] == 'BUY':  # Для лонга
+            pnl = (exit_price - entry_price) * event.quantity - commission
+        else:  # Для шорта
+            pnl = (entry_price - exit_price) * event.quantity - commission
+
+        # Обновляем текущий капитал
+        self.current_capital += pnl
+
+        # Логируем сделку в CSV
+        log_trade(
+            trade_log_file=self.trade_log_file,
+            strategy_name=self.strategy.name,
+            instrument=event.instrument,
+            direction=position['direction'],
+            entry_price=entry_price,
+            exit_price=exit_price,
+            pnl=pnl,
+            exit_reason=exit_reason,
+            interval=self.interval,
+            risk_manager=self.risk_manager_type
+        )
+        # Сохраняем информацию о сделке для финального отчета
+        self.closed_trades.append({'pnl': pnl})
+
+        # Окончательно удаляем позицию из списка активных
+        del self.current_positions[event.instrument]
+        logging.info(
+            f"Позиция ЗАКРЫТА по причине '{exit_reason}': {event.instrument}. PnL: {pnl:.2f}. Капитал: {self.current_capital:.2f}")
+
     def update_market_price(self, event: MarketEvent) -> None:
         """
         Вызывается на КАЖДЫЙ MarketEvent (новую свечу)
@@ -280,97 +374,3 @@ class Portfolio:
         # то on_signal ордер не откроет.
         elif event.direction != position['direction']:
             self._handle_fill_close(event, position, last_candle)
-
-    def _handle_fill_open(self, event: FillEvent, last_candle: pd.Series) -> None:
-        """Обрабатывает исполнение ордера на открытие позиции."""
-        # Рассчитываем цену с учетом проскальзывания
-        # Так как мы уже знаем размер позиции
-        execution_price = self._simulate_slippage(
-            ideal_price=last_candle['open'],
-            quantity=event.quantity,
-            direction=event.direction,
-            candle_volume=last_candle['volume']
-        )
-
-        # Ключевой момент: мы ПЕРЕСЧИТЫВАЕМ профиль риска на основе РЕАЛЬНОЙ цены входа (execution_price).
-        # Это гарантирует, что наши уровни SL/TP будут установлены максимально точно относительно фактической точки входа.
-        final_risk_profile = self.risk_manager.calculate_risk_profile(
-            entry_price=execution_price,
-            direction=event.direction,
-            capital=self.current_capital,
-            last_candle=last_candle
-        )
-
-        # Сохраняем позицию, используя данные из профиля
-        self.current_positions[event.instrument] = {
-            'quantity': event.quantity,
-            'entry_price': execution_price,
-            'direction': event.direction,
-            'stop_loss': final_risk_profile.stop_loss_price,
-            'take_profit': final_risk_profile.take_profit_price,
-            'exit_reason': None
-        }
-        logging.info(f"Позиция ОТКРЫТА: {event.direction} {event.quantity} {event.instrument} @ {execution_price:.2f} | "
-                     f"SL: {final_risk_profile.stop_loss_price:.2f}, TP: {final_risk_profile.take_profit_price:.2f}")
-
-
-
-    def _handle_fill_close(self, event: FillEvent, position: Dict[str, Any], last_candle: pd.Series) -> None:
-        """Обрабатывает исполнение ордера на закрытие позиции."""
-
-        entry_price = position['entry_price']
-
-        # Определяем цену в зависимости от причины выхода
-        if position.get('exit_reason') == "Stop Loss":
-            # Если позиция закрывается по стопу, цена выхода равна уровню стопа
-            ideal_exit_price = position['stop_loss']
-            exit_reason = "Stop Loss"
-        elif position.get('exit_reason') == "Take Profit":
-            # Если по тейку - то цена равна уровню тейка
-            ideal_exit_price = position['take_profit']
-            exit_reason = "Take Profit"
-        else: # Закрытие по сигналу от стратегии
-            # Если причина не указана, значит, это закрытие по сигналу от стратегии.
-            # Цена выхода - цена открытия текущей свечи.
-            ideal_exit_price = last_candle['open']
-            exit_reason = "Signal"
-
-        # Рассчитываем РЕАЛЬНУЮ цену выхода с учетом проскальзывания.
-        exit_price = self._simulate_slippage(
-            ideal_price=ideal_exit_price,
-            quantity=event.quantity,
-            direction=event.direction,
-            candle_volume=last_candle['volume']
-        )
-
-        # Рассчитываем комиссию за вход и выход
-        commission = (entry_price * event.quantity + exit_price * event.quantity) * self.commission_rate
-
-        # Рассчитываем PnL
-        if position['direction'] == 'BUY': # Для лонга
-            pnl = (exit_price - entry_price) * event.quantity - commission
-        else: # Для шорта
-            pnl = (entry_price - exit_price) * event.quantity - commission
-
-        # Обновляем текущий капитал
-        self.current_capital += pnl
-
-        # Логируем сделку в CSV
-        log_trade(
-            trade_log_file=self.trade_log_file,
-            strategy_name=self.strategy.name,
-            instrument=event.instrument,
-            direction=position['direction'],
-            entry_price=entry_price,
-            exit_price=exit_price,
-            pnl=pnl,
-            exit_reason=exit_reason,
-            interval=self.interval,
-            risk_manager=self.risk_manager_type
-        )
-        # Сохраняем информацию о сделке для финального отчета
-        self.closed_trades.append({'pnl': pnl})
-
-        # Окончательно удаляем позицию из списка активных
-        del self.current_positions[event.instrument]
-        logging.info(f"Позиция ЗАКРЫТА по причине '{exit_reason}': {event.instrument}. PnL: {pnl:.2f}. Капитал: {self.current_capital:.2f}")

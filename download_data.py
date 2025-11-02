@@ -16,10 +16,9 @@ DATA_DIR = PATH_CONFIG["DATA_DIR"]
 DEFAULT_DAYS_TO_LOAD = DATA_LOADER_CONFIG["DAYS_TO_LOAD"]
 
 
-def download_data(exchange: str, instrument_list: list[str], interval: str, days_to_load: int, data_dir: str = DATA_DIR):
+def download_data(exchange: str, instrument_list: list[str], interval: str, days_to_load: int, category: str, data_dir: str):
     """
-    Загружает исторические данные для указанных инструментов, используя
-    клиент для выбранной биржи.
+    Загружает исторические данные, вызывая нужный клиент
     """
     logging.info(
         f"--- Загрузка данных с биржи '{exchange.upper()}' за {days_to_load} дней для интервала: {interval} ---")
@@ -39,15 +38,15 @@ def download_data(exchange: str, instrument_list: list[str], interval: str, days
     os.makedirs(interval_path, exist_ok=True)
 
     for instrument in instrument_list:
-        file_path = os.path.join(interval_path, f"{instrument.upper()}.parquet")
+        df = None
+        if exchange == 'tinkoff':
+            df = client.get_historical_data(instrument, interval, days_to_load)
+        elif exchange == 'bybit':
+            df = client.get_historical_data(instrument, interval, days_to_load, category=category)
 
-        df = client.get_historical_data(
-            instrument=instrument,
-            interval=interval,
-            days=days_to_load
-        )
-
-        if not df.empty:
+        # Общая логика сохранения
+        if df is not None and not df.empty:
+            file_path = os.path.join(interval_path, f"{instrument.upper()}.parquet")
             df.to_parquet(file_path)
             logging.info(f"Успешно сохранено {len(df)} свечей для {instrument.upper()} в файл: {file_path}")
 
@@ -81,12 +80,17 @@ def main():
     )
 
     parser.add_argument(
+        "--category", type=str, default="linear",
+        help="Категория рынка для Bybit (spot, linear, inverse). По умолчанию: linear"
+    )
+
+    parser.add_argument(
         "--data_dir", type=str, default=DATA_DIR,
         help="Путь к папке для сохранения данных."
     )
 
     args = parser.parse_args()
-    download_data(args.exchange, args.instrument, args.interval, args.days, args.data_dir)
+    download_data(args.exchange, args.instrument, args.interval, args.days, args.category, args.data_dir)
 
 
 if __name__ == "__main__":

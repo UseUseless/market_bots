@@ -144,27 +144,28 @@ class BybitClient(BaseDataClient):
         logging.info("Клиент Bybit инициализирован.")
 
     # -> ИЗМЕНЕНИЕ: Реализация метода базового класса
-    def get_historical_data(self, instrument: str, interval: str, days: int) -> pd.DataFrame:
-        """Получает исторические свечные данные с Bybit."""
-        # Словарь для преобразования нашего формата в формат Bybit
+    def get_historical_data(self, instrument: str, interval: str, days: int, category: str) -> pd.DataFrame:
+        """Получает исторические свечные данные с Bybit для указанной категории."""
+        logging.info(f"Bybit Client: используется категория '{category}'")
+
         interval_map = {"1min": "1", "5min": "5", "15min": "15", "1hour": "60", "1day": "D"}
         api_interval = interval_map.get(interval)
         if not api_interval:
-            logging.error(f"Неподдерживаемый интервал для Bybit: {interval}")
+            logging.error(f"Bybit Stream: Неподдерживаемый интервал: {self.interval_str}.")
             return pd.DataFrame()
 
         all_candles = []
         end_ts = int(datetime.now().timestamp() * 1000)
         start_ts = int((datetime.now() - timedelta(days=days)).timestamp() * 1000)
 
-        print(f"Запрос данных Bybit для {instrument} с {(datetime.now() - timedelta(days=days)).date()}...")
+        print(f"Запрос данных Bybit для {instrument} ({category}) с {(datetime.now() - timedelta(days=days)).date()}...")
 
         with tqdm(total=days, desc="Прогресс загрузки", unit="дн.") as pbar:
             while start_ts < end_ts:
                 try:
                     # Bybit отдает данные от новых к старым, поэтому запрашиваем с конца
                     resp = self.client.get_kline(
-                        category="spot",  # или linear для фьючерсов
+                        category=category,
                         symbol=instrument,
                         interval=api_interval,
                         limit=1000,  # Максимум за один запрос
