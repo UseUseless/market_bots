@@ -10,6 +10,9 @@ TOKEN_FULL_ACCESS = os.getenv("TINKOFF_TOKEN_FULL_ACCESS")
 TOKEN_SANDBOX = os.getenv("TINKOFF_TOKEN_SANDBOX")
 ACCOUNT_ID = os.getenv("TINKOFF_ACCOUNT_ID")
 
+BYBIT_TESTNET_API_KEY = os.getenv("BYBIT_TESTNET_API_KEY")
+BYBIT_TESTNET_API_SECRET = os.getenv("BYBIT_TESTNET_API_SECRET")
+
 # --- ОБЩИЕ НАСТРОЙКИ ФРЕЙМВОРКА ---
 
 # Пути к директориям

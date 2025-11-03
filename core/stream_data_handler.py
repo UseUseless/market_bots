@@ -106,10 +106,11 @@ class TinkoffStreamDataHandler(BaseStreamDataHandler):
 class BybitStreamDataHandler(BaseStreamDataHandler):
     """Получает live-свечи через WebSocket Bybit."""
 
-    def __init__(self, events_queue: AsyncQueue, instrument: str, interval_str: str, loop: asyncio.AbstractEventLoop, channel_type: str):
+    def __init__(self, events_queue: AsyncQueue, instrument: str, interval_str: str, loop: asyncio.AbstractEventLoop, channel_type: str, testnet: bool):
         super().__init__(events_queue, instrument, interval_str)
         self.loop = loop
         self.channel_type = channel_type
+        self.testnet = testnet
 
     async def stream_data(self):
         interval_map = {"1min": "1", "5min": "5", "15min": "15", "1hour": "60", "1day": "D"}
@@ -118,7 +119,7 @@ class BybitStreamDataHandler(BaseStreamDataHandler):
             logging.error(f"Bybit Stream: Неподдерживаемый интервал: {self.interval_str}.")
             return
 
-        ws = WebSocket(testnet=False, channel_type=self.channel_type)
+        ws = WebSocket(testnet=self.testnet, channel_type=self.channel_type)
         logging.info(f"Bybit Stream: используется канал '{self.channel_type}'")
 
         # Callback-функция, которая будет обрабатывать сообщения от WebSocket

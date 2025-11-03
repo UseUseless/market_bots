@@ -1,14 +1,15 @@
 import logging
+import os
 from abc import ABC, abstractmethod
 from typing import Literal
 
 # --- Библиотеки для Tinkoff ---
 from tinkoff.invest import Client, RequestError, OrderDirection, OrderType
 from tinkoff.invest.utils import now
-from config import TOKEN_FULL_ACCESS, TOKEN_SANDBOX, ACCOUNT_ID
+from config import TOKEN_FULL_ACCESS, TOKEN_SANDBOX, ACCOUNT_ID, BYBIT_TESTNET_API_KEY, BYBIT_TESTNET_API_SECRET
 
-# --- Библиотеки для Bybit (на будущее) ---
-# from pybit.unified_trading import HTTP
+# --- Библиотеки для Bybit ---
+from pybit.unified_trading import HTTP
 
 # Тип для выбора торгового режима
 TradeModeType = Literal["REAL", "SANDBOX"]
@@ -20,7 +21,7 @@ class BaseTradeClient(ABC):
     """Абстрактный 'контракт' для всех клиентов, исполняющих ордера."""
 
     @abstractmethod
-    def place_market_order(self, instrument: str, quantity: int, direction: str):
+    def place_market_order(self, instrument_id: str, quantity: int, direction: str):
         """Размещает рыночный ордер."""
         raise NotImplementedError
 
@@ -65,8 +66,8 @@ class TinkoffTradeClient(BaseTradeClient):
             logging.critical(f"Критическая ошибка получения ID реального счета: {e}")
             raise
 
-    def place_market_order(self, instrument: str, quantity: int, direction: str):
-        """Размещает рыночный ордер. instrument должен быть FIGI."""
+    def place_market_order(self, instrument_id: str, quantity: int, direction: str):
+        """Размещает рыночный ордер. instrument_id должен быть FIGI."""
         direction_map = {"BUY": OrderDirection.ORDER_DIRECTION_BUY, "SELL": OrderDirection.ORDER_DIRECTION_SELL}
         order_direction = direction_map.get(direction.upper())
         if not order_direction:
@@ -82,7 +83,7 @@ class TinkoffTradeClient(BaseTradeClient):
                     account_id = sandbox_accounts[0].id
 
                     order = client.sandbox.post_sandbox_order(
-                        instrument=instrument, quantity=quantity, order_id=str(now().timestamp()),
+                        figi=instrument_id, quantity=quantity, order_id=str(now().timestamp()),
                         direction=order_direction, account_id=account_id,
                         order_type=OrderType.ORDER_TYPE_MARKET,
                     )
@@ -91,13 +92,13 @@ class TinkoffTradeClient(BaseTradeClient):
                         raise ValueError("Невозможно разместить реальный ордер: не определен ID счета.")
 
                     order = client.orders.post_order(
-                        instrument=instrument, quantity=quantity, order_id=str(now().timestamp()),
+                        figi=instrument_id, quantity=quantity, order_id=str(now().timestamp()),
                         account_id=self.account_id, direction=order_direction,
                         order_type=OrderType.ORDER_TYPE_MARKET,
                     )
 
             logging.info(
-                f"Заявка {direction} {quantity} лот(ов) {instrument} в режиме '{self.trade_mode}' успешно размещена. Order ID: {order.order_id}")
+                f"Заявка {direction} {quantity} лот(ов) {instrument_id} в режиме '{self.trade_mode}' успешно размещена. Order ID: {order.order_id}")
             return order
         except RequestError as e:
             logging.error(f"Ошибка размещения заявки в режиме '{self.trade_mode}': {e}")
@@ -108,11 +109,30 @@ class TinkoffTradeClient(BaseTradeClient):
 
 class BybitTradeClient(BaseTradeClient):
     def __init__(self, trade_mode: TradeModeType):
-        # Здесь будет логика инициализации с API ключами из .env
-        logging.info(f"Торговый клиент Bybit инициализирован в режиме '{trade_mode}'.")
-        pass
+        use_testnet = (trade_mode == "SANDBOX")
+        # TODO: Добавить ключи для реальной торговли в .env и config.py
+        api_key = BYBIT_TESTNET_API_KEY if use_testnet else 'Нет_ничего. Тут будет реальные ключи'
+        api_secret = BYBIT_TESTNET_API_SECRET if use_testnet else 'Нет_ничего. Тут будет реальные ключи'
 
-    def place_market_order(self, instrument: str, quantity: int, direction: str):
-        # Здесь будет логика отправки ордера через pybit
-        logging.info(f"Отправка ордера на Bybit: {direction} {quantity} {instrument}")
-        pass
+        if not api_key or not api_secret:
+            raise ConnectionError(f"API ключи для Bybit ({trade_mode}) не заданы в .env.")
+
+        self.client = HTTP(
+            testnet=use_testnet,
+            api_key=api_key,
+            api_secret=api_secret
+        )
+        logging.info(f"Торговый клиент Bybit инициализирован в режиме '{trade_mode}'.")
+
+    def place_market_order(self, instrument_id: str, quantity: int, direction: str):
+        logging.info(f"Отправка ордера на Bybit: {direction} {quantity} {instrument_id}")
+        # pybit ожидает qty как строку
+        response = self.client.place_order(
+            category="linear",
+            symbol=instrument_id,
+            side=direction.capitalize(),
+            orderType="Market",
+            qty=str(quantity)
+        )
+        logging.info(f"Ответ от Bybit: {response}")
+        return response
