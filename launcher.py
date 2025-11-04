@@ -145,6 +145,62 @@ def run_batch_backtest():
     subprocess.run(command)
 
 
+def run_sandbox_trading():
+    """Интерактивный запуск live-симуляции в 'песочнице'."""
+    print("\n--- Запуск симуляции в 'песочнице' ---\n")
+
+    strategies = get_available_strategies()
+    if not strategies:
+        print("Ошибка: не найдено ни одной доступной стратегии в run.py.")
+        return
+
+    exchange = questionary.select(
+        "Выберите биржу:",
+        choices=["bybit", "tinkoff"],
+    ).ask()
+
+    instrument = questionary.text(
+        f"Введите тикер инструмента для {exchange.upper()} (например, {'BTCUSDT' if exchange == 'bybit' else 'SBER'}):"
+    ).ask()
+
+    strategy_name = questionary.select(
+        "Выберите стратегию:",
+        choices=list(strategies.keys())
+    ).ask()
+
+    interval = questionary.text(
+        "Введите интервал (например, 1min, 5min):",
+        default="1min"
+    ).ask()
+
+    rm_type = questionary.select(
+        "Выберите риск-менеджер:",
+        choices=["FIXED", "ATR"],
+        default="FIXED"
+    ).ask()
+
+    command = [
+        sys.executable, "run_live.py",
+        "--exchange", exchange,
+        "--instrument", instrument,
+        "--interval", interval,
+        "--strategy", strategy_name,
+        "--rm", rm_type
+    ]
+
+    # Для Bybit нужно передать 'category'
+    if exchange == 'bybit':
+        category = questionary.select(
+            "Выберите категорию рынка Bybit:",
+            choices=["linear", "spot", "inverse"],
+            default="linear"
+        ).ask()
+        command.extend(["--category", category])
+
+    print("\nЗапускаю live-бота... Нажмите Ctrl+C в этом окне, чтобы остановить.")
+    subprocess.run(command)
+
+
 def run_dashboard():
     """Запуск Streamlit дашборда."""
     print("\n--- Запуск панели анализа (Dashboard) ---\n")
@@ -163,8 +219,8 @@ def main():
         "Скачать исторические данные": run_download_data,
         "Запустить бэктест на одном инструменте": run_single_backtest,
         "Запустить массовый бэктест": run_batch_backtest,
+        "Запустить симуляцию в 'песочнице'": run_sandbox_trading,
         "Проанализировать результаты (Dashboard)": run_dashboard,
-        # "Запустить симуляцию в 'песочнице'": None, # Заготовка на будущее
         "Выход": None
     }
 

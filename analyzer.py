@@ -155,16 +155,3 @@ class BacktestAnalyzer:
 
         console.print(table)
         logging.info(f"Графический отчет сохранен в файл: {full_path}")
-
-    @staticmethod
-    def load_trades_from_file(file_path: str) -> pd.DataFrame:
-        """Загружает сделки из файла, поддерживая .csv и .jsonl форматы."""
-        if not os.path.exists(file_path):
-            raise FileNotFoundError(f"Файл с логами сделок не найден: {file_path}")
-
-        if file_path.endswith('.jsonl'):
-            return pd.read_json(file_path, lines=True)
-        elif file_path.endswith('.csv'):
-            return pd.read_csv(file_path)
-        else:
-            raise ValueError("Неподдерживаемый формат файла логов. Используйте .jsonl или .csv")

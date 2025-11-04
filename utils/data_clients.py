@@ -23,6 +23,12 @@ class BaseDataClient(ABC):
 
     @abstractmethod
     def get_historical_data(self, instrument: str, interval: str, days: int) -> pd.DataFrame:
+        """Получает и возвращает файл со свечами инструмента."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_instrument_info(self, instrument: str, category: str = None) -> dict:
+        """Получает и возвращает стандартизированный словарь с информацией об инструменте."""
         raise NotImplementedError
 
 
@@ -128,6 +134,31 @@ class TinkoffClient(BaseDataClient):
             df['time'] = pd.to_datetime(df['time'])
         return df
 
+    def get_instrument_info(self, instrument: str, category: str = None) -> dict:
+        """Получает информацию об инструменте Tinkoff и приводит ее к нашему формату."""
+        logging.info(f"Tinkoff Client: Запрос информации об инструменте {instrument}...")
+        try:
+            figi = self._resolve_figi(instrument)
+            with Client(self.read_token) as client:
+                # Используем метод get_instrument_by для получения полной информации
+                instr_info = client.instruments.get_instrument_by(
+                    id_type=1,  # 1 = FIGI
+                    class_code="",  # class_code не обязателен при поиске по FIGI
+                    id=figi
+                ).instrument
+
+                # Стандартизируем ответ
+                return {
+                    "lot_size": instr_info.lot,
+                    "min_price_increment": float(
+                        instr_info.min_price_increment.units + instr_info.min_price_increment.nano / 1e9),
+                    # У акций шаг количества всегда 1 лот
+                    "qty_step": float(instr_info.lot),
+                }
+        except Exception as e:
+            logging.error(f"Tinkoff Client: Не удалось получить информацию об инструменте {instrument}: {e}")
+            return {}
+
     @staticmethod
     def _cast_money(money_value) -> float:
         return money_value.units + money_value.nano / 1e9
@@ -207,3 +238,27 @@ class BybitClient(BaseDataClient):
             df[col] = pd.to_numeric(df[col])
 
         return df.sort_values('time').reset_index(drop=True)
+
+    def get_instrument_info(self, instrument: str, category: str = "linear") -> dict:
+        """Получает информацию об инструменте Bybit и приводит ее к нашему формату."""
+        logging.info(f"Bybit Client: Запрос информации об инструменте {instrument} (категория: {category})...")
+        try:
+            response = self.client.get_instruments_info(
+                category=category,
+                symbol=instrument
+            )
+            if response.get("retCode") == 0 and response["result"]["list"]:
+                instr_info = response["result"]["list"][0]
+                lot_size_filter = instr_info.get("lotSizeFilter", {})
+
+                # Стандартизируем ответ
+                return {
+                    "min_order_qty": float(lot_size_filter.get("minOrderQty", 0)),
+                    "qty_step": float(lot_size_filter.get("qtyStep", 0)),
+                }
+            else:
+                logging.error(f"Bybit Client: Ошибка API при получении информации: {response.get('retMsg')}")
+                return {}
+        except Exception as e:
+            logging.error(f"Bybit Client: Не удалось получить информацию об инструменте {instrument}: {e}")
+            return {}

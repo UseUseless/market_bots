@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import numpy as np
 from typing import Dict, Any, Optional
-
+from utils.file_io import load_trades_from_file
 from analyzer import BacktestAnalyzer
 from config import PATH_CONFIG, BACKTEST_CONFIG
 
@@ -24,7 +24,7 @@ def _process_single_backtest_file(file_path: str) -> Optional[Dict[str, Any]]:
     """
     try:
         filename = os.path.basename(file_path)
-        trades_df = BacktestAnalyzer.load_trades_from_file(file_path)
+        trades_df = load_trades_from_file(file_path)
         if trades_df.empty:
             return None
 
@@ -201,7 +201,7 @@ else:
 
     if selected_file:
         # Загружаем данные для выбранного файла
-        trades_df = BacktestAnalyzer.load_trades_from_file(os.path.join(PATH_CONFIG["LOGS_DIR"], selected_file))
+        trades_df = load_trades_from_file(os.path.join(PATH_CONFIG["LOGS_DIR"], selected_file))
 
         # Создаем экземпляр анализатора для выбранного бэктеста
         row = filtered_df[filtered_df["File"] == selected_file].iloc[0]

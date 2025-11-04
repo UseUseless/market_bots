@@ -14,6 +14,7 @@ class BaseStrategy(ABC):
     """
 
     candle_interval: str
+    min_history_needed: int = 1  # Минимальное кол-во свечей по умолчанию
 
     def __init__(self, events_queue: Queue, instrument: str):
         self.events_queue = events_queue

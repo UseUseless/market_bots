@@ -2,6 +2,7 @@ import argparse
 import os
 import logging
 from typing import get_args
+import json
 
 # -> ИЗМЕНЕНИЕ: Импортируем наших новых клиентов
 from utils.data_clients import TinkoffClient, BybitClient, BaseDataClient
@@ -15,6 +16,38 @@ logging.getLogger('tinkoff').setLevel(logging.WARNING)
 DATA_DIR = PATH_CONFIG["DATA_DIR"]
 DEFAULT_DAYS_TO_LOAD = DATA_LOADER_CONFIG["DAYS_TO_LOAD"]
 
+
+def _fetch_and_save_candles(client: BaseDataClient, exchange: str, instrument: str, interval: str, days: int,
+                            category: str, save_path: str):
+    """Получает и сохраняет исторические свечи."""
+    df = None
+    if exchange == 'tinkoff':
+        df = client.get_historical_data(instrument, interval, days)
+    elif exchange == 'bybit':
+        df = client.get_historical_data(instrument, interval, days, category=category)
+
+    if df is not None and not df.empty:
+        df.to_parquet(save_path)
+        logging.info(f"Успешно сохранено {len(df)} свечей для {instrument.upper()} в файл: {save_path}")
+    else:
+        logging.warning(f"Не получено данных по свечам для {instrument.upper()}. Файл не создан.")
+
+
+def _fetch_and_save_instrument_info(client: BaseDataClient, exchange: str, instrument: str, category: str,
+                                    save_path: str):
+    """Получает и сохраняет метаданные об инструменте."""
+    instrument_info = None
+    if exchange == 'tinkoff':
+        instrument_info = client.get_instrument_info(instrument)
+    elif exchange == 'bybit':
+        instrument_info = client.get_instrument_info(instrument, category=category)
+
+    if instrument_info:
+        with open(save_path, 'w', encoding='utf-8') as f:
+            json.dump(instrument_info, f, ensure_ascii=False, indent=4)
+        logging.info(f"Успешно сохранена информация об инструменте в файл: {save_path}")
+    else:
+        logging.warning(f"Не получено метаданных для {instrument.upper()}. Файл не создан.")
 
 def download_data(exchange: str, instrument_list: list[str], interval: str, days_to_load: int, category: str, data_dir: str):
     """
@@ -38,17 +71,15 @@ def download_data(exchange: str, instrument_list: list[str], interval: str, days
     os.makedirs(interval_path, exist_ok=True)
 
     for instrument in instrument_list:
-        df = None
-        if exchange == 'tinkoff':
-            df = client.get_historical_data(instrument, interval, days_to_load)
-        elif exchange == 'bybit':
-            df = client.get_historical_data(instrument, interval, days_to_load, category=category)
+        instrument_upper = instrument.upper()
 
-        # Общая логика сохранения
-        if df is not None and not df.empty:
-            file_path = os.path.join(interval_path, f"{instrument.upper()}.parquet")
-            df.to_parquet(file_path)
-            logging.info(f"Успешно сохранено {len(df)} свечей для {instrument.upper()} в файл: {file_path}")
+        # Определяем пути для сохранения
+        parquet_path = os.path.join(interval_path, f"{instrument_upper}.parquet")
+        json_path = os.path.join(interval_path, f"{instrument_upper}.json")
+
+        # Вызываем helper-функции
+        _fetch_and_save_candles(client, exchange, instrument, interval, days_to_load, category, parquet_path)
+        _fetch_and_save_instrument_info(client, exchange, instrument, category, json_path)
 
 
 def main():

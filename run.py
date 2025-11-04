@@ -15,17 +15,20 @@ from core.risk_manager import RiskManagerType # Модель риск-менед
 
 from analyzer import BacktestAnalyzer # Создает аналитический отчет и график
 from utils.context_logger import backtest_time_filter # Добавляет время свечи в логи
+from utils.file_io import load_instrument_info
 
 from config import BACKTEST_CONFIG, PATH_CONFIG, RISK_CONFIG
 from strategies.base_strategy import BaseStrategy
 
 # --- Импорт и регистрация конкретных стратегий ---
 from strategies.triple_filter import TripleFilterStrategy
+from strategies.test_sandbox_strategy import TestSignalStrategy
 # from strategies.my_awesome_strategy import MyAwesomeStrategy # Пример добавления новой
 
 # --- Реестр доступных стратегий ---
 AVAILABLE_STRATEGIES: Dict[str, Type[BaseStrategy]] = {
     "triple_filter": TripleFilterStrategy,
+    "test_signal": TestSignalStrategy,
     # "my_awesome_strategy": MyAwesomeStrategy, # Пример регистрации новой
 }
 
@@ -43,6 +46,8 @@ def _initialize_components(
     # Создаем экземпляры:
     # Создаем очередь по которой будут идти все события
     events_queue = queue.Queue()
+    # Загружаем метаданные об инструменте
+    instrument_info = load_instrument_info(instrument=instrument, interval=interval)
     # Стратегия
     strategy = strategy_class(events_queue, instrument)
     # Обработка данных
@@ -59,7 +64,8 @@ def _initialize_components(
                           initial_capital=initial_capital,
                           commission_rate=commission_rate,
                           interval=interval,
-                          risk_manager_type=risk_manager_type
+                          risk_manager_type=risk_manager_type,
+                          instrument_info=instrument_info
                           )
 
     # Информация о SL/TP для логов

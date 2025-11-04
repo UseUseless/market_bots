@@ -19,13 +19,15 @@ class Portfolio:
     """
 
     def __init__(self, events_queue: Queue, trade_log_file: str, strategy: BaseStrategy,
-                 initial_capital: float, commission_rate: float, interval: str, risk_manager_type: str):
+                 initial_capital: float, commission_rate: float, interval: str,
+                 risk_manager_type: str, instrument_info: Dict[str, Any]):
         self.events_queue: Queue[Event] = events_queue  # Ссылка на общую очередь событий для отправки ордеров
         self.trade_log_file: str = trade_log_file       # Путь к CSV-файлу для записи сделок
         self.strategy: BaseStrategy = strategy          # Экземпляр текущей стратегии (нужен для доступа к SL/TP)
         self.initial_capital: float = initial_capital   # Начальный капитал для бэктеста
         self.commission_rate: float = commission_rate   # Размер комиссии в долях Ex:(0.0005 = 0.05%)
         self.interval: str = interval                   # Текущий таймфрейм (например, '5min'). Нужен для логирования.
+        self.instrument_info: Dict[str, Any] = instrument_info  # Сохраняем метаданные
 
         # Создаем экземпляр калькулятора размера позиции.
         self.position_sizer: BasePositionSizer = FixedRiskSizer()
@@ -158,14 +160,12 @@ class Portfolio:
             # Передаем этот профиль в sizer для расчета количества лотов.
             quantity_float = self.position_sizer.calculate_size(risk_profile)
 
-            # Для торговли акциями количество лотов должно быть целым.
-            # Округляем вниз (floor), чтобы не превысить расчетный риск.
-            # TODO: Для криптовалют нужно будет использовать дробное значение (quantity_float)
-            #   и, возможно, учитывать минимальный размер ордера (min_order_size).
-            quantity = int(quantity_float)
+            quantity = self._adjust_quantity_for_rules(quantity_float)
 
-            # Если расчет показал, что мы можем купить хотя бы 1 лот, генерируем ордер.
+            # Если расчет показал, что мы можем купить хотя бы 1  возможный лот (например 0.001 btc), генерируем ордер.
             if quantity > 0:
+                logging.info(
+                    f"Расчетное кол-во: {quantity_float:.4f}, скорректировано до {quantity} с учетом правил биржи.")
                 order = OrderEvent(instrument=event.instrument, quantity=quantity, direction=event.direction)
                 self.events_queue.put(order)
                 self.pending_orders.add(event.instrument)
@@ -174,6 +174,40 @@ class Portfolio:
         except ValueError as e:
             # Ловим ошибку от AtrRiskManager, если, например, ATR некорректен.
             logging.warning(f"Не удалось рассчитать профиль риска для {event.instrument}: {e}. Сигнал проигнорирован.")
+
+    def _adjust_quantity_for_rules(self, quantity_float: float) -> float | int:
+        """
+        Корректирует рассчитанное количество лотов с учетом правил биржи
+        (лотность, шаг количества, минимальный размер ордера).
+        """
+        lot_rules = self.instrument_info
+
+        qty_step = float(lot_rules.get("qty_step", 1.0))
+        lot_size = int(lot_rules.get("lot_size", 1))
+        min_order_qty = float(lot_rules.get("min_order_qty", lot_size))
+
+        # 1. Округляем вниз до ближайшего шага количества (qty_step)
+        if qty_step > 0:
+            adjusted_qty = (quantity_float // qty_step) * qty_step
+        else:
+            adjusted_qty = quantity_float
+
+        # 2. Для инструментов с лотностью > 1 (акции Tinkoff), округляем до лота
+        if lot_size > 1:
+            num_lots = adjusted_qty // lot_size
+            adjusted_qty = num_lots * lot_size
+
+        # 3. Проверяем на минимальный размер ордера
+        if adjusted_qty < min_order_qty:
+            quantity = 0
+        else:
+            quantity = adjusted_qty
+
+        # Конвертируем в int, если это возможно без потери точности
+        if quantity == int(quantity):
+            return int(quantity)
+
+        return quantity
 
     def _handle_exit_position_signal(self, event: SignalEvent, position: Dict[str, Any]) -> None:
         """Обрабатывает сигнал на закрытие существующей позиции."""

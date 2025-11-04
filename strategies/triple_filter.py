@@ -18,6 +18,8 @@ class TripleFilterStrategy(BaseStrategy):
     _config = STRATEGY_CONFIG["TripleFilterStrategy"]
     candle_interval: str = _config["candle_interval"]
 
+    min_history_needed: int = _config["ema_trend_period"] + 1  # EMA_200 + запас
+
     def __init__(self, events_queue: Queue, instrument: str):
         super().__init__(events_queue, instrument)
 
