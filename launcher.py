@@ -6,21 +6,20 @@ from typing import List, Dict, Type
 
 from strategies.base_strategy import BaseStrategy
 from config import PATH_CONFIG
-
+from utils.data_clients import EXCHANGE_INTERVAL_MAPS
 
 # --- Динамический импорт и сбор доступных опций ---
 
 def get_available_strategies() -> Dict[str, Type[BaseStrategy]]:
     """Динамически находит и импортирует все доступные стратегии."""
     # Это позволяет не обновлять список вручную.
-    # Просто добавь новую стратегию в run.py, и она появится здесь.
-    from run import AVAILABLE_STRATEGIES
+    from strategies import AVAILABLE_STRATEGIES
     return AVAILABLE_STRATEGIES
 
 
-def get_available_instruments(interval: str) -> List[str]:
+def get_available_instruments(exchange: str, interval: str) -> List[str]:
     """Сканирует папку с данными и возвращает список доступных инструментов."""
-    data_path = os.path.join(PATH_CONFIG["DATA_DIR"], interval)
+    data_path = os.path.join(PATH_CONFIG["DATA_DIR"], exchange, interval)
     if not os.path.isdir(data_path):
         return []
     return [f.replace('.parquet', '') for f in os.listdir(data_path) if f.endswith('.parquet')]
@@ -38,12 +37,13 @@ def run_download_data():
     ).ask()
 
     instruments = questionary.text(
-        "Введите тикеры через пробел (например, SBER GAZP или BTCUSDT ETHUSDT):"
+        f"Введите тикеры для {exchange.upper()} через пробел (например, SBER GAZP или BTCUSDT ETHUSDT):"
     ).ask()
 
-    interval = questionary.text(
-        "Введите интервал (например, 5min, 1hour, 1day):",
-        default="5min"
+    available_intervals = list(EXCHANGE_INTERVAL_MAPS[exchange].keys())
+    interval = questionary.select(
+        "Выберите интервал:",
+        choices=available_intervals
     ).ask()
 
     days = questionary.text(
@@ -68,7 +68,7 @@ def run_single_backtest():
 
     strategies = get_available_strategies()
     if not strategies:
-        print("Ошибка: не найдено ни одной доступной стратегии в run.py.")
+        print("Ошибка: не найдено ни одной доступной стратегии в run_backtest.py.")
         return
 
     strategy_name = questionary.select(
@@ -76,13 +76,20 @@ def run_single_backtest():
         choices=list(strategies.keys())
     ).ask()
 
-    # Сначала спрашиваем интервал, чтобы найти доступные инструменты
-    interval = questionary.text(
-        "Введите интервал для бэктеста:",
-        default=strategies[strategy_name].candle_interval
+    exchange = questionary.select(
+        "Выберите биржу для бэктеста:",
+        choices=["tinkoff", "bybit"],
     ).ask()
 
-    available_instruments = get_available_instruments(interval)
+    # Сначала спрашиваем интервал, чтобы найти доступные инструменты
+    available_intervals = list(EXCHANGE_INTERVAL_MAPS[exchange].keys())
+    interval = questionary.select(
+        "Выберите интервал:",
+        choices=available_intervals,
+        default=strategies[strategy_name].candle_interval if strategies[strategy_name].candle_interval in available_intervals else None
+    ).ask()
+
+    available_instruments = get_available_instruments(exchange, interval)
     if not available_instruments:
         print(f"Ошибка: не найдено скачанных данных для интервала '{interval}'.")
         print("Сначала скачайте данные с помощью первого пункта меню.")
@@ -100,8 +107,9 @@ def run_single_backtest():
     ).ask()
 
     command = [
-        sys.executable, "run.py",
+        sys.executable, "run_backtest.py",
         "--strategy", strategy_name,
+        "--exchange", exchange,
         "--instrument", instrument,
         "--interval", interval,
         "--rm", rm_type
@@ -116,7 +124,7 @@ def run_batch_backtest():
 
     strategies = get_available_strategies()
     if not strategies:
-        print("Ошибка: не найдено ни одной доступной стратегии в run.py.")
+        print("Ошибка: не найдено ни одной доступной стратегии в run_backtest.py.")
         return
 
     strategy_name = questionary.select(
@@ -124,9 +132,16 @@ def run_batch_backtest():
         choices=list(strategies.keys())
     ).ask()
 
-    interval = questionary.text(
-        "Введите интервал для массового теста:",
-        default=strategies[strategy_name].candle_interval
+    exchange = questionary.select(
+        "Выберите биржу для массового теста:",
+        choices=["tinkoff", "bybit"],
+    ).ask()
+
+    available_intervals = list(EXCHANGE_INTERVAL_MAPS[exchange].keys())
+    interval = questionary.select(
+        "Выберите интервал:",
+        choices=available_intervals,
+        default=strategies[strategy_name].candle_interval if strategies[strategy_name].candle_interval in available_intervals else None
     ).ask()
 
     rm_type = questionary.select(
@@ -138,6 +153,7 @@ def run_batch_backtest():
     command = [
         sys.executable, "batch_tester.py",
         "--strategy", strategy_name,
+        "--exchange", exchange,
         "--interval", interval,
         "--rm", rm_type
     ]
@@ -151,7 +167,7 @@ def run_sandbox_trading():
 
     strategies = get_available_strategies()
     if not strategies:
-        print("Ошибка: не найдено ни одной доступной стратегии в run.py.")
+        print("Ошибка: не найдено ни одной доступной стратегии в run_backtest.py.")
         return
 
     exchange = questionary.select(
@@ -168,10 +184,15 @@ def run_sandbox_trading():
         choices=list(strategies.keys())
     ).ask()
 
-    interval = questionary.text(
-        "Введите интервал (например, 1min, 5min):",
-        default="1min"
+    live_intervals = ['1min', '3min', '5min', '15min']
+    available_intervals = [i for i in live_intervals if i in EXCHANGE_INTERVAL_MAPS[exchange]]
+
+    interval = questionary.select(
+        "Выберите интервал:",
+        choices=available_intervals,
+        default="1min" if "1min" in available_intervals else None
     ).ask()
+
 
     rm_type = questionary.select(
         "Выберите риск-менеджер:",

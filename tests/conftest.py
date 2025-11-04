@@ -4,12 +4,15 @@ import os
 from datetime import datetime, timedelta
 import pandas_ta as ta
 
+@pytest.fixture(scope="session")
+def test_data_root(tmp_path_factory):
+    """Создает корневую папку 'data' во временной директории для всех тестов сессии."""
+    return tmp_path_factory.mktemp("data")
 
 @pytest.fixture(scope="session")
-def test_data_fixture():
+def test_data_fixture(test_data_root):
     """
-    Создает небольшой parquet-файл с данными, которые гарантированно
-    вызовут один сигнал на покупку и один на продажу у TripleFilterStrategy.
+    Создает parquet-файл с данными для Tinkoff в правильной структуре.
     """
     # 1. Подготовка данных
     num_candles = 250
@@ -40,27 +43,25 @@ def test_data_fixture():
     df.loc[idx, 'EMA_21'] = 101  # Стала выше
 
     # 2. Сохранение файла
-    data_dir = "data/5min"
+    data_dir = test_data_root / "tinkoff" / "5min"
     os.makedirs(data_dir, exist_ok=True)
-    file_path = os.path.join(data_dir, "TEST_E2E.parquet")
+    file_path = data_dir / "TEST_E2E.parquet"
     df.to_parquet(file_path)
 
-    # 3. Передача управления тесту
-    yield "TEST_E2E"  # Возвращаем тикер для использования в тесте
-
-    # 4. Очистка после теста
-    os.remove(file_path)
+    # Возвращаем словарь с информацией, чтобы тесты знали, где искать данные
+    return {"exchange": "tinkoff", "instrument": "TEST_E2E", "data_root": test_data_root}
 
 
 @pytest.fixture(scope="session")
-def perfect_market_data_fixture():
+def perfect_market_data_fixture(test_data_root):
     """
     Создает parquet-файл с идеализированными рыночными данными,
     где гарантированно срабатывают TP для лонга и SL для шорта.
     """
     # 1. Подготовка данных
+    base_date = datetime(2023, 1, 2)
     data = {
-        'time': [datetime(2023, 1, 1, 10, i) for i in range(25)],
+        'time': [base_date.replace(hour=10, minute=i) for i in range(25)],
         'open': [
             # 0-4: Флэт
             100, 100, 100, 100, 100,
@@ -101,13 +102,10 @@ def perfect_market_data_fixture():
     df = pd.DataFrame(data)
 
     # 2. Сохранение файла
-    data_dir = "data/5min"
+    data_dir = test_data_root / "tinkoff" / "5min"
     os.makedirs(data_dir, exist_ok=True)
-    file_path = os.path.join(data_dir, "PERFECT_DATA.parquet")
+    file_path = data_dir / "PERFECT_DATA.parquet"
     df.to_parquet(file_path)
 
-    # 3. Передача управления тесту
-    yield "PERFECT_DATA"
-
-    # 4. Очистка после теста
-    os.remove(file_path)
+    # Возвращаем словарь
+    return {"exchange": "tinkoff", "instrument": "PERFECT_DATA", "data_root": test_data_root}

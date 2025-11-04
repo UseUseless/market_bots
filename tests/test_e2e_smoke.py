@@ -3,95 +3,111 @@ import os
 import pytest
 import sys
 
-# Мы создаем список кортежей, где каждый кортеж - это набор аргументов для одного запуска
+# --- Дымовые тесты для утилит ---
+
 @pytest.mark.parametrize("exchange, instrument", [
     ("tinkoff", "SBER"),
-    ("bybit", "BTCUSDT")])
+    ("bybit", "BTCUSDT")
+])
 def test_download_data_smoke(exchange, instrument, tmp_path):
     """
-    Дымовой тест для download_data.py. Проверяет, что скрипт запускается
-    и создает файл для разных бирж.
+    Дымовой тест для download_data.py.
+    Проверяет, что скрипт успешно запускается и создает файл в правильной
+    структуре (data/exchange/interval/) для разных бирж.
     """
     # 1. Подготовка (Arrange)
-    # tmp_path - это специальная фикстура pytest, которая создает временную папку
+    # tmp_path - это специальная фикстура pytest, которая создает уникальную
+    # временную папку для этого теста. Это гарантирует, что тесты не влияют
+    # друг на друга и не загрязняют основной проект.
     data_dir = tmp_path / "data"
 
+    # Формируем команду для запуска скрипта как отдельного процесса.
     command = [
         sys.executable, "download_data.py",
         "--exchange", exchange,
         "--instrument", instrument,
         "--interval", "5min",
         "--days", "1",
-        "--data_dir", str(data_dir)
+        "--data_dir", str(data_dir)  # Передаем путь к нашей временной папке
     ]
 
+    # 2. Действие (Act)
+    # Запускаем команду. check=True означает, что если скрипт завершится
+    # с ошибкой (код возврата не 0), pytest автоматически провалит тест.
     subprocess.run(command, capture_output=True, text=True, check=True)
 
-    # Проверка (Assert)
-    # Проверяем, что скрипт отработал без ошибок (check=True это уже делает)
-    # И что в нашей временной папке появился ожидаемый файл
-    expected_file = data_dir / "5min" / f"{instrument.upper()}.parquet"
+    # 3. Проверка (Assert)
+    # Собираем ожидаемый путь к файлу в соответствии с новой архитектурой.
+    expected_file = data_dir / exchange / "5min" / f"{instrument.upper()}.parquet"
+    # Проверяем, что файл действительно был создан по этому пути.
     assert os.path.exists(expected_file), f"Файл {expected_file} не был создан"
 
 
-@pytest.mark.parametrize("rm_type, interval", [
-    ("FIXED", "5min"),
-    ("ATR", "15min")])
-def test_run_smoke(rm_type, interval, test_data_fixture, tmp_path, monkeypatch):
+# --- Дымовые тесты для основного приложения ---
+
+@pytest.mark.parametrize("rm_type", ["FIXED", "ATR"])
+def test_run_smoke(rm_type, test_data_fixture, tmp_path, monkeypatch):
     """
-    Дымовой тест для run.py. Проверяет запуск с разными RM и интервалами.
+    Дымовой тест для run_backtest.py.
+    Проверяет, что основной скрипт бэктеста запускается без ошибок
+    с разными риск-менеджерами.
     """
     # 1. Подготовка (Arrange)
-    # Создаем временные папки для логов и отчетов
-    logs_dir = tmp_path / "logs"
-    reports_dir = tmp_path / "reports"
+    # Получаем информацию о тестовых данных из фикстуры (из conftest.py)
+    exchange = test_data_fixture["exchange"]
+    instrument = test_data_fixture["instrument"]
+    data_root = test_data_fixture["data_root"]
 
-    # Создаем фейковый 15-минутный файл данных, если нужно
-    original_path = "data/5min/TEST_E2E.parquet"
-    if interval == "15min":
-        interval_path = f"data/{interval}/TEST_E2E.parquet"
-        os.makedirs(f"data/{interval}", exist_ok=True)
-        os.replace(original_path, interval_path)
+    # monkeypatch - мощный инструмент pytest для временной подмены переменных,
+    # функций или настроек. Здесь мы "на лету" подменяем пути в конфиге,
+    # чтобы скрипт run_backtest.py читал данные из нашей временной папки с тестовыми
+    # данными и писал логи/отчеты тоже во временную папку.
+    monkeypatch.setattr("config.PATH_CONFIG", {
+        "DATA_DIR": str(data_root),
+        "LOGS_DIR": str(tmp_path / "logs"),
+        "REPORTS_DIR": str(tmp_path / "reports")
+    })
 
+    # Формируем команду, теперь с обязательным аргументом --exchange.
     command = [
-        sys.executable, "run.py",
+        sys.executable, "run_backtest.py",
         "--strategy", "triple_filter",
-        "--instrument", test_data_fixture,
-        "--interval", interval,
+        "--exchange", exchange,
+        "--instrument", instrument,
+        "--interval", "5min", # Используем интервал, для которого созданы данные
         "--rm", rm_type
     ]
 
-    monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr("config.PATH_CONFIG", {
-        "LOGS_DIR": str(logs_dir),
-        "REPORTS_DIR": str(reports_dir)
-    })
-
     # 2. Действие (Act) & 3. Проверка (Assert)
-    # check=True автоматически вызовет ошибку, если returncode != 0
+    # Запускаем и автоматически проверяем на ошибки.
     subprocess.run(command, capture_output=True, text=True, check=True)
 
-    # Восстанавливаем файл данных для других тестов
-    if interval == "15min":
-        os.replace(interval_path, original_path)
 
-def test_batch_tester_smoke(test_data_fixture, tmp_path):
-    """Дымовой тест для batch_tester.py."""
+def test_batch_tester_smoke(test_data_fixture, tmp_path, monkeypatch):
+    """
+    Дымовой тест для batch_tester.py.
+    Проверяет, что скрипт массового тестирования запускается без ошибок.
+    """
     # 1. Подготовка (Arrange)
-    logs_dir = tmp_path / "logs"
-    reports_dir = tmp_path / "reports"
+    # Аналогично предыдущему тесту, получаем данные из фикстуры.
+    exchange = test_data_fixture["exchange"]
+    data_root = test_data_fixture["data_root"]
 
+    # И так же подменяем пути в конфиге.
+    monkeypatch.setattr("config.PATH_CONFIG", {
+        "DATA_DIR": str(data_root),
+        "LOGS_DIR": str(tmp_path / "logs"),
+        "REPORTS_DIR": str(tmp_path / "reports")
+    })
+
+    # Формируем команду с обязательным аргументом --exchange.
     command = [
         sys.executable, "batch_tester.py",
         "--strategy", "triple_filter",
+        "--exchange", exchange,
         "--interval", "5min"
     ]
 
-    monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr("config.PATH_CONFIG", {
-        "LOGS_DIR": str(logs_dir),
-        "REPORTS_DIR": str(reports_dir)
-    })
-
     # 2. Действие (Act) & 3. Проверка (Assert)
+    # Запускаем и автоматически проверяем на ошибки.
     subprocess.run(command, capture_output=True, text=True, check=True)

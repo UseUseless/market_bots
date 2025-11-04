@@ -18,12 +18,12 @@ def load_trades_from_file(file_path: str) -> pd.DataFrame:
         raise ValueError("Неподдерживаемый формат файла логов. Используйте .jsonl")
 
 
-def load_instrument_info(instrument: str, interval: str, data_dir: str = PATH_CONFIG["DATA_DIR"]) -> Dict[str, Any]:
+def load_instrument_info(exchange: str, instrument: str, interval: str, data_dir: str = PATH_CONFIG["DATA_DIR"]) -> Dict[str, Any]:
     """
     Загружает метаданные об инструменте из .json файла.
     Возвращает словарь с правилами или значения по умолчанию.
     """
-    file_path = os.path.join(data_dir, interval, f"{instrument.upper()}.json")
+    file_path = os.path.join(data_dir, exchange, interval, f"{instrument.upper()}.json")
     logging.info(f"FileIO: Чтение метаданных из {file_path}...")
     try:
         with open(file_path, 'r', encoding='utf-8') as f:

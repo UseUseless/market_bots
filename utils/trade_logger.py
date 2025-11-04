@@ -1,10 +1,12 @@
 import json
 import os
-from datetime import datetime, UTC
+from datetime import datetime
 import logging
 
+
 def log_trade(
-    trade_log_file: str, strategy_name: str, instrument: str, direction: str,
+    trade_log_file: str, strategy_name: str, exchange: str, instrument: str, direction: str,
+    entry_timestamp: datetime, exit_timestamp: datetime,
     entry_price: float, exit_price: float, pnl: float, exit_reason: str,
     interval: str, risk_manager: str
 ):
@@ -15,8 +17,10 @@ def log_trade(
         os.makedirs(os.path.dirname(trade_log_file), exist_ok=True)
 
         row_data = {
-            'timestamp_utc': datetime.now(UTC).isoformat(),
+            'entry_timestamp_utc': entry_timestamp.isoformat(),
+            'exit_timestamp_utc': exit_timestamp.isoformat(),
             'strategy_name': strategy_name,
+            'exchange': exchange,
             'instrument': instrument,
             'direction': direction,
             'entry_price': round(entry_price, 4),
@@ -29,7 +33,7 @@ def log_trade(
 
         with open(trade_log_file, 'a', encoding='utf-8') as f:
             f.write(json.dumps(row_data) + '\n')
-            
+
     except (IOError, TypeError) as e:
         logging.error(f"Не удалось записать сделку в файл {trade_log_file}: {e}")
     except Exception as e:

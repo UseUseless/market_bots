@@ -20,20 +20,11 @@ from utils.file_io import load_instrument_info
 from config import BACKTEST_CONFIG, PATH_CONFIG, RISK_CONFIG
 from strategies.base_strategy import BaseStrategy
 
-# --- Импорт и регистрация конкретных стратегий ---
-from strategies.triple_filter import TripleFilterStrategy
-from strategies.test_sandbox_strategy import TestSignalStrategy
-# from strategies.my_awesome_strategy import MyAwesomeStrategy # Пример добавления новой
-
-# --- Реестр доступных стратегий ---
-AVAILABLE_STRATEGIES: Dict[str, Type[BaseStrategy]] = {
-    "triple_filter": TripleFilterStrategy,
-    "test_signal": TestSignalStrategy,
-    # "my_awesome_strategy": MyAwesomeStrategy, # Пример регистрации новой
-}
+from strategies import AVAILABLE_STRATEGIES
 
 def _initialize_components(
         strategy_class: Type[BaseStrategy],
+        exchange: str,
         instrument: str,
         interval: str,
         risk_manager_type: str,
@@ -47,11 +38,12 @@ def _initialize_components(
     # Создаем очередь по которой будут идти все события
     events_queue = queue.Queue()
     # Загружаем метаданные об инструменте
-    instrument_info = load_instrument_info(instrument=instrument, interval=interval)
+    data_dir = PATH_CONFIG["DATA_DIR"]
+    instrument_info = load_instrument_info(exchange=exchange, instrument=instrument, interval=interval, data_dir=data_dir)
     # Стратегия
     strategy = strategy_class(events_queue, instrument)
     # Обработка данных
-    data_handler = HistoricLocalDataHandler(events_queue, instrument, interval)
+    data_handler = HistoricLocalDataHandler(events_queue, exchange, instrument, interval, data_path=data_dir)
     # Для расчета ATR (на сколько входить в позицию относительно волатильности рынка)
     # В целом добавляет обшие расчетные данные в pd.DF
     feature_engine = FeatureEngine()
@@ -61,6 +53,7 @@ def _initialize_components(
     portfolio = Portfolio(events_queue=events_queue,
                           trade_log_file=trade_log_path,
                           strategy=strategy,
+                          exchange=exchange,
                           initial_capital=initial_capital,
                           commission_rate=commission_rate,
                           interval=interval,
@@ -222,16 +215,11 @@ def _analyze_results(
     else:
         logging.info("Открытые позиции отсутствуют.")
 
-def setup_logging(log_file_path: str, backtest_mode: bool) -> None:
+def setup_logging(log_file_path: str) -> None:
     """Настраивает и конфигурирует логгер."""
 
-    # Выбираем формат вывода логов в зависимости от режима работы
-    if backtest_mode:
-        # Для бэктеста используем время симуляции (из файла со свечами время свечи)
-        log_formatter = logging.Formatter('%(sim_time)s - %(levelname)s - %(message)s')
-    else:
-        # Используем реальное системное время
-        log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    # Формат вывода логов для бэктеста с использованием времени симуляции
+    log_formatter = logging.Formatter('%(sim_time)s - %(levelname)s - %(message)s')
 
     # Создаем папку для логов
     os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
@@ -254,11 +242,11 @@ def setup_logging(log_file_path: str, backtest_mode: bool) -> None:
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
 
-    # Если бэктест, используем фильтр для замены системного времени на время симуляции
-    if backtest_mode:
-        logger.addFilter(backtest_time_filter)
+    # Используем фильтр для замены системного времени на время симуляции
+    logger.addFilter(backtest_time_filter)
 
 def run_backtest(trade_log_path: str,
+                 exchange: str,
                  interval: str,
                  risk_manager_type: str,
                  strategy_class: Type[BaseStrategy],
@@ -276,7 +264,7 @@ def run_backtest(trade_log_path: str,
 
     # Создаём экземпляры необходимых компонентов
     components = _initialize_components(
-        strategy_class, instrument, interval, risk_manager_type,
+        strategy_class, exchange, instrument, interval, risk_manager_type,
         trade_log_path, initial_capital, commission_rate
     )
 
@@ -315,16 +303,16 @@ def main():
     valid_rms = get_args(RiskManagerType)
 
     parser.add_argument(
-        "--mode",
-        type=str,
-        default="backtest",
-        choices=['backtest', 'sandbox', 'real'],
-        help="Режим работы.")
-    parser.add_argument(
         "--strategy",
         type=str,
         required=True,
         help=f"Имя стратегии. Доступно: {list(AVAILABLE_STRATEGIES.keys())}")
+    parser.add_argument(
+        "--exchange",
+        type=str,
+        required=True,
+        choices=['tinkoff', 'bybit'],
+        help="Биржа, на данных которой проводится бэктест.")
     parser.add_argument(
         "--instrument",
         type=str,
@@ -366,30 +354,24 @@ def main():
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     # Имена логов для текущего запуска бэктеста
-    base_filename = f"{timestamp}_{strategy_class.__name__}_{instrument}_{current_interval}_RM-{risk_manager_type}_{args.mode}"
+    base_filename = f"{timestamp}_{strategy_class.__name__}_{args.instrument}_{current_interval}_RM-{args.risk_manager_type}_backtest"
 
     # Создаем полные пути для файла с логами выполнения и файла с логами сделок
     log_file_path = os.path.join(LOGS_DIR, f"{base_filename}_run.log")
     trade_log_path = os.path.join(LOGS_DIR, f"{base_filename}_trades.jsonl")
 
-    is_backtest = args.mode == 'backtest'
-
     # Запускаем настройку логгера
-    setup_logging(log_file_path, backtest_mode=is_backtest)
+    setup_logging(log_file_path)
 
     # В зависимости от выбранного режима, запускаем соответствующую функцию (бэктест или лайв, к примеру)
-    if is_backtest:
-        # Запускам бэктест
-        run_backtest(
-            trade_log_path=trade_log_path,
-            interval=current_interval,
-            risk_manager_type=risk_manager_type,
-            strategy_class=strategy_class,
-            instrument=instrument,
-        )
-    else:
-        # ToDo: Реализовать sandbox
-        logging.warning(f"Режим '{args.mode}' еще не реализован.")
+    run_backtest(
+        trade_log_path=trade_log_path,
+        exchange=args.exchange,
+        interval=current_interval,
+        risk_manager_type=args.risk_manager_type,
+        strategy_class=strategy_class,
+        instrument=args.instrument,
+    )
 
 if __name__ == "__main__":
     main()

@@ -66,16 +66,16 @@ def download_data(exchange: str, instrument_list: list[str], interval: str, days
         logging.error(f"Неизвестная биржа: {exchange}")
         return
 
-    # Создаем путь к подпапке для конкретного интервала
-    interval_path = os.path.join(data_dir, interval)
-    os.makedirs(interval_path, exist_ok=True)
+    # Создаем путь к подпапке биржи и интервала
+    exchange_path = os.path.join(data_dir, exchange, interval)
+    os.makedirs(exchange_path, exist_ok=True)
 
     for instrument in instrument_list:
         instrument_upper = instrument.upper()
 
-        # Определяем пути для сохранения
-        parquet_path = os.path.join(interval_path, f"{instrument_upper}.parquet")
-        json_path = os.path.join(interval_path, f"{instrument_upper}.json")
+        # Определяем пути для сохранения в новой структуре
+        parquet_path = os.path.join(exchange_path, f"{instrument_upper}.parquet")
+        json_path = os.path.join(exchange_path, f"{instrument_upper}.json")
 
         # Вызываем helper-функции
         _fetch_and_save_candles(client, exchange, instrument, interval, days_to_load, category, parquet_path)

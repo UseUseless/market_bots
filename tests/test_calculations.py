@@ -126,8 +126,9 @@ class MockStrategy:
 @pytest.fixture
 def portfolio_for_slippage_test(monkeypatch) -> "Portfolio":
     """Фикстура для создания экземпляра Portfolio для тестов проскальзывания."""
-    # Изолируем от глобального конфига
     monkeypatch.setattr("config.BACKTEST_CONFIG", {
+        "INITIAL_CAPITAL": 100000.0,
+        "COMMISSION_RATE": 0.0,
         "SLIPPAGE_CONFIG": {
             "ENABLED": True,
             "IMPACT_COEFFICIENT": 0.1,
@@ -141,10 +142,12 @@ def portfolio_for_slippage_test(monkeypatch) -> "Portfolio":
         events_queue=MockQueue(),
         trade_log_file="",
         strategy=MockStrategy(),
+        exchange="tinkoff",
         initial_capital=100000,
         commission_rate=0,
         interval="5min",
-        risk_manager_type="FIXED"
+        risk_manager_type="FIXED",
+        instrument_info={}
     )
 
 

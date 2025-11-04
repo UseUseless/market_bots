@@ -19,7 +19,7 @@ class Portfolio:
     """
 
     def __init__(self, events_queue: Queue, trade_log_file: str, strategy: BaseStrategy,
-                 initial_capital: float, commission_rate: float, interval: str,
+                 exchange: str, initial_capital: float, commission_rate: float, interval: str,
                  risk_manager_type: str, instrument_info: Dict[str, Any]):
         self.events_queue: Queue[Event] = events_queue  # Ссылка на общую очередь событий для отправки ордеров
         self.trade_log_file: str = trade_log_file       # Путь к CSV-файлу для записи сделок
@@ -28,6 +28,7 @@ class Portfolio:
         self.commission_rate: float = commission_rate   # Размер комиссии в долях Ex:(0.0005 = 0.05%)
         self.interval: str = interval                   # Текущий таймфрейм (например, '5min'). Нужен для логирования.
         self.instrument_info: Dict[str, Any] = instrument_info  # Сохраняем метаданные
+        self.exchange: str = exchange                   # Какая биржа
 
         # Создаем экземпляр калькулятора размера позиции.
         self.position_sizer: BasePositionSizer = FixedRiskSizer()
@@ -197,6 +198,12 @@ class Portfolio:
             num_lots = adjusted_qty // lot_size
             adjusted_qty = num_lots * lot_size
 
+        # Определяем, сколько знаков после запятой в qty_step
+        if '.' in str(qty_step):
+            decimal_places = len(str(qty_step).split('.')[1])
+            # Округляем до нужного количества знаков
+            adjusted_qty = round(adjusted_qty, decimal_places)
+
         # 3. Проверяем на минимальный размер ордера
         if adjusted_qty < min_order_qty:
             quantity = 0
@@ -258,6 +265,7 @@ class Portfolio:
         self.current_positions[event.instrument] = {
             'quantity': event.quantity,
             'entry_price': execution_price,
+            'entry_timestamp': last_candle['time'],
             'direction': event.direction,
             'stop_loss': final_risk_profile.stop_loss_price,
             'take_profit': final_risk_profile.take_profit_price,
@@ -311,9 +319,12 @@ class Portfolio:
         log_trade(
             trade_log_file=self.trade_log_file,
             strategy_name=self.strategy.name,
+            exchange=self.exchange,
             instrument=event.instrument,
             direction=position['direction'],
-            entry_price=entry_price,
+            entry_timestamp=position['entry_timestamp'],
+            exit_timestamp=last_candle['time'],
+            entry_price=position['entry_price'],
             exit_price=exit_price,
             pnl=pnl,
             exit_reason=exit_reason,
@@ -321,7 +332,12 @@ class Portfolio:
             risk_manager=self.risk_manager_type
         )
         # Сохраняем информацию о сделке для финального отчета
-        self.closed_trades.append({'pnl': pnl})
+        self.closed_trades.append({
+            'pnl': pnl,
+            # Опционально, но полезно для будущих расширений анализатора
+            'entry_timestamp': position['entry_timestamp'],
+            'exit_timestamp': last_candle['time']
+        })
 
         # Окончательно удаляем позицию из списка активных
         del self.current_positions[event.instrument]

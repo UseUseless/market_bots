@@ -15,6 +15,38 @@ from config import TOKEN_READONLY
 # --- Библиотеки для Bybit ---
 from pybit.unified_trading import HTTP
 
+EXCHANGE_INTERVAL_MAPS = {
+    "tinkoff": {
+        "1min": CandleInterval.CANDLE_INTERVAL_1_MIN,
+        "2min": CandleInterval.CANDLE_INTERVAL_2_MIN,
+        "3min": CandleInterval.CANDLE_INTERVAL_3_MIN,
+        "5min": CandleInterval.CANDLE_INTERVAL_5_MIN,
+        "10min": CandleInterval.CANDLE_INTERVAL_10_MIN,
+        "15min": CandleInterval.CANDLE_INTERVAL_15_MIN,
+        "30min": CandleInterval.CANDLE_INTERVAL_30_MIN,
+        "1hour": CandleInterval.CANDLE_INTERVAL_HOUR,
+        "2hour": CandleInterval.CANDLE_INTERVAL_2_HOUR,
+        "4hour": CandleInterval.CANDLE_INTERVAL_4_HOUR,
+        "1day": CandleInterval.CANDLE_INTERVAL_DAY,
+        "1week": CandleInterval.CANDLE_INTERVAL_WEEK,
+        "1month": CandleInterval.CANDLE_INTERVAL_MONTH,
+    },
+    "bybit": {
+        "1min": "1",
+        "3min": "3",
+        "5min": "5",
+        "15min": "15",
+        "30min": "30",
+        "1hour": "60",
+        "2hour": "120",
+        "4hour": "240",
+        "6hour": "360",
+        "12hour": "720",
+        "1day": "D",
+        "1week": "W",
+        "1month": "M",
+    }
+}
 
 # --- Абстрактный базовый класс для всех клиентов ---
 
@@ -99,12 +131,7 @@ class TinkoffClient(BaseDataClient):
             logging.error(f"Не удалось получить FIGI для '{instrument}'. {e}")
             return pd.DataFrame()
 
-        interval_map = {
-            "1min": CandleInterval.CANDLE_INTERVAL_1_MIN, "5min": CandleInterval.CANDLE_INTERVAL_5_MIN,
-            "15min": CandleInterval.CANDLE_INTERVAL_15_MIN, "1hour": CandleInterval.CANDLE_INTERVAL_HOUR,
-            "1day": CandleInterval.CANDLE_INTERVAL_DAY,
-        }
-        api_interval = interval_map.get(interval)
+        api_interval = EXCHANGE_INTERVAL_MAPS["tinkoff"].get(interval)
         if not api_interval:
             logging.error(f"Неподдерживаемый интервал для Tinkoff: {interval}")
             return pd.DataFrame()
@@ -179,10 +206,9 @@ class BybitClient(BaseDataClient):
         """Получает исторические свечные данные с Bybit для указанной категории."""
         logging.info(f"Bybit Client: используется категория '{category}'")
 
-        interval_map = {"1min": "1", "5min": "5", "15min": "15", "1hour": "60", "1day": "D"}
-        api_interval = interval_map.get(interval)
+        api_interval = EXCHANGE_INTERVAL_MAPS["bybit"].get(interval)
         if not api_interval:
-            logging.error(f"Bybit Stream: Неподдерживаемый интервал: {self.interval_str}.")
+            logging.error(f"Неподдерживаемый интервал для Bybit: {interval}.")
             return pd.DataFrame()
 
         all_candles = []
