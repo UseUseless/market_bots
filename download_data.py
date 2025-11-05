@@ -1,8 +1,8 @@
 import argparse
 import os
 import logging
-from typing import get_args
 import json
+import time
 
 # -> ИЗМЕНЕНИЕ: Импортируем наших новых клиентов
 from utils.data_clients import TinkoffClient, BybitClient, BaseDataClient
@@ -70,16 +70,19 @@ def download_data(exchange: str, instrument_list: list[str], interval: str, days
     exchange_path = os.path.join(data_dir, exchange, interval)
     os.makedirs(exchange_path, exist_ok=True)
 
-    for instrument in instrument_list:
+    for i, instrument in enumerate(instrument_list):
+        logging.info(f"\n--- Скачивание {i + 1}/{len(instrument_list)}: {instrument.upper()} ---")
         instrument_upper = instrument.upper()
 
-        # Определяем пути для сохранения в новой структуре
         parquet_path = os.path.join(exchange_path, f"{instrument_upper}.parquet")
         json_path = os.path.join(exchange_path, f"{instrument_upper}.json")
 
-        # Вызываем helper-функции
         _fetch_and_save_candles(client, exchange, instrument, interval, days_to_load, category, parquet_path)
         _fetch_and_save_instrument_info(client, exchange, instrument, category, json_path)
+
+        # Уважительная пауза, чтобы не получить бан от API
+        if len(instrument_list) > 1:
+            time.sleep(1)
 
 
 def main():
@@ -93,12 +96,15 @@ def main():
         help="Биржа для загрузки данных."
     )
     parser.add_argument(
-        "--instrument", type=str, required=True, nargs='+',
+        "--instrument", type=str, required=False, nargs='+',
         help="Один или несколько тикеров/символов.\n"
              "Примеры для Tinkoff: SBER GAZP\n"
              "Примеры для Bybit: BTCUSDT ETHUSDT"
     )
-
+    parser.add_argument(
+        "--list", type=str, required=False,
+        help="Имя файла из папки 'datalists' для пакетной загрузки (например, moex_blue_chips.txt)."
+    )
     parser.add_argument(
         "--interval", type=str, required=True,
         help="Интервал свечей. Должен поддерживаться выбранной биржей.\n"
@@ -121,7 +127,22 @@ def main():
     )
 
     args = parser.parse_args()
-    download_data(args.exchange, args.instrument, args.interval, args.days, args.category, args.data_dir)
+    if not args.instrument and not args.list:
+        parser.error("Необходимо указать либо --instrument, либо --list.")
+
+    instrument_list = []
+    if args.instrument:
+        instrument_list = args.instrument
+    elif args.list:
+        list_path = os.path.join("datalists", args.list)
+        try:
+            with open(list_path, 'r', encoding='utf-8') as f:
+                instrument_list = [line.strip() for line in f if line.strip()]
+            logging.info(f"Загружен список из {len(instrument_list)} инструментов из файла: {list_path}")
+        except FileNotFoundError:
+            parser.error(f"Файл со списком не найден: {list_path}")
+
+    download_data(args.exchange, instrument_list, args.interval, args.days, args.category, args.data_dir)
 
 
 if __name__ == "__main__":

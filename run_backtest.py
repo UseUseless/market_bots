@@ -89,21 +89,25 @@ def _prepare_data(
 ) -> Optional[pd.DataFrame]:
     """Загружает и подготавливает исторические данные."""
     logging.info("Начало этапа подготовки данных...")
-    # Загружаем данные (TOHLCV (time, open, high, low, close, volume)) из локального файла
     raw_data = data_handler.load_raw_data()
-    # Если файла не нашлось, возвращает пустой df
     if raw_data.empty:
         logging.error("Не удалось получить данные для бэктеста. Завершение работы.")
-        return
+        return None
 
-    # Этап 1: Добавляем общие фичи (например, ATR)
+    if len(raw_data) < strategy.min_history_needed:
+        logging.error("="*80)
+        logging.error(f"ОШИБКА: Недостаточно данных для запуска стратегии '{strategy.name}'.")
+        logging.error(f"Требуется как минимум {strategy.min_history_needed} свечей, но после фильтрации доступно только {len(raw_data)}.")
+        logging.error("Решение: Загрузите больший период исторических данных с помощью download_data.py")
+        logging.error("="*80)
+        return None
+
     common_features_data = feature_engine.add_common_features(raw_data)
-    # Этап 2: Стратегия добавляет свои специфичные фичи
     enriched_data = strategy.prepare_data(common_features_data)
 
     if enriched_data.empty:
         logging.warning("Нет данных для запуска бэктеста после подготовки (возможно, из-за короткого периода истории).")
-        return
+        return None
 
     logging.info("Этап подготовки данных завершен.")
     return enriched_data

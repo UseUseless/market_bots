@@ -224,8 +224,8 @@ def _render_mode1_ui(comp_analyzer: ComparativeAnalyzer, summary_df: pd.DataFram
 
 
 def _render_mode2_ui(comp_analyzer: ComparativeAnalyzer, summary_df: pd.DataFrame):
-    """Отрисовывает UI для режима 2: Анализ робастности."""
-    st.subheader("2. Анализ робастности стратегии")
+    """Отрисовывает UI для режима 2: Анализ одной стратегии на разных инструментах."""
+    st.subheader("2. Анализ одной стратегии на разных инструментах")
 
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -235,10 +235,10 @@ def _render_mode2_ui(comp_analyzer: ComparativeAnalyzer, summary_df: pd.DataFram
     with col3:
         selected_rm = st.selectbox("Риск-менеджер:", summary_df["Risk Manager"].unique(), key="c2_rm")
 
-    selected_instruments = st.multiselect("Выберите инструменты для портфеля:", summary_df["Instrument"].unique(),
+    selected_instruments = st.multiselect("Выберите инструменты для агрегации:", summary_df["Instrument"].unique(),
                                           key="c2_instrs")
 
-    if st.button("Анализировать робастность", key="c2_btn"):
+    if st.button("Анализировать стратегию", key="c2_btn"):
         if len(selected_instruments) < 2:
             st.warning("Пожалуйста, выберите хотя бы два инструмента.")
         else:
@@ -253,8 +253,9 @@ def _render_mode2_ui(comp_analyzer: ComparativeAnalyzer, summary_df: pd.DataFram
 
 
 def _render_mode3_ui(comp_analyzer: ComparativeAnalyzer, summary_df: pd.DataFrame):
-    """Отрисовывает UI для режима 3: Портфель vs Портфель."""
-    st.subheader("3. Сравнение портфельных результатов")
+    """Отрисовывает UI для режима 3: Агрегированный результат vs Агрегированный результат."""
+    st.subheader("3. Сравнение агрегированных результатов\n"
+                 "(выбери разные стратегии и одинаковые инструменты, на которых был проведен бэктест на этих стратегиях)")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -263,14 +264,14 @@ def _render_mode3_ui(comp_analyzer: ComparativeAnalyzer, summary_df: pd.DataFram
         selected_rm = st.selectbox("Общий риск-менеджер:", summary_df["Risk Manager"].unique(), key="c3_rm")
 
     selected_strategies = st.multiselect("Выберите стратегии:", summary_df["Strategy"].unique(), key="c3_strats")
-    selected_instruments = st.multiselect("Выберите инструменты для портфеля:", summary_df["Instrument"].unique(),
+    selected_instruments = st.multiselect("Выберите инструменты для агрегации и сравнения:", summary_df["Instrument"].unique(),
                                           key="c3_instrs")
 
-    if st.button("Сравнить портфели", key="c3_btn"):
+    if st.button("Сравнить результаты", key="c3_btn"):
         if len(selected_strategies) < 2 or len(selected_instruments) < 2:
             st.warning("Пожалуйста, выберите хотя бы 2 стратегии и 2 инструмента.")
         else:
-            with st.spinner("Выполняется сравнение портфелей..."):
+            with st.spinner("Выполняется сравнение результатов..."):
                 metrics_df, fig = comp_analyzer.compare_aggregated_strategies(
                     strategy_names=selected_strategies, instruments=selected_instruments,
                     interval=selected_interval, risk_manager=selected_rm
@@ -315,7 +316,7 @@ def render_comparative_analysis_section(summary_df: pd.DataFrame):
     comp_analyzer = ComparativeAnalyzer(summary_df)
     comparison_mode = st.radio(
         "Выберите режим сравнения:",
-        ["1. Стратегия vs Стратегия", "2. Анализ робастности", "3. Портфель vs Портфель"],
+        ["1. Стратегия vs Стратегия", "2. 1 стратегия. Разные инструменты", "3. Агрегированный результат vs Агрегированный результат"],
         horizontal=True
     )
     st.markdown("---")
