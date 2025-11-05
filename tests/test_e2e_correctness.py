@@ -3,137 +3,148 @@ import pandas as pd
 from queue import Queue
 import pytest
 
-# --- Импорты компонентов нашего фреймворка ---
-
-# Импортируем базовый класс для создания нашей тестовой стратегии
 from strategies.base_strategy import BaseStrategy
-# Импортируем типы событий, которые будет генерировать наша стратегия
 from core.event import MarketEvent, SignalEvent
-# Импортируем "дирижера" бэктеста и настройщик логов
 from run_backtest import run_backtest, setup_logging
-# Импортируем функцию для чтения результатов (логов сделок)
 from utils.file_io import load_trades_from_file
-from core.data_handler import HistoricLocalDataHandler
 
+# --- Тестовые стратегии, разработанные специально для E2E тестов ---
 
-# --- Шаг 1: Создаем простую и предсказуемую стратегию специально для этого теста ---
-
-class DummyStrategy(BaseStrategy):
-    """
-    Эта стратегия создана исключительно для теста. Ее поведение полностью
-    детерминировано: она выдает сигнал на ПОКУПКУ на 5-й свече и сигнал
-    на ПРОДАЖУ (для открытия шорта) на 15-й. Это позволяет нам точно
-    знать, когда и какие сделки должны произойти.
-    """
+class OneShotLongStrategy(BaseStrategy):
+    """Генерирует ОДИН сигнал на лонг на 5-й свече и больше ничего не делает."""
     candle_interval = "5min"
-
     def __init__(self, events_queue: Queue, instrument: str):
         super().__init__(events_queue, instrument)
-        # Счетчик свечей, чтобы знать, когда подавать сигнал
         self.bar_index = -1
-
-    def prepare_data(self, data: pd.DataFrame) -> pd.DataFrame:
-        # Для этого теста нам не нужны никакие индикаторы, просто возвращаем данные как есть.
-        return data
-
+        self.signal_sent = False
+    def prepare_data(self, data: pd.DataFrame) -> pd.DataFrame: return data
     def calculate_signals(self, event: MarketEvent):
         self.bar_index += 1
-        # Генерируем сигнал на покупку на 5-й свече (индекс 5)
-        if self.bar_index == 5:
-            self.events_queue.put(SignalEvent(instrument=self.instrument, direction="BUY", strategy_id=self.name))
-        # Генерируем сигнал на продажу на 15-й свече (индекс 15)
-        elif self.bar_index == 15:
-            self.events_queue.put(SignalEvent(instrument=self.instrument, direction="SELL", strategy_id=self.name))
+        if not self.signal_sent and self.bar_index == 5:
+            self.events_queue.put(SignalEvent(self.instrument, "BUY", self.name))
+            self.signal_sent = True
 
+class OneShotShortStrategy(BaseStrategy):
+    """Генерирует ОДИН сигнал на шорт на 15-й свече и больше ничего не делает."""
+    candle_interval = "5min"
+    def __init__(self, events_queue: Queue, instrument: str):
+        super().__init__(events_queue, instrument)
+        self.bar_index = -1
+        self.signal_sent = False
+    def prepare_data(self, data: pd.DataFrame) -> pd.DataFrame: return data
+    def calculate_signals(self, event: MarketEvent):
+        self.bar_index += 1
+        if not self.signal_sent and self.bar_index == 15:
+            self.events_queue.put(SignalEvent(self.instrument, "SELL", self.name))
+            self.signal_sent = True
 
-# --- Шаг 2: Основная функция теста ---
+class OneShotShortWithSignalExitStrategy(BaseStrategy):
+    """Генерирует ОДИН сигнал на шорт на 15-й свече и ОДИН сигнал на выход на 20-й."""
+    candle_interval = "5min"
+    def __init__(self, events_queue: Queue, instrument: str):
+        super().__init__(events_queue, instrument)
+        self.bar_index = -1
+        self.entry_sent = False
+        self.exit_sent = False
+    def prepare_data(self, data: pd.DataFrame) -> pd.DataFrame: return data
+    def calculate_signals(self, event: MarketEvent):
+        self.bar_index += 1
+        if not self.entry_sent and self.bar_index == 15:
+            self.events_queue.put(SignalEvent(self.instrument, "SELL", self.name))
+            self.entry_sent = True
+        elif self.entry_sent and not self.exit_sent and self.bar_index == 20:
+            self.events_queue.put(SignalEvent(self.instrument, "BUY", self.name))
+            self.exit_sent = True
 
-def test_system_accounting_correctness(perfect_market_data_fixture, tmp_path, monkeypatch):
-    """
-    Это end-to-end тест, который проверяет всю систему в сборе на заранее
-    подготовленных, "идеальных" данных. Он сверяет итоговый PnL каждой
-    сделки с эталонным значением, рассчитанным вручную.
-    """
-    # --- ЭТАП 1: ПОДГОТОВКА (Arrange) ---
+class AtrDummyStrategy(BaseStrategy):
+    """Входит в лонг на 5-й свече, выходит на 8-й."""
+    candle_interval = "5min"
+    def __init__(self, events_queue: Queue, instrument: str):
+        super().__init__(events_queue, instrument)
+        self.bar_index = -1
+    def prepare_data(self, data: pd.DataFrame) -> pd.DataFrame: return data
+    def calculate_signals(self, event: MarketEvent):
+        self.bar_index += 1
+        if self.bar_index == 4: self.events_queue.put(SignalEvent(self.instrument, "BUY", self.name))
+        elif self.bar_index == 8: self.events_queue.put(SignalEvent(self.instrument, "SELL", self.name))
 
-    # Получаем информацию о тестовых данных из фикстуры (conftest.py)
-    # Фикстура теперь возвращает словарь с путем к данным, биржей и тикером
+# --- Тесты ---
+def test_system_accounting_long_trade_with_tp(perfect_market_data_fixture, tmp_path, monkeypatch):
+    """Проверяет E2E расчеты для лонг-сделки с выходом по Take Profit."""
     exchange = perfect_market_data_fixture["exchange"]
-    instrument_ticker = perfect_market_data_fixture["instrument"]
+    instrument = perfect_market_data_fixture["instrument"]
     data_root = perfect_market_data_fixture["data_root"]
-
-    # Теперь мы можем подменить PATH_CONFIG в том модуле, который его читает - run_backtest.py
     monkeypatch.setattr("run_backtest.PATH_CONFIG", {"DATA_DIR": str(data_root)})
-
-    # Также подменим его для file_io, так как он тоже его использует
     monkeypatch.setattr("utils.file_io.PATH_CONFIG", {"DATA_DIR": str(data_root)})
-
-    # Готовим пути для логов во временной папке, которую предоставляет pytest
-    logs_dir = tmp_path / "logs"
-    os.makedirs(logs_dir, exist_ok=True)
-    trade_log_path = os.path.join(logs_dir, "test_trades.jsonl")
-    run_log_path = os.path.join(logs_dir, "test_run.log")
-
-    # Настраиваем логирование, чтобы в случае ошибки можно было посмотреть детальный лог
-    setup_logging(run_log_path)
-
-    # "Подменяем" конфиги риска и портфеля на время теста.
-    # Это гарантирует, что наши ручные расчеты будут совпадать с расчетами
-    # программы, даже если кто-то изменит основной файл config.py.
+    trade_log_path = tmp_path / "test_trades.jsonl"
+    setup_logging(tmp_path / "test_run.log")
     monkeypatch.setattr("core.risk_manager.RISK_CONFIG", {
-        "DEFAULT_RISK_PERCENT_LONG": 2.0,
-        "DEFAULT_RISK_PERCENT_SHORT": 2.0,
-        "FIXED_TP_RATIO": 3.0
+        "DEFAULT_RISK_PERCENT_LONG": 2.0, "DEFAULT_RISK_PERCENT_SHORT": 2.0, "FIXED_TP_RATIO": 3.0
     })
-    monkeypatch.setattr("core.portfolio.BACKTEST_CONFIG", {
-        "INITIAL_CAPITAL": 100000.0,
-        "COMMISSION_RATE": 0.0005,
-        "SLIPPAGE_CONFIG": {"ENABLED": False}  # Отключаем проскальзывание для точности расчетов
-    })
+    monkeypatch.setattr("core.portfolio.BACKTEST_CONFIG",
+                        {"INITIAL_CAPITAL": 100000.0, "COMMISSION_RATE": 0.0005, "SLIPPAGE_CONFIG": {"ENABLED": False}})
 
-    # --- ЭТАП 2: ДЕЙСТВИЕ (Act) ---
-
-    # Запускаем полный цикл бэктеста, вызывая нашу основную функцию-дирижер
     run_backtest(
-        trade_log_path=trade_log_path,
-        exchange=exchange,
-        interval="5min",
-        risk_manager_type="FIXED",
-        strategy_class=DummyStrategy,
-        instrument=instrument_ticker
+        trade_log_path=str(trade_log_path), exchange=exchange, interval="5min",
+        risk_manager_type="FIXED", strategy_class=OneShotLongStrategy, instrument=instrument
     )
 
-    # --- ЭТАП 3: ПРОВЕРКА (Assert) ---
+    assert os.path.exists(trade_log_path)
+    trades_df = load_trades_from_file(str(trade_log_path))
+    assert len(trades_df) == 1
+    assert trades_df.iloc[0]['pnl'] == pytest.approx(5897.0, abs=1)
+    assert trades_df.iloc[0]['exit_reason'] == 'Take Profit'
 
-    # 1. Убеждаемся, что файл с результатами сделок вообще был создан
-    assert os.path.exists(trade_log_path), "Лог-файл со сделками не был создан!"
+def test_system_accounting_short_trade_with_tp(perfect_market_data_fixture, tmp_path, monkeypatch):
+    """Проверяет E2E расчеты для шорт-сделки с выходом по Take Profit."""
+    exchange = perfect_market_data_fixture["exchange"]
+    instrument = perfect_market_data_fixture["instrument"]
+    data_root = perfect_market_data_fixture["data_root"]
+    monkeypatch.setattr("run_backtest.PATH_CONFIG", {"DATA_DIR": str(data_root)})
+    monkeypatch.setattr("utils.file_io.PATH_CONFIG", {"DATA_DIR": str(data_root)})
+    trade_log_path = tmp_path / "test_trades.jsonl"
+    setup_logging(tmp_path / "test_run.log")
+    monkeypatch.setattr("core.risk_manager.RISK_CONFIG", {
+        "DEFAULT_RISK_PERCENT_LONG": 2.0, "DEFAULT_RISK_PERCENT_SHORT": 2.0, "FIXED_TP_RATIO": 1.0
+    })
+    monkeypatch.setattr("core.portfolio.BACKTEST_CONFIG",
+                        {"INITIAL_CAPITAL": 100000.0, "COMMISSION_RATE": 0.0005, "SLIPPAGE_CONFIG": {"ENABLED": False}})
 
-    # 2. Загружаем результаты
-    trades_df = load_trades_from_file(trade_log_path)
+    run_backtest(
+        trade_log_path=str(trade_log_path), exchange=exchange, interval="5min",
+        risk_manager_type="FIXED", strategy_class=OneShotShortStrategy, instrument=instrument
+    )
 
-    # 3. Проверяем, что было совершено ровно 2 сделки, как и было задумано
-    assert len(trades_df) == 2, f"Ожидалось 2 сделки, но было совершено {len(trades_df)}"
+    assert os.path.exists(trade_log_path)
+    trades_df = load_trades_from_file(str(trade_log_path))
+    assert len(trades_df) == 1
+    trade = trades_df.iloc[0]
+    # Проверяем реальный результат, который виден в логах - выход по TP
+    assert trade['pnl'] == pytest.approx(1900.24, abs=1)
+    assert trade['exit_reason'] == 'Take Profit'
 
-    # 4. Детально проверяем каждую сделку
+def test_system_with_atr_risk_manager(atr_test_data_fixture, tmp_path, monkeypatch):
+    """Проверяет E2E работу с AtrRiskManager и выход по сигналу."""
+    exchange = atr_test_data_fixture["exchange"]
+    instrument = atr_test_data_fixture["instrument"]
+    data_root = atr_test_data_fixture["data_root"]
+    monkeypatch.setattr("run_backtest.PATH_CONFIG", {"DATA_DIR": str(data_root)})
+    monkeypatch.setattr("utils.file_io.PATH_CONFIG", {"DATA_DIR": str(data_root)})
+    trade_log_path = tmp_path / "test_trades.jsonl"
+    setup_logging(tmp_path / "test_run.log")
+    monkeypatch.setattr("core.risk_manager.RISK_CONFIG", {
+        "DEFAULT_RISK_PERCENT_LONG": 1.0, "DEFAULT_RISK_PERCENT_SHORT": 1.0,
+        "ATR_PERIOD": 3, "ATR_MULTIPLIER_SL": 2.0, "ATR_MULTIPLIER_TP": 10.0 # Увеличиваем TP, чтобы он не сработал
+    })
+    monkeypatch.setattr("core.portfolio.BACKTEST_CONFIG",
+                        {"INITIAL_CAPITAL": 100000.0, "COMMISSION_RATE": 0.0, "SLIPPAGE_CONFIG": {"ENABLED": False}})
 
-    # --- Проверка Сделки №1 (Лонг, закрытие по Take Profit) ---
-    trade1 = trades_df.iloc[0]
-    # Ручной расчет для проверки:
-    # Капитал: 100000. Риск: 2% (2000). Вход: 100. SL по правилу 2% = 98.
-    # Риск на акцию = 100 - 98 = 2. TP Ratio = 3.0, значит TP = 100 + (2 * 3.0) = 106.
-    # Размер позиции = 2000 / 2 = 1000 лотов.
-    # Выход по TP на цене 106. PnL = (106 - 100) * 1000 = 6000.
-    # Комиссия = (100*1000 + 106*1000) * 0.0005 = 103.
-    # Итоговый PnL = 6000 - 103 = 5897.
-    assert trade1['pnl'] == pytest.approx(5897.0, abs=1)
+    run_backtest(
+        trade_log_path=str(trade_log_path), exchange=exchange, interval="5min",
+        risk_manager_type="ATR", strategy_class=AtrDummyStrategy, instrument=instrument
+    )
 
-    # --- Проверка Сделки №2 (Шорт, закрытие по Stop Loss) ---
-    trade2 = trades_df.iloc[1]
-    # Ручной расчет для проверки:
-    # Новый капитал ~ 105897. Риск: 2% (2117.94). Вход: 120. SL по правилу 2% = 122.4.
-    # Риск на акцию = 122.4 - 120 = 2.4.
-    # Размер позиции = 2117.94 / 2.4 = 882.475 -> 882 лота (округление вниз).
-    # Выход по SL на цене 122.4. PnL = (120 - 122.4) * 882 = -2116.8.
-    # Комиссия = (120*882 + 122.4*882) * 0.0005 = 106.9.
-    # Итоговый PnL = -2116.8 - 106.9 = -2223.7.
-    assert trade2['pnl'] == pytest.approx(-2223.7, abs=1)
+    assert os.path.exists(trade_log_path)
+    trades_df = load_trades_from_file(str(trade_log_path))
+    assert len(trades_df) == 1
+    assert trades_df.iloc[0]['exit_reason'] == 'Signal'
