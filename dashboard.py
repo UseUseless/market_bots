@@ -6,9 +6,11 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import numpy as np
 from typing import Dict, Any, Optional
+
 from utils.file_io import load_trades_from_file
 from analyzer import BacktestAnalyzer
 from config import PATH_CONFIG, BACKTEST_CONFIG
+from comparative_analyzer import ComparativeAnalyzer
 
 # --- Конфигурация страницы Streamlit ---
 st.set_page_config(
@@ -62,6 +64,7 @@ def _process_single_backtest_file(file_path: str) -> Optional[Dict[str, Any]]:
             "Win Rate (%)": float(metrics["Win Rate"].replace('%', '')),
             "Max Drawdown (%)": float(metrics["Max Drawdown"].replace('%', '')),
             "Profit Factor": float(metrics["Profit Factor"]),
+            "Sharpe Ratio": float(metrics.get("Sharpe Ratio", 0.0)),
             "Total Trades": int(metrics["Total Trades"]),
         }
     except Exception as e:
@@ -163,41 +166,185 @@ def plot_trades_on_chart(historical_data: pd.DataFrame, trades_df: pd.DataFrame)
     )
     st.plotly_chart(fig, use_container_width=True)
 
+def style_summary_table(df: pd.DataFrame):
+    """
+    Применяет продвинутую стилизацию к сводной таблице результатов.
+    - Подсвечивает PnL (зеленый/красный).
+    - Использует цветовые градиенты для ключевых метрик.
+    - Подсвечивает лучшие/худшие значения.
+    """
+    # Задаем формат отображения для всех float колонок
+    format_dict = {
+        "PnL (Strategy %)": "{:.2f}%",
+        "PnL (B&H %)": "{:.2f}%",
+        "Win Rate (%)": "{:.2f}%",
+        "Max Drawdown (%)": "{:.2f}%",
+        "Profit Factor": "{:.2f}",
+        "Sharpe Ratio": "{:.2f}",
+    }
+
+    # Применяем стили
+    styler = df.style.format(format_dict, na_rep="-") \
+        .background_gradient(cmap='Greens', subset=['PnL (Strategy %)', 'Profit Factor', 'Sharpe Ratio']) \
+        .background_gradient(cmap='Reds_r', subset=['Max Drawdown (%)']) \
+        .apply(lambda x: ['background-color: #d62728' if v < 0 else 'background-color: #2ca02c' for v in x],
+               subset=['PnL (Strategy %)']) \
+        .highlight_max(subset=['PnL (Strategy %)', 'Win Rate (%)', 'Profit Factor', 'Sharpe Ratio'], color='#5fba7d') \
+        .highlight_min(subset=['Max Drawdown (%)'], color='#d62728')
+
+    return styler
+
+
+def _render_mode1_ui(comp_analyzer: ComparativeAnalyzer, summary_df: pd.DataFrame):
+    """Отрисовывает UI для режима 1: Стратегия vs Стратегия."""
+    st.subheader("1. Сравнение стратегий на одном инструменте")
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        selected_instrument = st.selectbox("Инструмент:", summary_df["Instrument"].unique(), key="c1_instr")
+    with col2:
+        selected_interval = st.selectbox("Интервал:", summary_df["Interval"].unique(), key="c1_interval")
+    with col3:
+        selected_rm = st.selectbox("Риск-менеджер:", summary_df["Risk Manager"].unique(), key="c1_rm")
+
+    selected_strategies = st.multiselect("Выберите стратегии для сравнения:", summary_df["Strategy"].unique(),
+                                         key="c1_strats")
+
+    if st.button("Сравнить стратегии", key="c1_btn"):
+        if len(selected_strategies) < 2:
+            st.warning("Пожалуйста, выберите хотя бы две стратегии.")
+        else:
+            with st.spinner("Выполняется сравнение..."):
+                metrics_df, fig = comp_analyzer.compare_strategies_on_instrument(
+                    strategy_names=selected_strategies, instrument=selected_instrument,
+                    interval=selected_interval, risk_manager=selected_rm
+                )
+                st.dataframe(metrics_df.style.format("{:.2f}"))
+                st.plotly_chart(fig, use_container_width=True)
+
+
+def _render_mode2_ui(comp_analyzer: ComparativeAnalyzer, summary_df: pd.DataFrame):
+    """Отрисовывает UI для режима 2: Анализ робастности."""
+    st.subheader("2. Анализ робастности стратегии")
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        selected_strategy = st.selectbox("Стратегия:", summary_df["Strategy"].unique(), key="c2_strat")
+    with col2:
+        selected_interval = st.selectbox("Интервал:", summary_df["Interval"].unique(), key="c2_interval")
+    with col3:
+        selected_rm = st.selectbox("Риск-менеджер:", summary_df["Risk Manager"].unique(), key="c2_rm")
+
+    selected_instruments = st.multiselect("Выберите инструменты для портфеля:", summary_df["Instrument"].unique(),
+                                          key="c2_instrs")
+
+    if st.button("Анализировать робастность", key="c2_btn"):
+        if len(selected_instruments) < 2:
+            st.warning("Пожалуйста, выберите хотя бы два инструмента.")
+        else:
+            with st.spinner("Выполняется анализ..."):
+                metrics_df, fig = comp_analyzer.analyze_instrument_robustness(
+                    strategy_name=selected_strategy, instruments=selected_instruments,
+                    interval=selected_interval, risk_manager=selected_rm
+                )
+                st.dataframe(metrics_df.style.format(subset=pd.IndexSlice[:, metrics_df.columns != 'Total Trades'],
+                                                     formatter="{:.2f}"))
+                st.plotly_chart(fig, use_container_width=True)
+
+
+def _render_mode3_ui(comp_analyzer: ComparativeAnalyzer, summary_df: pd.DataFrame):
+    """Отрисовывает UI для режима 3: Портфель vs Портфель."""
+    st.subheader("3. Сравнение портфельных результатов")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        selected_interval = st.selectbox("Общий интервал:", summary_df["Interval"].unique(), key="c3_interval")
+    with col2:
+        selected_rm = st.selectbox("Общий риск-менеджер:", summary_df["Risk Manager"].unique(), key="c3_rm")
+
+    selected_strategies = st.multiselect("Выберите стратегии:", summary_df["Strategy"].unique(), key="c3_strats")
+    selected_instruments = st.multiselect("Выберите инструменты для портфеля:", summary_df["Instrument"].unique(),
+                                          key="c3_instrs")
+
+    if st.button("Сравнить портфели", key="c3_btn"):
+        if len(selected_strategies) < 2 or len(selected_instruments) < 2:
+            st.warning("Пожалуйста, выберите хотя бы 2 стратегии и 2 инструмента.")
+        else:
+            with st.spinner("Выполняется сравнение портфелей..."):
+                metrics_df, fig = comp_analyzer.compare_aggregated_strategies(
+                    strategy_names=selected_strategies, instruments=selected_instruments,
+                    interval=selected_interval, risk_manager=selected_rm
+                )
+                st.dataframe(metrics_df.style.format(subset=pd.IndexSlice[:, metrics_df.columns != 'Total Trades'],
+                                                     formatter="{:.2f}"))
+                st.plotly_chart(fig, use_container_width=True)
+
+def render_detailed_analysis_section(filtered_df: pd.DataFrame):
+    """Отрисовывает секцию детального анализа для УЖЕ отфильтрованных данных."""
+    st.header("Детальный анализ отдельного бэктеста")
+
+    if filtered_df.empty:
+        st.warning("По выбранным фильтрам не найдено ни одного бэктеста для детального анализа.")
+        return
+
+    selected_file = st.selectbox("Выберите бэктест для детального анализа:", options=filtered_df["File"].tolist())
+    if selected_file:
+        trades_df = load_trades_from_file(os.path.join(PATH_CONFIG["LOGS_DIR"], selected_file))
+        row = filtered_df[filtered_df["File"] == selected_file].iloc[0]
+        data_path = os.path.join(PATH_CONFIG["DATA_DIR"], row["Exchange"], row["Interval"],
+                                 f"{row['Instrument']}.parquet")
+        historical_data = pd.read_parquet(data_path)
+        analyzer = BacktestAnalyzer(
+            trades_df=trades_df, historical_data=historical_data,
+            initial_capital=BACKTEST_CONFIG["INITIAL_CAPITAL"],
+            interval=row["Interval"], risk_manager_type=row["Risk Manager"]
+        )
+        analyzer.trades['drawdown_percent'] = (analyzer.trades['equity_curve'] / analyzer.trades[
+            'equity_curve'].cummax() - 1) * 100
+
+        tab1, tab2, tab3 = st.tabs(["📈 Кривая капитала", "📊 Анализ PnL", "🕯️ График сделок"])
+        with tab1: plot_equity_and_drawdown(analyzer)
+        with tab2: plot_pnl_distribution(analyzer); plot_monthly_pnl(analyzer)
+        with tab3: plot_trades_on_chart(historical_data, trades_df)
+
+
+def render_comparative_analysis_section(summary_df: pd.DataFrame):
+    """Отрисовывает UI для секции сравнительного анализа."""
+    st.divider()
+    st.header("🔬 Сравнительный анализ")
+    comp_analyzer = ComparativeAnalyzer(summary_df)
+    comparison_mode = st.radio(
+        "Выберите режим сравнения:",
+        ["1. Стратегия vs Стратегия", "2. Анализ робастности", "3. Портфель vs Портфель"],
+        horizontal=True
+    )
+    st.markdown("---")
+    if "1." in comparison_mode:
+        _render_mode1_ui(comp_analyzer, summary_df)
+    elif "2." in comparison_mode:
+        _render_mode2_ui(comp_analyzer, summary_df)
+    elif "3." in comparison_mode:
+        _render_mode3_ui(comp_analyzer, summary_df)
+
 # Основная часть приложения
-st.title("🤖 Панель анализа торговых стратегий")
+def main():
+    st.title("🤖 Панель анализа торговых стратегий")
 
-summary_df = load_all_backtests(PATH_CONFIG["LOGS_DIR"])
+    summary_df = load_all_backtests(PATH_CONFIG["LOGS_DIR"])
 
-if summary_df.empty:
-    st.warning("Не найдено ни одного файла с результатами бэктестов (`_trades.jsonl`) в папке `logs/`.")
-    st.info("Запустите бэктест с помощью `run_backtest.py` или `batch_tester.py`, чтобы сгенерировать результаты.")
-else:
-    # Боковая панель с фильтрами
+    if summary_df.empty:
+        st.warning("Не найдено ни одного файла с результатами бэктестов (`_trades.jsonl`) в папке `logs/`.")
+        st.info("Запустите бэктест, чтобы сгенерировать результаты.")
+        return
+
+    # --- Боковая панель с фильтрами ---
     st.sidebar.header("Фильтры")
+    selected_exchanges = st.sidebar.multiselect("Биржи", options=summary_df["Exchange"].unique(), default=summary_df["Exchange"].unique())
+    selected_strategies = st.sidebar.multiselect("Стратегии", options=summary_df["Strategy"].unique(), default=summary_df["Strategy"].unique())
+    selected_instruments = st.sidebar.multiselect("Инструменты", options=summary_df["Instrument"].unique(), default=summary_df["Instrument"].unique())
+    selected_rms = st.sidebar.multiselect("Риск-менеджеры", options=summary_df["Risk Manager"].unique(), default=summary_df["Risk Manager"].unique())
 
-    # Фильтр по бирже
-    selected_exchanges = st.sidebar.multiselect(
-        "Биржи",
-        options=summary_df["Exchange"].unique(),
-        default=summary_df["Exchange"].unique()
-    )
-    selected_strategies = st.sidebar.multiselect(
-        "Стратегии",
-        options=summary_df["Strategy"].unique(),
-        default=summary_df["Strategy"].unique()
-    )
-    selected_instruments = st.sidebar.multiselect(
-        "Инструменты",
-        options=summary_df["Instrument"].unique(),
-        default=summary_df["Instrument"].unique()
-    )
-    selected_rms = st.sidebar.multiselect(
-        "Риск-менеджеры",
-        options=summary_df["Risk Manager"].unique(),
-        default=summary_df["Risk Manager"].unique()
-    )
-
-    # Применяем фильтры
+    # Применяем фильтры один раз
     filtered_df = summary_df[
         (summary_df["Exchange"].isin(selected_exchanges)) &
         (summary_df["Strategy"].isin(selected_strategies)) &
@@ -205,46 +352,13 @@ else:
         (summary_df["Risk Manager"].isin(selected_rms))
     ]
 
-    # Основной экран
+    # --- Отображение сводной таблицы ---
     st.header("Сводная таблица результатов")
-    st.dataframe(filtered_df.style.format({
-        "PnL (Strategy %)": "{:.2f}%", "PnL (B&H %)": "{:.2f}%", "Win Rate (%)": "{:.2f}%",
-        "Max Drawdown (%)": "{:.2f}%", "Profit Factor": "{:.2f}",
-    }), use_container_width=True)
+    st.dataframe(style_summary_table(filtered_df), use_container_width=True)
 
-    st.header("Детальный анализ бэктеста")
+    # --- Отображение секций анализа ---
+    render_detailed_analysis_section(filtered_df) # Передаем отфильтрованные данные
+    render_comparative_analysis_section(summary_df) # Сравнительный анализ работает со всеми данными
 
-    if filtered_df.empty:
-        st.warning("По выбранным фильтрам не найдено ни одного бэктеста.")
-    else:
-        selected_file = st.selectbox(
-            "Выберите бэктест для детального анализа:",
-            options=filtered_df["File"].tolist()
-        )
-
-        if selected_file:
-            trades_df = load_trades_from_file(os.path.join(PATH_CONFIG["LOGS_DIR"], selected_file))
-            row = filtered_df[filtered_df["File"] == selected_file].iloc[0]
-
-            data_path = os.path.join(PATH_CONFIG["DATA_DIR"], row["Exchange"], row["Interval"], f"{row['Instrument']}.parquet")
-            historical_data = pd.read_parquet(data_path)
-
-            analyzer = BacktestAnalyzer(
-                trades_df=trades_df,
-                historical_data=historical_data,
-                initial_capital=BACKTEST_CONFIG["INITIAL_CAPITAL"],
-                interval=row["Interval"],
-                risk_manager_type=row["Risk Manager"]
-            )
-
-            analyzer.trades['drawdown_percent'] = (analyzer.trades['equity_curve'] / analyzer.trades['equity_curve'].cummax() - 1) * 100
-
-            tab1, tab2, tab3 = st.tabs(["📈 Кривая капитала и просадки", "📊 Анализ PnL", "🕯️ График сделок"])
-
-            with tab1:
-                plot_equity_and_drawdown(analyzer)
-            with tab2:
-                plot_pnl_distribution(analyzer)
-                plot_monthly_pnl(analyzer)
-            with tab3:
-                plot_trades_on_chart(historical_data, trades_df)
+if __name__ == "__main__":
+    main()
