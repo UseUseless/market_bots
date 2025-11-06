@@ -120,7 +120,12 @@ class Portfolio:
         if exit_reason:
             logging.warning(f"!!! СРАБОТАЛ {exit_reason.upper()} для {event.instrument}. Генерирую ордер на закрытие.")
             # Создаем приказ (OrderEvent) на закрытие позиции
-            order = OrderEvent(instrument=event.instrument, quantity=position['quantity'], direction=exit_direction)
+            order = OrderEvent(
+                timestamp=event.timestamp,
+                instrument=event.instrument,
+                quantity=position['quantity'],
+                direction=exit_direction
+            )
             # Кладем OrderEvent в общую очередь событий
             self.events_queue.put(order)
             # Добавляем ордер в список ожидающих на исполнение, чтобы его исполнить в первую очередь
@@ -167,7 +172,7 @@ class Portfolio:
             if quantity > 0:
                 logging.info(
                     f"Расчетное кол-во: {quantity_float:.4f}, скорректировано до {quantity} с учетом правил биржи.")
-                order = OrderEvent(instrument=event.instrument, quantity=quantity, direction=event.direction)
+                order = OrderEvent(timestamp=event.timestamp, instrument=event.instrument, quantity=quantity, direction=event.direction)
                 self.events_queue.put(order)
                 self.pending_orders.add(event.instrument)
                 logging.info(f"Портфель генерирует ордер на {event.direction} {quantity} лот(ов) {event.instrument}")
@@ -233,7 +238,7 @@ class Portfolio:
                 # И оба в очередь-конвейер
                 # Портфель бы их последовательно обработал.
 
-                order = OrderEvent(instrument=event.instrument, quantity=position['quantity'], direction=event.direction)
+                order = OrderEvent(timestamp=event.timestamp, instrument=event.instrument, quantity=position['quantity'], direction=event.direction)
                 # Кладем приказ в очередь
                 self.events_queue.put(order)
                 # Также помечаем ордер на закрытие как ожидающий
@@ -416,11 +421,5 @@ class Portfolio:
         if not position: # Так как в position нет текущего instrument
             self._handle_fill_open(event, last_candle)
         # --- Сценарий 2: Закрытие СУЩЕСТВУЮЩЕЙ позиции ---
-        # Так как позиция есть (не прошла if выше) и её направление
-        # противоположно направлению исполненного ордера (FillEvent).
-        #
-        # Да, проверка лишняя (можно просто else), но она добавляет наглядности,
-        # так как если направление позиции совпадает с сигналом,
-        # то on_signal ордер не откроет.
-        elif event.direction != position['direction']:
+        else:
             self._handle_fill_close(event, position, last_candle)

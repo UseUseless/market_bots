@@ -169,28 +169,32 @@ def _run_event_loop(
                 break
         # Выполняется, если мы достали событие
         else:
-            # MarketEvent это первоначальное событие
-            # Поэтому обновляем время в логгере
-            if isinstance(event, MarketEvent):
-                backtest_time_filter.set_sim_time(event.timestamp)
+            try:
+                # MarketEvent это первоначальное событие
+                # Поэтому обновляем время в логгере
+                if isinstance(event, MarketEvent):
+                    backtest_time_filter.set_sim_time(event.timestamp)
 
-            # --- МАРШРУТИЗАТОР СОБЫТИЙ ---
-            # Проверяем класс события и отправляем соответствующему обработчику
-            if isinstance(event, MarketEvent):
-                # Рыночные данные отправляем в Портфель для сохранения данных свечи и проверки есть ли уже
-                # по данному инструменту позиции (лоты) (может их стоит закрыть по SL/TP)
-                portfolio.update_market_price(event)
-                # В Стратегию для расчета сигнала
-                strategy.calculate_signals(event)
-            elif isinstance(event, SignalEvent):
-                # Сигнал от стратегии отправляем в Портфель на решение об открытии/закрытии позиции
-                portfolio.on_signal(event)
-            elif isinstance(event, OrderEvent):
-                # Выполняем ордер
-                execution_handler.execute_order(event)
-            elif isinstance(event, FillEvent):
-                # Расчеты статистики и сохранение после закрытия позиции
-                portfolio.on_fill(event)
+                # --- МАРШРУТИЗАТОР СОБЫТИЙ ---
+                # Проверяем класс события и отправляем соответствующему обработчику
+                if isinstance(event, MarketEvent):
+                    # Рыночные данные отправляем в Портфель для сохранения данных свечи и проверки есть ли уже
+                    # по данному инструменту позиции (лоты) (может их стоит закрыть по SL/TP)
+                    portfolio.update_market_price(event)
+                    # В Стратегию для расчета сигнала
+                    strategy.calculate_signals(event)
+                elif isinstance(event, SignalEvent):
+                    # Сигнал от стратегии отправляем в Портфель на решение об открытии/закрытии позиции
+                    portfolio.on_signal(event)
+                elif isinstance(event, OrderEvent):
+                    # Выполняем ордер
+                    execution_handler.execute_order(event)
+                elif isinstance(event, FillEvent):
+                    # Расчеты статистики и сохранение после закрытия позиции
+                    portfolio.on_fill(event)
+            except Exception as e:
+                logging.error(f"Критическая ошибка при обработке события {type(event).__name__}: {e}", exc_info=True)
+                break
 
     # Сбрасываем время симуляции в логгере после окончания цикла
     backtest_time_filter.reset_sim_time()

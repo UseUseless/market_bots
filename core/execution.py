@@ -36,7 +36,7 @@ class SimulatedExecutionHandler(ExecutionHandler):
         ответственность Portfolio, который знает последнюю рыночную цену.
         """
         fill_event = FillEvent(
-            timestamp=datetime.now(UTC),
+            timestamp=event.timestamp,
             instrument=event.instrument,
             quantity=event.quantity,
             direction=event.direction,

@@ -40,9 +40,10 @@ class OrderEvent(Event):
     Событие для отправки ордера на исполнение.
     Генерируется Portfolio.
     """
+    timestamp: datetime
     instrument: str
     quantity: int
-    direction: str  # 'BUY' или 'SELL'
+    direction: str
 
 @dataclass
 class FillEvent(Event):

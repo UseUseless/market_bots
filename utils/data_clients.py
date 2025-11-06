@@ -9,7 +9,7 @@ import time
 # --- Библиотеки для Tinkoff ---
 from tinkoff.invest import Client, RequestError, CandleInterval, InstrumentStatus, SecurityTradingStatus
 from tinkoff.invest.utils import now, quotation_to_decimal
-from config import TOKEN_READONLY
+from config import TOKEN_READONLY, EXCHANGE_SPECIFIC_CONFIG
 
 # --- Библиотеки для Bybit ---
 from pybit.unified_trading import HTTP
@@ -56,11 +56,12 @@ class TinkoffClient(BaseDataClient):
             try:
                 found = c.instruments.find_instrument(query=instrument)
                 if not found.instruments: raise ValueError(f"Инструмент '{instrument}' не найден.")
-                target_instrument = next((instr for instr in found.instruments if instr.class_code == 'TQBR'),
+                class_code = EXCHANGE_SPECIFIC_CONFIG['tinkoff']['DEFAULT_CLASS_CODE']
+                target_instrument = next((instr for instr in found.instruments if instr.class_code == class_code),
                                          found.instruments[0])
-                if target_instrument.class_code != 'TQBR':
+                if target_instrument.class_code != class_code:
                     logging.warning(
-                        f"Инструмент для '{instrument}' не найден в class_code 'TQBR'. Используется: {target_instrument.name} ({target_instrument.class_code})")
+                        f"Инструмент для '{instrument}' не найден в class_code '{class_code}'. Используется: {target_instrument.name} ({target_instrument.class_code})")
                 figi = target_instrument.figi
                 logging.info(f"Найден FIGI: {figi} для инструмента '{target_instrument.name}'")
                 return figi
