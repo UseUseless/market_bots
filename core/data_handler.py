@@ -6,6 +6,7 @@ import os
 from datetime import time
 
 from core.event import Event
+from config import EXCHANGE_SPECIFIC_CONFIG
 
 class DataHandler(ABC):
     """
@@ -35,11 +36,20 @@ class HistoricLocalDataHandler(DataHandler):
 
     def _filter_main_session(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Фильтрует DataFrame, оставляя только данные основной торговой сессии MOEX.
-        (09:50-18:30 MSK, что соответствует 06:50-15:30 UTC).
+        Фильтрует DataFrame, оставляя только данные основной торговой сессии,
+        если она определена в конфиге для данной биржи.
         """
-        main_session_start = time(6, 50)
-        main_session_end = time(15, 30)
+        # <-- ИЗМЕНЕНИЕ: Вся логика теперь зависит от конфига
+        exchange_config = EXCHANGE_SPECIFIC_CONFIG.get(self.exchange)
+        if not exchange_config or not exchange_config.get("SESSION_START_UTC"):
+            logging.info(f"Фильтрация по сессии для биржи '{self.exchange}' не применяется (24/7).")
+            return df
+
+        start_str = exchange_config["SESSION_START_UTC"]
+        end_str = exchange_config["SESSION_END_UTC"]
+
+        main_session_start = time.fromisoformat(start_str)
+        main_session_end = time.fromisoformat(end_str)
 
         original_rows = len(df)
         df_filtered = df[
@@ -62,8 +72,7 @@ class HistoricLocalDataHandler(DataHandler):
             df = pd.read_parquet(self.file_path)
             logging.info(f"DataHandler (Local): Успешно загружено {len(df)} свечей из файла.")
 
-            if self.exchange == 'tinkoff':
-                df = self._filter_main_session(df)
+            df = self._filter_main_session(df)
 
             return df
         except FileNotFoundError:

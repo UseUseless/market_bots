@@ -200,7 +200,8 @@ def _analyze_results(
                 historical_data=enriched_data,
                 initial_capital=initial_capital,
                 interval=interval,
-                risk_manager_type=risk_manager_type
+                risk_manager_type=risk_manager_type,
+                exchange=portfolio.exchange
             )
             analyzer.generate_report(report_filename)
         except Exception as e:

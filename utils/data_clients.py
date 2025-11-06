@@ -43,7 +43,7 @@ class BaseDataClient(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def get_top_liquid_instruments(self) -> List[str]:
+    def get_top_liquid_by_turnover(self, count: int) -> List[str]:
         raise NotImplementedError
 
 
@@ -126,8 +126,8 @@ class TinkoffClient(BaseDataClient):
             logging.error(f"Tinkoff Client: Не удалось получить информацию об инструменте {instrument}: {e}")
             return {}
 
-    def get_top_liquid_instruments(self) -> List[str]:
-        logging.info("Tinkoff Client: Запрос топ-50 ликвидных акций MOEX по дневному обороту...")
+    def get_top_liquid_by_turnover(self, count: int) -> List[str]:
+        logging.info(f"Tinkoff Client: Запрос топ-{count} ликвидных акций MOEX по дневному обороту...")
         try:
             with Client(self.read_token) as client:
                 all_shares = client.instruments.shares(
@@ -170,7 +170,7 @@ class TinkoffClient(BaseDataClient):
                         continue
 
                 sorted_shares = sorted(share_data, key=lambda x: x['turnover_rub'], reverse=True)
-                top_tickers = [s['ticker'] for s in sorted_shares[:50]]
+                top_tickers = [s['ticker'] for s in sorted_shares[:count]]
                 logging.info(f"Получено {len(top_tickers)} самых ликвидных тикеров по дневному обороту.")
                 return top_tickers
         except Exception as e:
@@ -244,8 +244,8 @@ class BybitClient(BaseDataClient):
             logging.error(f"Bybit Client: Не удалось получить информацию об инструменте {instrument}: {e}")
             return {}
 
-    def get_top_liquid_instruments(self) -> List[str]:
-        logging.info("Bybit Client: Запрос топ-50 ликвидных USDT-фьючерсов по обороту...")
+    def get_top_liquid_by_turnover(self, count: int) -> List[str]:
+        logging.info(f"Bybit Client: Запрос топ-{count} ликвидных USDT-фьючерсов по обороту...")
         try:
             tickers_response = self.client.get_tickers(category="linear")
             if tickers_response.get("retCode") != 0:
@@ -255,7 +255,7 @@ class BybitClient(BaseDataClient):
             for instr in instruments:
                 instr['turnover24h'] = float(instr.get('turnover24h', 0))
             sorted_instruments = sorted(instruments, key=lambda x: x['turnover24h'], reverse=True)
-            top_tickers = [instr['symbol'] for instr in sorted_instruments[:50]]
+            top_tickers = [instr['symbol'] for instr in sorted_instruments[:count]]
             logging.info(f"Получено {len(top_tickers)} самых ликвидных тикеров Bybit.")
             return top_tickers
         except Exception as e:

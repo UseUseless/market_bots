@@ -6,7 +6,7 @@ import logging
 from rich.console import Console
 from rich.table import Table
 
-from config import PATH_CONFIG
+from config import PATH_CONFIG, EXCHANGE_SPECIFIC_CONFIG
 
 class BacktestAnalyzer:
     """
@@ -16,7 +16,8 @@ class BacktestAnalyzer:
 
     def __init__(self, trades_df: pd.DataFrame, historical_data: pd.DataFrame,
                  initial_capital: float, interval: str, risk_manager_type: str,
-                 report_dir: str = PATH_CONFIG["REPORTS_DIR"]):
+                 report_dir: str = PATH_CONFIG["REPORTS_DIR"],
+                 exchange: str = 'tinkoff'):
         # Проверяем, что нам вообще передали какие-то данные
         if trades_df.empty:
             raise ValueError("DataFrame со сделками не может быть пустым.")
@@ -27,6 +28,7 @@ class BacktestAnalyzer:
         self.interval = interval
         self.risk_manager_type = risk_manager_type
         self.report_dir = report_dir
+        self.exchange = exchange
         os.makedirs(self.report_dir, exist_ok=True)
         
         # Считаем накопительный PnL после каждой сделки
@@ -76,6 +78,9 @@ class BacktestAnalyzer:
         # Отношение прибылей к убыткам. Обрабатываем случай деления на ноль.
         profit_factor = gross_profit / gross_loss if gross_loss != 0 else float('inf')
 
+        exchange_config = EXCHANGE_SPECIFIC_CONFIG[self.exchange]
+        sharpe_factor = exchange_config["SHARPE_ANNUALIZATION_FACTOR"]
+
         # Упрощенный расчет Sharpe Ratio (без учета безрисковой ставки)
         # 1. Считаем доходность от сделки к сделке.
         daily_returns = self.trades['equity_curve'].pct_change().dropna()
@@ -98,7 +103,7 @@ class BacktestAnalyzer:
             "Win Rate": f"{win_rate:.2f}%",
             "Max Drawdown": f"{max_drawdown:.2f}%",
             "Profit Factor": f"{profit_factor:.2f}",
-            "Sharpe Ratio": f"{sharpe_ratio:.2f}",
+            "Sharpe Ratio": f"{sharpe_ratio:.2f} (ann. by {sharpe_factor}d)",
             "Total Trades": len(self.trades)
         }
 
@@ -144,7 +149,7 @@ class BacktestAnalyzer:
         console = Console()
         table = Table(title=f"Отчет о производительности: {report_filename}", show_header=True,
                       header_style="bold magenta")
-        table.add_column("Метрика", style="dim", width=20)
+        table.add_column("Метрика", style="dim", width=25)
         table.add_column("Значение", justify="right")
 
         for key, value in metrics.items():

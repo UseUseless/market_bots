@@ -8,7 +8,9 @@ from core.execution import ExecutionHandler
 from utils.trade_clients import TinkoffTradeClient, BybitTradeClient, BaseTradeClient
 from tinkoff.invest import AsyncClient, OrderExecutionReportStatus
 
-from config import TOKEN_SANDBOX, TOKEN_READONLY, BYBIT_TESTNET_API_KEY, BYBIT_TESTNET_API_SECRET, TOKEN_FULL_ACCESS
+from config import (TOKEN_SANDBOX, TOKEN_READONLY, BYBIT_TESTNET_API_KEY,
+                    BYBIT_TESTNET_API_SECRET, TOKEN_FULL_ACCESS,
+                    LIVE_TRADING_CONFIG, EXCHANGE_SPECIFIC_CONFIG)
 
 
 class LiveExecutionHandler(ExecutionHandler):
@@ -42,10 +44,11 @@ class LiveExecutionHandler(ExecutionHandler):
         if instrument in self.figi_cache:
             return self.figi_cache[instrument]
 
+        class_code = EXCHANGE_SPECIFIC_CONFIG['tinkoff']['DEFAULT_CLASS_CODE']
         logging.info(f"LiveExecutionHandler (Tinkoff): Поиск FIGI для {instrument}...")
         async with AsyncClient(token=TOKEN_READONLY) as client:
             response = await client.instruments.find_instrument(query=instrument)
-            instrument_info = next((instr for instr in response.instruments if instr.class_code == 'TQBR'), None)
+            instrument_info = next((instr for instr in response.instruments if instr.class_code == class_code), None)
             if not instrument_info:
                 raise ValueError(f"Инструмент '{instrument}' не найден.")
 
@@ -154,8 +157,8 @@ class LiveExecutionHandler(ExecutionHandler):
 
             except Exception as e:
                 logging.error(
-                    f"LiveExecutionHandler: Критическая ошибка в потоке сделок: {e}. Переподключение через 10 секунд...")
-                await asyncio.sleep(10)
+                    f"LiveExecutionHandler: Критическая ошибка в потоке сделок: {e}. Переподключение через {LIVE_TRADING_CONFIG['LIVE_RECONNECT_DELAY_SECONDS']} секунд...")
+                await asyncio.sleep(LIVE_TRADING_CONFIG['LIVE_RECONNECT_DELAY_SECONDS'])
 
     def stop(self):
         """Останавливает фоновую задачу."""

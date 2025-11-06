@@ -22,11 +22,21 @@ PATH_CONFIG = {
     "REPORTS_DIR": "reports", # Папка для хранения графических отчетов анализа (.png).
 }
 
+DATA_FILE_EXTENSION = ".parquet"
+
 # Настройки для загрузчика данных (download_data.py)
 DATA_LOADER_CONFIG = {
     # Количество дней истории, которое будет загружено по умолчанию,
     # если не указать флаг --days при запуске download_data.py.
-    "DAYS_TO_LOAD": 365
+    "DAYS_TO_LOAD": 365,
+    "LIQUID_INSTRUMENTS_COUNT": 50
+}
+
+LIVE_TRADING_CONFIG = {
+    # Задержка перед переподключением к стриму в секундах
+    "LIVE_RECONNECT_DELAY_SECONDS": 10,
+    # Множитель для размера исторического буфера в live-режиме
+    "LIVE_HISTORY_BUFFER_MULTIPLIER": 2,
 }
 
 # Настройки для бэктестера (portfolio.py)
@@ -75,6 +85,24 @@ RISK_CONFIG = {
                                 # Соотношение TP/SL здесь 4.0/2.0 = 2, что дает нам Risk/Reward Ratio 1:2.
 }
 
+EXCHANGE_SPECIFIC_CONFIG = {
+    "tinkoff": {
+        "SHARPE_ANNUALIZATION_FACTOR": 252,
+        # Время основной сессии MOEX в UTC
+        "SESSION_START_UTC": "06:50",
+        "SESSION_END_UTC": "15:30",
+        # Класс-код для поиска акций
+        "DEFAULT_CLASS_CODE": "TQBR",
+    },
+    "bybit": {
+        # Для крипты, торгующейся 24/7, коэффициент 365
+        "SHARPE_ANNUALIZATION_FACTOR": 365,
+        # None означает отсутствие фильтрации по сессии (торговля 24/7)
+        "SESSION_START_UTC": None,
+        "SESSION_END_UTC": None,
+    }
+}
+
 # --- НАСТРОЙКИ КОНКРЕТНЫХ СТРАТЕГИЙ ---
 # Свой собственный словарь с настройками для каждой стратегии.
 STRATEGY_CONFIG = {
@@ -112,7 +140,6 @@ STRATEGY_CONFIG = {
             "atr_ts_multiplier": 3.0
         },
 
-        # ... (остальные параметры без изменений)
         "ClassicSqueeze_params": {
             "bb_len": 20, "bb_std": 2.0, "kc_len": 20,
             "kc_atr_multiplier": 1.5, "trend_ema_period": 50

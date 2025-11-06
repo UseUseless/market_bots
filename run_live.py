@@ -16,7 +16,7 @@ from strategies.base_strategy import BaseStrategy
 from core.risk_manager import RiskManagerType
 
 from strategies import AVAILABLE_STRATEGIES
-
+from config import LIVE_TRADING_CONFIG
 
 # --- Основной асинхронный движок ---
 
@@ -34,6 +34,7 @@ async def main_event_loop(
     }
     history_df = pd.DataFrame({col: pd.Series(dtype=typ) for col, typ in schema.items()})
     min_history_size = strategy.min_history_needed
+    buffer_size = int(min_history_size * LIVE_TRADING_CONFIG['LIVE_HISTORY_BUFFER_MULTIPLIER'])
     logging.info(f"Стратегия требует минимум {min_history_size} свечей для начала работы.")
 
     while True:
@@ -52,8 +53,8 @@ async def main_event_loop(
             history_df = pd.concat([history_df, new_candle], ignore_index=True)
             history_df = history_df.astype(schema)
 
-            if len(history_df) > min_history_size * 2:
-                history_df = history_df.iloc[-(min_history_size * 2):].reset_index(drop=True)
+            if len(history_df) > buffer_size:
+                history_df = history_df.iloc[-buffer_size:].reset_index(drop=True)
 
             if len(history_df) < min_history_size:
                 logging.debug(f"Накопление данных... {len(history_df)}/{min_history_size} свечей.")
