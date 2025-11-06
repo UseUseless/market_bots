@@ -86,4 +86,53 @@ STRATEGY_CONFIG = {
         "ema_trend_period": 200,
         "volume_sma_period": 20,
     },
+    "VolatilityBreakoutStrategy": {
+        "candle_interval": "1hour",
+        "variant": "ADX_Donchian",
+
+        # --- СЕКЦИЯ УПРАВЛЕНИЯ ВХОДОМ ---
+        "entry_logic": {
+            # 1. Использовать ли свечу подтверждения после пробоя.
+            "confirm_breakout": False,
+
+            # 2. Ждать ли отката (pullback) к EMA после подтвержденного пробоя.
+            # Работает, только если confirm_breakout = True.
+            "wait_for_pullback": False,
+
+            # 3. Период EMA, к которой мы ждем откат.
+            "pullback_ema_period": 8,
+
+            # 4. Таймаут: сколько свечей мы готовы ждать отката, прежде чем отменить сигнал.
+            "pullback_timeout_bars": 5
+        },
+
+        "exit_logic": {
+            "use_trailing_stop": False,
+            "atr_ts_period": 14,
+            "atr_ts_multiplier": 3.0
+        },
+
+        # ... (остальные параметры без изменений)
+        "ClassicSqueeze_params": {
+            "bb_len": 20, "bb_std": 2.0, "kc_len": 20,
+            "kc_atr_multiplier": 1.5, "trend_ema_period": 50
+        },
+        "ADX_Donchian_params": {
+            "bb_len": 20, "bb_std": 2.0, "squeeze_period": 50,
+            "squeeze_quantile": 0.05, "donchian_len": 20,
+            "adx_len": 14, "adx_threshold": 20
+        }
+    },
+    "MeanReversionStrategy": {
+        "candle_interval": "15min",  # Рекомендуемый интервал. Хорошо работает на младших и средних таймфреймах.
+
+        # Период для расчета скользящей средней и стандартного отклонения.
+        # Классическое значение - 20.
+        "sma_period": 20,
+
+        # Пороги Z-Score для входа в позицию.
+        # Значения 2.0 и -2.0 соответствуют примерно 95% доверительному интервалу.
+        "z_score_upper_threshold": 2.0,
+        "z_score_lower_threshold": -2.0
+    },
 }
