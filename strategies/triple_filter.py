@@ -1,11 +1,11 @@
 import pandas as pd
-import pandas_ta as ta
 from queue import Queue
 import logging
 
 from core.event import MarketEvent, SignalEvent
 from strategies.base_strategy import BaseStrategy
 from config import STRATEGY_CONFIG
+
 
 class TripleFilterStrategy(BaseStrategy):
     """
@@ -17,60 +17,49 @@ class TripleFilterStrategy(BaseStrategy):
 
     _config = STRATEGY_CONFIG["TripleFilterStrategy"]
     candle_interval: str = _config["candle_interval"]
-
-    min_history_needed: int = _config["ema_trend_period"] + 1  # EMA_200 + запас
+    min_history_needed: int = _config["ema_trend_period"] + 1
 
     def __init__(self, events_queue: Queue, instrument: str):
         super().__init__(events_queue, instrument)
 
-        # Периоды
         self.ema_fast_period = self._config["ema_fast_period"]
         self.ema_slow_period = self._config["ema_slow_period"]
         self.ema_trend_period = self._config["ema_trend_period"]
         self.volume_sma_period = self._config["volume_sma_period"]
 
-        # Имена колонок
+        # Декларируем наши потребности
+        self.required_indicators = [
+            {"name": "ema", "params": {"period": self.ema_fast_period}},
+            {"name": "ema", "params": {"period": self.ema_slow_period}},
+            {"name": "ema", "params": {"period": self.ema_trend_period}},
+            {"name": "sma", "params": {"period": self.volume_sma_period, "column": "volume"}},
+        ]
+
+        # Имена колонок теперь соответствуют генерации в FeatureEngine
         self.ema_fast_name = f'EMA_{self.ema_fast_period}'
         self.ema_slow_name = f'EMA_{self.ema_slow_period}'
         self.ema_trend_name = f'EMA_{self.ema_trend_period}'
-        self.volume_sma_name = f'Volume_SMA_{self.volume_sma_period}'
+        self.volume_sma_name = f'SMA_{self.volume_sma_period}_volume'
 
-        # Внутреннее состояние стратегии. Храним только 2 последние свечи для анализа
         self.data_history = []
 
     def prepare_data(self, data: pd.DataFrame) -> pd.DataFrame:
         """
-        Рассчитывает и добавляет в DataFrame индикаторы,
-        необходимые для работы этой конкретной стратегии.
+        Метод теперь пустой. Все расчеты делегированы FeatureEngine.
+        Он может быть использован в будущем для уникальных, сложных расчетов.
         """
-        logging.info(f"Стратегия '{self.name}' подготавливает данные (расчет EMA, SMA)...")
-        try:
-            data.ta.ema(length=self.ema_fast_period, append=True, col_names=(self.ema_fast_name,))
-            data.ta.ema(length=self.ema_slow_period, append=True, col_names=(self.ema_slow_name,))
-            data.ta.ema(length=self.ema_trend_period, append=True, col_names=(self.ema_trend_name,))
-            data.ta.sma(length=self.volume_sma_period, close='volume', append=True, col_names=(self.volume_sma_name,))
-            
-            # Удаляем строки с NaN, которые образуются в начале из-за расчета EMA
-            # И именно после всех расчетов
-            data.dropna(inplace=True)
-            data.reset_index(drop=True, inplace=True)
-            logging.info("Подготовка данных для TripleFilterStrategy завершена.")
-        except Exception as e:
-            logging.error(f"Ошибка при расчете индикаторов в TripleFilterStrategy: {e}")
-            # Возвращаем пустой DataFrame в случае ошибки
-            return pd.DataFrame()
-            
         return data
 
     def calculate_signals(self, event: MarketEvent):
         """
         Анализирует последнюю свечу и генерирует сигнал BUY или SELL,
         если все три "фильтра" стратегии совпадают.
+        Логика здесь не изменилась, только имена колонок.
         """
         self.data_history.append(event.data)
         if len(self.data_history) > 2:
             self.data_history.pop(0)
-        
+
         if len(self.data_history) < 2:
             return
 
@@ -82,7 +71,7 @@ class TripleFilterStrategy(BaseStrategy):
         buy_impulse = prev_candle[self.ema_fast_name] < prev_candle[self.ema_slow_name] and \
                       last_candle[self.ema_fast_name] > last_candle[self.ema_slow_name]
         buy_volume = last_candle['volume'] > last_candle[self.volume_sma_name]
-        
+
         if buy_trend and buy_impulse and buy_volume:
             signal = SignalEvent(instrument=self.instrument, direction="BUY", strategy_id=self.name)
             self.events_queue.put(signal)
@@ -93,7 +82,7 @@ class TripleFilterStrategy(BaseStrategy):
         sell_impulse = prev_candle[self.ema_fast_name] > prev_candle[self.ema_slow_name] and \
                        last_candle[self.ema_fast_name] < last_candle[self.ema_slow_name]
         sell_volume = last_candle['volume'] > last_candle[self.volume_sma_name]
-        
+
         if sell_trend and sell_impulse and sell_volume:
             signal = SignalEvent(instrument=self.instrument, direction="SELL", strategy_id=self.name)
             self.events_queue.put(signal)

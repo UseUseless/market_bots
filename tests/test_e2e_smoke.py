@@ -48,22 +48,24 @@ def test_run_smoke(rm_type, fixture_name, request, tmp_path):
     for f in required_files: shutil.copy(f, test_workdir)
     for d in ["core", "utils", "strategies"]: shutil.copytree(d, test_workdir / d)
 
-    # --- ГЛАВНОЕ ИСПРАВЛЕНИЕ: Добавляем сигнал на выход ---
     test_strategy_code = """
 from strategies.base_strategy import BaseStrategy
 from core.event import MarketEvent, SignalEvent
+import pandas as pd
 class SmokeTestStrategy(BaseStrategy):
     candle_interval = "5min"
+    required_indicators = []
+    min_history_needed = 1
     def __init__(self, events_queue, instrument):
         super().__init__(events_queue, instrument)
         self.bar_index = -1; self.entry_sent = False
-    def prepare_data(self, data): return data
+    def prepare_data(self, data: pd.DataFrame) -> pd.DataFrame: return data
     def calculate_signals(self, event):
         self.bar_index += 1
-        if not self.entry_sent and self.bar_index == 5:
+        if not self.entry_sent and self.bar_index == 4: # <-- Входим на 4-й
             self.events_queue.put(SignalEvent(self.instrument, "BUY", self.name))
             self.entry_sent = True
-        elif self.entry_sent and self.bar_index == 8: # Выходим на 9-й свече
+        elif self.entry_sent and self.bar_index == 7: # <-- ВЫХОДИМ НА 7-й (последней)
             self.events_queue.put(SignalEvent(self.instrument, "SELL", self.name))
 """
     (test_workdir / "strategies" / "smoke_test_strategy.py").write_text(test_strategy_code, encoding='utf-8')
@@ -84,8 +86,13 @@ class SmokeTestStrategy(BaseStrategy):
         "--interval", "5min",
         "--rm", rm_type
     ]
+    # <-- Добавим вывод для отладки в случае будущих проблем
+    result = subprocess.run(command, capture_output=True, text=True, check=False, cwd=test_workdir)
+    if result.returncode != 0:
+        print("STDOUT:", result.stdout)
+        print("STDERR:", result.stderr)
+        assert result.returncode == 0, "Процесс бэктеста завершился с ошибкой"
 
-    subprocess.run(command, capture_output=True, text=True, check=True, cwd=test_workdir)
 
     assert os.path.exists(test_workdir / "logs")
     assert os.path.exists(test_workdir / "reports")

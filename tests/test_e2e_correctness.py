@@ -13,6 +13,7 @@ from utils.file_io import load_trades_from_file
 class OneShotLongStrategy(BaseStrategy):
     """Генерирует ОДИН сигнал на лонг на 5-й свече и больше ничего не делает."""
     candle_interval = "5min"
+    required_indicators = []
     def __init__(self, events_queue: Queue, instrument: str):
         super().__init__(events_queue, instrument)
         self.bar_index = -1
@@ -27,6 +28,7 @@ class OneShotLongStrategy(BaseStrategy):
 class OneShotShortStrategy(BaseStrategy):
     """Генерирует ОДИН сигнал на шорт на 15-й свече и больше ничего не делает."""
     candle_interval = "5min"
+    required_indicators = []
     def __init__(self, events_queue: Queue, instrument: str):
         super().__init__(events_queue, instrument)
         self.bar_index = -1
@@ -41,6 +43,7 @@ class OneShotShortStrategy(BaseStrategy):
 class OneShotShortWithSignalExitStrategy(BaseStrategy):
     """Генерирует ОДИН сигнал на шорт на 15-й свече и ОДИН сигнал на выход на 20-й."""
     candle_interval = "5min"
+    required_indicators = []
     def __init__(self, events_queue: Queue, instrument: str):
         super().__init__(events_queue, instrument)
         self.bar_index = -1
@@ -57,16 +60,21 @@ class OneShotShortWithSignalExitStrategy(BaseStrategy):
             self.exit_sent = True
 
 class AtrDummyStrategy(BaseStrategy):
-    """Входит в лонг на 5-й свече, выходит на 8-й."""
+    """Входит в лонг на 4-й свече, выходит на 7-й."""
     candle_interval = "5min"
+    min_history_needed = 4
+    required_indicators = []
+
     def __init__(self, events_queue: Queue, instrument: str):
         super().__init__(events_queue, instrument)
         self.bar_index = -1
     def prepare_data(self, data: pd.DataFrame) -> pd.DataFrame: return data
     def calculate_signals(self, event: MarketEvent):
         self.bar_index += 1
-        if self.bar_index == 4: self.events_queue.put(SignalEvent(self.instrument, "BUY", self.name))
-        elif self.bar_index == 8: self.events_queue.put(SignalEvent(self.instrument, "SELL", self.name))
+        if self.bar_index == 4:
+            self.events_queue.put(SignalEvent(self.instrument, "BUY", self.name))
+        elif self.bar_index == 7:
+            self.events_queue.put(SignalEvent(self.instrument, "SELL", self.name))
 
 # --- Тесты ---
 def test_system_accounting_long_trade_with_tp(perfect_market_data_fixture, tmp_path, monkeypatch):

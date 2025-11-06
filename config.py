@@ -29,7 +29,7 @@ DATA_LOADER_CONFIG = {
     # Количество дней истории, которое будет загружено по умолчанию,
     # если не указать флаг --days при запуске download_data.py.
     "DAYS_TO_LOAD": 365,
-    "LIQUID_INSTRUMENTS_COUNT": 50
+    "LIQUID_INSTRUMENTS_COUNT": 20
 }
 
 LIVE_TRADING_CONFIG = {
@@ -37,6 +37,23 @@ LIVE_TRADING_CONFIG = {
     "LIVE_RECONNECT_DELAY_SECONDS": 10,
     # Множитель для размера исторического буфера в live-режиме
     "LIVE_HISTORY_BUFFER_MULTIPLIER": 2,
+}
+
+EXCHANGE_INTERVAL_MAPS = {
+    "tinkoff": {
+        "1min": "CANDLE_INTERVAL_1_MIN", "2min": "CANDLE_INTERVAL_2_MIN",
+        "3min": "CANDLE_INTERVAL_3_MIN", "5min": "CANDLE_INTERVAL_5_MIN",
+        "10min": "CANDLE_INTERVAL_10_MIN", "15min": "CANDLE_INTERVAL_15_MIN",
+        "30min": "CANDLE_INTERVAL_30_MIN", "1hour": "CANDLE_INTERVAL_HOUR",
+        "2hour": "CANDLE_INTERVAL_2_HOUR", "4hour": "CANDLE_INTERVAL_4_HOUR",
+        "1day": "CANDLE_INTERVAL_DAY", "1week": "CANDLE_INTERVAL_WEEK",
+        "1month": "CANDLE_INTERVAL_MONTH",
+    },
+    "bybit": {
+        "1min": "1", "3min": "3", "5min": "5", "15min": "15", "30min": "30", "1hour": "60",
+        "2hour": "120", "4hour": "240", "6hour": "360", "12hour": "720", "1day": "D",
+        "1week": "W", "1month": "M",
+    }
 }
 
 # Настройки для бэктестера (portfolio.py)
@@ -120,17 +137,20 @@ STRATEGY_CONFIG = {
 
         # --- СЕКЦИЯ УПРАВЛЕНИЯ ВХОДОМ ---
         "entry_logic": {
-            # 1. Использовать ли свечу подтверждения после пробоя.
+            # Сколько свечей после "выстрела" мы готовы ждать пробоя канала.
+            "breakout_timeout_bars": 3,
+
+            # Использовать ли свечу подтверждения после пробоя.
             "confirm_breakout": False,
 
-            # 2. Ждать ли отката (pullback) к EMA после подтвержденного пробоя.
+            # Ждать ли отката (pullback) к EMA после подтвержденного пробоя.
             # Работает, только если confirm_breakout = True.
             "wait_for_pullback": False,
 
-            # 3. Период EMA, к которой мы ждем откат.
+            # Период EMA, к которой мы ждем откат.
             "pullback_ema_period": 8,
 
-            # 4. Таймаут: сколько свечей мы готовы ждать отката, прежде чем отменить сигнал.
+            # Таймаут: сколько свечей мы готовы ждать отката, прежде чем отменить сигнал.
             "pullback_timeout_bars": 5
         },
 

@@ -1,7 +1,7 @@
 from queue import Queue
 import pandas as pd
 from abc import ABC, abstractmethod
-
+from typing import List, Dict, Any
 from core.event import MarketEvent
 
 class BaseStrategy(ABC):
@@ -15,14 +15,17 @@ class BaseStrategy(ABC):
 
     candle_interval: str
     min_history_needed: int = 1  # Минимальное кол-во свечей по умолчанию
-
+    # Декларация необходимых индикаторов
+    # Каждая дочерняя стратегия будет переопределять этот список.
+    # Пример: [{"name": "ema", "params": {"period": 9}}, {"name": "sma", "params": {"period": 20, "column": "volume"}}]
+    required_indicators: List[Dict[str, Any]] = []
     def __init__(self, events_queue: Queue, instrument: str):
         self.events_queue = events_queue
         self.instrument: str = instrument
 
         self.name: str = self.__class__.__name__
 
-    # --- КОНТРАКТ: Методы, которые должна определить каждая стратегия ---
+    # Методы, которые должна определить каждая стратегия
 
     @abstractmethod
     def prepare_data(self, data: pd.DataFrame) -> pd.DataFrame:

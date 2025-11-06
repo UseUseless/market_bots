@@ -85,25 +85,49 @@ def _initialize_components(
 def _prepare_data(
         data_handler: HistoricLocalDataHandler,
         feature_engine: FeatureEngine,
-        strategy: BaseStrategy
+        strategy: BaseStrategy,
+        risk_manager_type: str # <-- ИЗМЕНЕНИЕ: Добавляем risk_manager_type
 ) -> Optional[pd.DataFrame]:
-    """Загружает и подготавливает исторические данные."""
+    """Загружает, собирает требования к индикаторам и подготавливает исторические данные."""
     logging.info("Начало этапа подготовки данных...")
     raw_data = data_handler.load_raw_data()
     if raw_data.empty:
         logging.error("Не удалось получить данные для бэктеста. Завершение работы.")
         return None
 
-    if len(raw_data) < strategy.min_history_needed:
+    # <-- ИЗМЕНЕНИЕ: Новая логика сборки требований
+    # 1. Начинаем со списка требований от стратегии
+    all_requirements = strategy.required_indicators.copy()
+    logging.info(f"Стратегия '{strategy.name}' требует индикаторы: {all_requirements}")
+
+    # 2. Если используется ATR Risk Manager, добавляем требование на расчет ATR
+    if risk_manager_type == "ATR":
+        atr_requirement = {"name": "atr", "params": {"period": RISK_CONFIG["ATR_PERIOD"]}}
+        all_requirements.append(atr_requirement)
+        logging.info(f"AtrRiskManager требует индикатор: {atr_requirement}")
+
+    # 3. Передаем единый список требований в FeatureEngine
+    if all_requirements:
+        logging.info("FeatureEngine рассчитывает запрошенные индикаторы...")
+        prepared_data = feature_engine.add_required_features(raw_data, all_requirements)
+    else:
+        prepared_data = raw_data
+
+    # 4. Вызываем prepare_data стратегии для выполнения уникальных расчетов (если они есть)
+    enriched_data = strategy.prepare_data(prepared_data)
+
+    # Проверка на достаточность данных ПОСЛЕ всех расчетов и удаления NaN
+    if len(enriched_data) < strategy.min_history_needed:
         logging.error("="*80)
         logging.error(f"ОШИБКА: Недостаточно данных для запуска стратегии '{strategy.name}'.")
-        logging.error(f"Требуется как минимум {strategy.min_history_needed} свечей, но после фильтрации доступно только {len(raw_data)}.")
+        logging.error(f"Требуется как минимум {strategy.min_history_needed} свечей, но после подготовки доступно только {len(enriched_data)}.")
         logging.error("Решение: Загрузите больший период исторических данных с помощью download_data.py")
         logging.error("="*80)
         return None
 
-    common_features_data = feature_engine.add_common_features(raw_data)
-    enriched_data = strategy.prepare_data(common_features_data)
+    # Удаляем строки с NaN, которые могли образоваться после всех расчетов
+    enriched_data.dropna(inplace=True)
+    enriched_data.reset_index(drop=True, inplace=True)
 
     if enriched_data.empty:
         logging.warning("Нет данных для запуска бэктеста после подготовки (возможно, из-за короткого периода истории).")
@@ -275,7 +299,10 @@ def run_backtest(trade_log_path: str,
 
     # Подготавливаем данные
     enriched_data = _prepare_data(
-        components["data_handler"], components["feature_engine"], components["strategy"]
+        components["data_handler"],
+        components["feature_engine"],
+        components["strategy"],
+        risk_manager_type
     )
 
     # Не пускает None дальше.

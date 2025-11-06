@@ -1,4 +1,3 @@
-
 import pandas as pd
 from datetime import timedelta, datetime
 import logging
@@ -15,22 +14,7 @@ from config import TOKEN_READONLY
 # --- Библиотеки для Bybit ---
 from pybit.unified_trading import HTTP
 
-EXCHANGE_INTERVAL_MAPS = {
-    "tinkoff": {
-        "1min": CandleInterval.CANDLE_INTERVAL_1_MIN, "2min": CandleInterval.CANDLE_INTERVAL_2_MIN,
-        "3min": CandleInterval.CANDLE_INTERVAL_3_MIN, "5min": CandleInterval.CANDLE_INTERVAL_5_MIN,
-        "10min": CandleInterval.CANDLE_INTERVAL_10_MIN, "15min": CandleInterval.CANDLE_INTERVAL_15_MIN,
-        "30min": CandleInterval.CANDLE_INTERVAL_30_MIN, "1hour": CandleInterval.CANDLE_INTERVAL_HOUR,
-        "2hour": CandleInterval.CANDLE_INTERVAL_2_HOUR, "4hour": CandleInterval.CANDLE_INTERVAL_4_HOUR,
-        "1day": CandleInterval.CANDLE_INTERVAL_DAY, "1week": CandleInterval.CANDLE_INTERVAL_WEEK,
-        "1month": CandleInterval.CANDLE_INTERVAL_MONTH,
-    },
-    "bybit": {
-        "1min": "1", "3min": "3", "5min": "5", "15min": "15", "30min": "30", "1hour": "60",
-        "2hour": "120", "4hour": "240", "6hour": "360", "12hour": "720", "1day": "D",
-        "1week": "W", "1month": "M",
-    }
-}
+from config import EXCHANGE_INTERVAL_MAPS
 
 
 class BaseDataClient(ABC):
@@ -90,10 +74,13 @@ class TinkoffClient(BaseDataClient):
         except (ValueError, RequestError) as e:
             logging.error(f"Не удалось получить FIGI для '{instrument}'. {e}")
             return pd.DataFrame()
-        api_interval = EXCHANGE_INTERVAL_MAPS["tinkoff"].get(interval)
-        if not api_interval:
+
+        interval_name = EXCHANGE_INTERVAL_MAPS["tinkoff"].get(interval)
+        if not interval_name:
             logging.error(f"Неподдерживаемый интервал для Tinkoff: {interval}")
             return pd.DataFrame()
+        api_interval = getattr(CandleInterval, interval_name)
+
         all_candles = []
         start_date = now() - timedelta(days=days)
         print(f"Запрос данных Tinkoff для {instrument} ({figi}) с {start_date.date()}...")
@@ -132,11 +119,6 @@ class TinkoffClient(BaseDataClient):
             with Client(self.read_token) as client:
                 all_shares = client.instruments.shares(
                     instrument_status=InstrumentStatus.INSTRUMENT_STATUS_BASE).instruments
-
-                # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
-                # Мы расширяем фильтр, чтобы он включал не только акции, которые торгуются прямо сейчас (NORMAL_TRADING),
-                # но и те, которые доступны для торгов в принципе, но сейчас находятся в перерыве (NOT_AVAILABLE_FOR_TRADING).
-                # Это позволяет скрипту работать в любое время, включая выходные и неторговые часы.
                 tqbr_shares = [
                     s for s in all_shares
                     if s.class_code == 'TQBR'
@@ -147,7 +129,6 @@ class TinkoffClient(BaseDataClient):
                            SecurityTradingStatus.SECURITY_TRADING_STATUS_NOT_AVAILABLE_FOR_TRADING
                        ]
                 ]
-
                 share_data = []
                 for share_info in tqdm(tqbr_shares, desc="Получение оборотов по акциям"):
                     try:
@@ -168,7 +149,6 @@ class TinkoffClient(BaseDataClient):
                     except RequestError as e:
                         logging.warning(f"Не удалось получить данные для {share_info.ticker}: {e.details}")
                         continue
-
                 sorted_shares = sorted(share_data, key=lambda x: x['turnover_rub'], reverse=True)
                 top_tickers = [s['ticker'] for s in sorted_shares[:count]]
                 logging.info(f"Получено {len(top_tickers)} самых ликвидных тикеров по дневному обороту.")
@@ -184,8 +164,8 @@ class TinkoffClient(BaseDataClient):
 
 class BybitClient(BaseDataClient):
     def __init__(self):
-        self.client = HTTP(testnet=False)
-        logging.info("Клиент Bybit инициализирован.")
+        self.client = HTTP(testnet=False, timeout=10)
+        logging.info("Клиент Bybit инициализирован с таймаутом 10с.")
 
     def get_historical_data(self, instrument: str, interval: str, days: int, **kwargs) -> pd.DataFrame:
         category = kwargs.get("category", "linear")
@@ -194,35 +174,51 @@ class BybitClient(BaseDataClient):
         if not api_interval:
             logging.error(f"Неподдерживаемый интервал для Bybit: {interval}.")
             return pd.DataFrame()
+
+        limit = 1000  # Максимальное количество свечей за один запрос
         all_candles = []
         end_ts = int(datetime.now().timestamp() * 1000)
         start_ts = int((datetime.now() - timedelta(days=days)).timestamp() * 1000)
         print(
             f"Запрос данных Bybit для {instrument} ({category}) с {(datetime.now() - timedelta(days=days)).date()}...")
+
         with tqdm(total=days, desc="Прогресс загрузки", unit="дн.") as pbar:
             current_end_ts = end_ts
             while start_ts < current_end_ts:
                 try:
                     resp = self.client.get_kline(category=category, symbol=instrument, interval=api_interval,
-                                                 limit=1000, end=current_end_ts)
+                                                 limit=limit, end=current_end_ts)
                     if resp['retCode'] != 0:
-                        logging.error(f"Ошибка API Bybit: {resp['retMsg']}")
+                        logging.error(f"Ошибка API Bybit для {instrument}: {resp['retMsg']}")
                         break
+
                     candles = resp['result']['list']
-                    if not candles: break
+                    if not candles:
+                        logging.info(f"Для {instrument} больше нет доступных исторических данных. Завершение загрузки.")
+                        break
+
                     all_candles.extend(candles)
                     current_end_ts = int(candles[-1][0])
+
                     days_loaded = (datetime.fromtimestamp(end_ts / 1000) - datetime.fromtimestamp(
                         current_end_ts / 1000)).days
                     if days_loaded > pbar.n: pbar.update(days_loaded - pbar.n)
-                    time.sleep(0.1)
+
+                    if len(candles) < limit:
+                        logging.info(f"Получено меньше {limit} свечей, достигнут конец истории для {instrument}.")
+                        break
+
+                    time.sleep(0.3)
                 except Exception as e:
-                    logging.error(f"Непредвиденная ошибка при запросе к Bybit: {e}")
+                    logging.error(f"Непредвиденная ошибка при запросе к Bybit для {instrument}: {e}")
                     break
-            if pbar.n < days: pbar.update(days - pbar.n)
+
+            if pbar.n < pbar.total:
+                pbar.update(pbar.total - pbar.n)
+
         if not all_candles: return pd.DataFrame()
         df = pd.DataFrame(all_candles, columns=["time", "open", "high", "low", "close", "volume", "turnover"])
-        df['time'] = pd.to_datetime(df['time'], unit='ms')
+        df['time'] = pd.to_datetime(df['time'].astype(float), unit='ms')
         df = df[["time", "open", "high", "low", "close", "volume"]]
         for col in ["open", "high", "low", "close", "volume"]:
             df[col] = pd.to_numeric(df[col])

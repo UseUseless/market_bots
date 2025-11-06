@@ -6,7 +6,8 @@ from typing import List, Dict, Type
 
 from strategies.base_strategy import BaseStrategy
 from config import PATH_CONFIG
-from utils.data_clients import EXCHANGE_INTERVAL_MAPS
+
+from config import EXCHANGE_INTERVAL_MAPS
 
 # --- Константа для опции "Назад" ---
 GO_BACK_OPTION = "Назад"
@@ -32,7 +33,7 @@ def run_update_lists():
 
     exchange = questionary.select(
         "Выберите биржу, для которой нужно обновить список:",
-        choices=["tinkoff", "bybit", GO_BACK_OPTION],  # ИЗМЕНЕНИЕ: Добавлена опция "Назад"
+        choices=["tinkoff", "bybit", GO_BACK_OPTION],
         use_indicator=True
     ).ask()
 
@@ -47,7 +48,7 @@ def run_download_data():
     """Интерактивный запуск скачивания данных."""
     print("\n--- Скачивание исторических данных ---\n")
 
-    while True:  # ИЗМЕНЕНИЕ: Оборачиваем в цикл для возможности возврата
+    while True:
         download_mode = questionary.select(
             "Что вы хотите скачать?",
             choices=[
@@ -67,7 +68,7 @@ def run_download_data():
         ).ask()
 
         if exchange is None: return
-        if exchange == GO_BACK_OPTION: continue  # ИЗМЕНЕНИЕ: Возврат к предыдущему шагу
+        if exchange == GO_BACK_OPTION: continue
 
         command_args = []
         if "Отдельные тикеры" in download_mode:
@@ -97,6 +98,7 @@ def run_download_data():
             if selected_list == GO_BACK_OPTION: continue
             command_args = ["--list", selected_list]
 
+        # Используем импортированный маппинг
         available_intervals = list(EXCHANGE_INTERVAL_MAPS[exchange].keys())
         interval = questionary.select(
             "Выберите интервал:",
@@ -119,7 +121,7 @@ def run_download_data():
         ]
         print("\nЗапускаю скачивание...\n")
         subprocess.run(command)
-        break  # ИЗМЕНЕНИЕ: Выход из цикла после успешного запуска
+        break
 
 
 def run_single_backtest():
@@ -131,7 +133,7 @@ def run_single_backtest():
         print("Ошибка: не найдено ни одной доступной стратегии.")
         return
 
-    while True:  # ИЗМЕНЕНИЕ: Цикл для возврата
+    while True:
         strategy_name = questionary.select("Выберите стратегию:", choices=[*strategies.keys(), GO_BACK_OPTION]).ask()
         if strategy_name is None or strategy_name == GO_BACK_OPTION: return
 
@@ -139,6 +141,7 @@ def run_single_backtest():
         if exchange is None: return
         if exchange == GO_BACK_OPTION: continue
 
+        # Используем импортированный маппинг
         available_intervals = list(EXCHANGE_INTERVAL_MAPS[exchange].keys())
         interval = questionary.select(
             "Выберите интервал:",
@@ -153,7 +156,7 @@ def run_single_backtest():
         if not available_instruments:
             print(f"Ошибка: не найдено скачанных данных для биржи '{exchange}' и интервала '{interval}'.")
             print("Сначала скачайте данные с помощью соответствующего пункта меню.")
-            continue  # Возвращаемся к выбору стратегии
+            continue
 
         instrument = questionary.select("Выберите инструмент:", choices=[*available_instruments, GO_BACK_OPTION]).ask()
         if instrument is None: return
@@ -169,7 +172,7 @@ def run_single_backtest():
             "--instrument", instrument, "--interval", interval, "--rm", rm_type
         ]
         subprocess.run(command)
-        break  # ИЗМЕНЕНИЕ: Выход из цикла
+        break
 
 
 def run_batch_backtest():
@@ -181,7 +184,7 @@ def run_batch_backtest():
         print("Ошибка: не найдено ни одной доступной стратегии.")
         return
 
-    while True:  # ИЗМЕНЕНИЕ: Цикл для возврата
+    while True:
         strategy_name = questionary.select("Выберите стратегию:", choices=[*strategies.keys(), GO_BACK_OPTION]).ask()
         if strategy_name is None or strategy_name == GO_BACK_OPTION: return
 
@@ -189,6 +192,7 @@ def run_batch_backtest():
         if exchange is None: return
         if exchange == GO_BACK_OPTION: continue
 
+        # Используем импортированный маппинг
         available_intervals = list(EXCHANGE_INTERVAL_MAPS[exchange].keys())
         interval = questionary.select(
             "Выберите интервал:",
@@ -209,7 +213,7 @@ def run_batch_backtest():
             "--exchange", exchange, "--interval", interval, "--rm", rm_type
         ]
         subprocess.run(command)
-        break  # ИЗМЕНЕНИЕ: Выход из цикла
+        break
 
 
 def run_sandbox_trading():
@@ -221,7 +225,7 @@ def run_sandbox_trading():
         print("Ошибка: не найдено ни одной доступной стратегии.")
         return
 
-    while True:  # ИЗМЕНЕНИЕ: Цикл для возврата
+    while True:
         exchange = questionary.select("Выберите биржу:", choices=["bybit", "tinkoff", GO_BACK_OPTION]).ask()
         if exchange is None or exchange == GO_BACK_OPTION: return
 
@@ -235,6 +239,7 @@ def run_sandbox_trading():
         if strategy_name == GO_BACK_OPTION: continue
 
         live_intervals = ['1min', '3min', '5min', '15min']
+        # Используем импортированный маппинг
         available_intervals = [i for i in live_intervals if i in EXCHANGE_INTERVAL_MAPS[exchange]]
         interval = questionary.select("Выберите интервал:", choices=[*available_intervals, GO_BACK_OPTION],
                                       default="1min").ask()
@@ -263,7 +268,7 @@ def run_sandbox_trading():
 
         print("\nЗапускаю live-бота... Нажмите Ctrl+C в этом окне, чтобы остановить.")
         subprocess.run(command)
-        break  # ИЗМЕНЕНИЕ: Выход из цикла
+        break
 
 
 def run_dashboard():
@@ -312,9 +317,6 @@ def main():
                 action()
             except Exception as e:
                 print(f"\nПроизошла ошибка: {e}\n")
-
-        # ИЗМЕНЕНИЕ: Убираем "Press any key", чтобы меню появлялось сразу
-        # questionary.press_any_key_to_continue().ask()
 
 
 if __name__ == "__main__":
