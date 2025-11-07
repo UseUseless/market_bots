@@ -91,47 +91,83 @@ class Portfolio:
             return ideal_price * (1 - slippage_percent)
 
     def _check_stop_loss_take_profit(self, event: MarketEvent, position: Dict[str, Any]) -> None:
-        """Проверяет, не сработал ли SL или TP на текущей свече."""
-        exit_reason = None
-        exit_direction = None
-        # Получаем максимальную и минимальную цену за период свечи
+        """
+        Проверяет, не сработал ли SL или TP на текущей свече.
+        РЕАЛИЗОВАНО "ПРАВИЛО ПЕРВОГО СТОП-ЛОССА": проверка SL имеет приоритет,
+        чтобы устранить "заглядывание в будущее" внутри одной свечи.
+        """
+        # --- Подготовительный блок ---
+        # Извлекаем максимальную и минимальную цену свечи для анализа.
         candle_high = event.data['high']
         candle_low = event.data['low']
 
-        # Проверяем условия SL/TP для ЛОНГА
-        if position['direction'] == 'BUY':
-            # Если минимальная цена свечи коснулась или пробила наш стоп-лосс
-            if candle_low <= position['stop_loss']:
-                exit_reason, exit_direction = "Stop Loss", "SELL"
-            # Если максимальная цена свечи коснулась или пробила наш тейк-профит
-            elif candle_high >= position['take_profit']:
-                exit_reason, exit_direction = "Take Profit", "SELL"
+        # Инициализируем переменные, которые мы определим, если найдем причину для выхода.
+        exit_reason = None
+        exit_direction = None
 
-        # Проверяем условия SL/TP для ШОРТА
-        elif position['direction'] == 'SELL':
-            # Если максимальная цена свечи коснулась или пробила наш стоп-лосс
-            if candle_high >= position['stop_loss']:
-                exit_reason, exit_direction = "Stop Loss", "BUY"
-            # Если минимальная цена свечи коснулась или пробила наш тейк-профит
-            elif candle_low <= position['take_profit']:
-                exit_reason, exit_direction = "Take Profit", "BUY"
+        # --- ЭТАП 1: ПРИОРИТЕТНАЯ ПРОВЕРКА СТОП-ЛОССА ---
+        # Это первая и самая важная проверка. Мы исходим из консервативного предположения,
+        # что если цена коснулась стоп-лосса, сделка закрывается с убытком,
+        # даже если позже внутри той же свечи она достигла тейк-профита.
 
-        # Логика выхода из существующей позиции !ПО СТОП_ЛОСС ИЛИ ТЕЙК_ПРОФИТ И ТОЛЬКО ПО НИМ!
-        # Закрытие по сигналу в on_signal
-        if exit_reason:
-            logger.warning(f"!!! СРАБОТАЛ {exit_reason.upper()} для {event.instrument}. Генерирую ордер на закрытие.")
-            # Создаем приказ (OrderEvent) на закрытие позиции
+        # Для длинной позиции (BUY) стоп-лосс срабатывает, если минимальная цена свечи (low) опустилась до нашего уровня SL.
+        if position['direction'] == 'BUY' and candle_low <= position['stop_loss']:
+            exit_reason, exit_direction = "Stop Loss", "SELL"  # Направление выхода - продажа
+
+        # Для короткой позиции (SELL) стоп-лосс срабатывает, если максимальная цена свечи (high) поднялась до нашего уровня SL.
+        elif position['direction'] == 'SELL' and candle_high >= position['stop_loss']:
+            exit_reason, exit_direction = "Stop Loss", "BUY"  # Направление выхода - покупка
+
+        # --- Блок немедленного реагирования на Стоп-Лосс ---
+        # Если на предыдущем шаге мы определили, что стоп-лосс сработал...
+        if exit_reason == "Stop Loss":
+            # Логируем это важное событие.
+            logger.warning(f"!!! СРАБОТАЛ STOP LOSS для {event.instrument}. Генерирую ордер на закрытие.")
+
+            # ...создаем событие-приказ (OrderEvent) на закрытие позиции.
             order = OrderEvent(
                 timestamp=event.timestamp,
                 instrument=event.instrument,
                 quantity=position['quantity'],
                 direction=exit_direction
             )
-            # Кладем OrderEvent в общую очередь событий
+            # Отправляем приказ в общую очередь событий на исполнение.
             self.events_queue.put(order)
-            # Добавляем ордер в список ожидающих на исполнение, чтобы его исполнить в первую очередь
+
+            # Обновляем внутреннее состояние:
+            # 1. Помечаем, что по этому инструменту есть ордер в обработке, чтобы избежать дублирования.
             self.pending_orders.add(event.instrument)
-            # Помечаем позицию как "ожидающую закрытия", чтобы избежать дублирования ордеров и пишем причину
+            # 2. Записываем причину выхода в саму позицию. Это понадобится в on_fill для корректного лога.
+            self.current_positions[event.instrument]['exit_reason'] = exit_reason
+
+            # КЛЮЧЕВОЙ МОМЕНТ: Немедленно выходим из метода.
+            # Это гарантирует, что проверка на тейк-профит ниже НЕ будет выполнена.
+            return
+
+        # --- ЭТАП 2: ПРОВЕРКА ТЕЙК-ПРОФИТА ---
+        # Этот код выполнится только в том случае, если стоп-лосс на Этапе 1 НЕ сработал.
+
+        # Для длинной позиции (BUY) тейк-профит срабатывает, если максимальная цена свечи (high) достигла нашего уровня TP.
+        if position['direction'] == 'BUY' and candle_high >= position['take_profit']:
+            exit_reason, exit_direction = "Take Profit", "SELL"
+
+        # Для короткой позиции (SELL) тейк-профит срабатывает, если минимальная цена свечи (low) достигла нашего уровня TP.
+        elif position['direction'] == 'SELL' and candle_low <= position['take_profit']:
+            exit_reason, exit_direction = "Take Profit", "BUY"
+
+        # --- Блок реагирования на Тейк-Профит ---
+        # Если на предыдущем шаге мы определили, что сработал тейк-профит...
+        if exit_reason == "Take Profit":
+            # ...выполняем те же действия, что и для стоп-лосса: логируем, создаем ордер и обновляем состояние.
+            logger.warning(f"!!! СРАБОТАЛ TAKE PROFIT для {event.instrument}. Генерирую ордер на закрытие.")
+            order = OrderEvent(
+                timestamp=event.timestamp,
+                instrument=event.instrument,
+                quantity=position['quantity'],
+                direction=exit_direction
+            )
+            self.events_queue.put(order)
+            self.pending_orders.add(event.instrument)
             self.current_positions[event.instrument]['exit_reason'] = exit_reason
 
     def _handle_new_position_signal(self, event: SignalEvent) -> None:
