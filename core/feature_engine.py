@@ -3,6 +3,7 @@ import pandas_ta as ta
 import logging
 from typing import List, Dict, Any
 
+logger = logging.getLogger('backtester')
 
 class FeatureEngine:
     """
@@ -35,10 +36,9 @@ class FeatureEngine:
             if calculator:
                 calculator(data, **params)
             else:
-                logging.warning(f"FeatureEngine: Неизвестный индикатор '{indicator_name}'. Пропускаем.")
+                logger.warning(f"FeatureEngine: Неизвестный индикатор '{indicator_name}'. Пропускаем.")
         return data
 
-    # --- Приватные методы для расчета конкретных индикаторов ---
 
     def _calculate_sma(self, data: pd.DataFrame, period: int, column: str = 'close'):
         col_name = f'SMA_{period}' if column == 'close' else f'SMA_{period}_{column}'
@@ -60,19 +60,26 @@ class FeatureEngine:
         final_col_name_mid = f'BBM_{period}_{std_str}'
 
         if final_col_name_mid not in data.columns:
-            # 1. Рассчитываем индикатор в отдельный DataFrame
-            bbands_df = data.ta.bbands(length=period, std=std, append=False)
+            original_cols = set(data.columns)
+            data.ta.bbands(length=period, std=std, append=True)
+            new_cols = set(data.columns) - original_cols
 
-            # 2. Определяем наши финальные, стандартные имена колонок
-            final_lower_name = f'BBL_{period}_{std_str}'
-            final_mid_name = f'BBM_{period}_{std_str}'
-            final_upper_name = f'BBU_{period}_{std_str}'
+            rename_map = {}
+            for col in new_cols:
+                if col.startswith("BBL_"):
+                    rename_map[col] = f'BBL_{period}_{std_str}'
+                elif col.startswith("BBM_"):
+                    rename_map[col] = f'BBM_{period}_{std_str}'
+                elif col.startswith("BBU_"):
+                    rename_map[col] = f'BBU_{period}_{std_str}'
+                elif col.startswith("BBB_") or col.startswith("BBP_"):
+                    rename_map[col] = None
 
-            # 3. Явно присваиваем колонки по их порядковому номеру из результата
-            # Это самый надежный способ, не зависящий от имен в bbands_df
-            data[final_lower_name] = bbands_df.iloc[:, 0]  # Первая колонка всегда BBL
-            data[final_mid_name] = bbands_df.iloc[:, 1]  # Вторая колонка всегда BBM
-            data[final_upper_name] = bbands_df.iloc[:, 2]  # Третья колонка всегда BBU
+            cols_to_drop = [k for k, v in rename_map.items() if v is None]
+            data.drop(columns=cols_to_drop, inplace=True)
+
+            final_rename_map = {k: v for k, v in rename_map.items() if v is not None}
+            data.rename(columns=final_rename_map, inplace=True)
 
     def _calculate_donchian(self, data: pd.DataFrame, lower_period: int, upper_period: int):
         col_name_upper = f'DCU_{upper_period}_{lower_period}'
@@ -83,9 +90,12 @@ class FeatureEngine:
         final_col_name = f'ADX_{period}'
 
         if final_col_name not in data.columns:
-            # 1. Рассчитываем индикатор в отдельный DataFrame
-            adx_df = data.ta.adx(length=period, append=False)
+            original_cols = set(data.columns)
+            data.ta.adx(length=period, append=True)
+            new_cols = set(data.columns) - original_cols
 
-            # 2. Явно присваиваем только ту колонку, которая нам нужна (ADX)
-            # Она всегда первая в результате.
-            data[final_col_name] = adx_df.iloc[:, 0]
+            for col in new_cols:
+                if col.startswith("ADX_"):
+                    data.rename(columns={col: final_col_name}, inplace=True)
+                else:
+                    data.drop(columns=[col], inplace=True)

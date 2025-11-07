@@ -1,11 +1,9 @@
 import pandas as pd
 from queue import Queue
-import logging
 
 from core.event import MarketEvent, SignalEvent
 from strategies.base_strategy import BaseStrategy
 from config import STRATEGY_CONFIG
-
 
 class TripleFilterStrategy(BaseStrategy):
     """
@@ -73,7 +71,7 @@ class TripleFilterStrategy(BaseStrategy):
         buy_volume = last_candle['volume'] > last_candle[self.volume_sma_name]
 
         if buy_trend and buy_impulse and buy_volume:
-            signal = SignalEvent(instrument=self.instrument, direction="BUY", strategy_id=self.name)
+            signal = SignalEvent(timestamp=event.timestamp, instrument=self.instrument, direction="BUY", strategy_id=self.name)
             self.events_queue.put(signal)
             return
 
@@ -84,6 +82,6 @@ class TripleFilterStrategy(BaseStrategy):
         sell_volume = last_candle['volume'] > last_candle[self.volume_sma_name]
 
         if sell_trend and sell_impulse and sell_volume:
-            signal = SignalEvent(instrument=self.instrument, direction="SELL", strategy_id=self.name)
+            signal = SignalEvent(timestamp=event.timestamp, instrument=self.instrument, direction="SELL", strategy_id=self.name)
             self.events_queue.put(signal)
             return

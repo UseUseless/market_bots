@@ -10,6 +10,8 @@ from config import BACKTEST_CONFIG
 from core.sizer import BasePositionSizer, FixedRiskSizer
 from core.risk_manager import BaseRiskManager, FixedRiskManager, AtrRiskManager
 
+logger = logging.getLogger('backtester')
+
 class Portfolio:
     """
     1.  **Управление состоянием**: Отслеживает текущий капитал, открытые позиции и ордера в обработке.
@@ -64,29 +66,28 @@ class Portfolio:
 
     def _simulate_slippage(self, ideal_price: float, quantity: int, direction: str, candle_volume: int) -> float:
         """
-        Приватный метод для симуляции проскальзывания (slippage).
-        Проскальзывание — это разница между ожидаемой ценой сделки и ценой, по которой сделка фактически исполняется.
-        Эта модель делает бэктест более реалистичным, так как в реальной торговле крупные ордера влияют на цену.
+        Приватный метод для симуляции проскальзывания (slippage) с защитой от экстремальных значений.
         """
-
-        # Если модель проскальзывания отключена или объем на свече нулевой, возвращаем идеальную цену.
-        if not self.slippage_enabled or candle_volume == 0:
+        if not self.slippage_enabled or candle_volume <= 0:
             return ideal_price
 
-        # Рассчитываем долю нашей сделки в общем объеме свечи
-        volume_ratio = quantity / candle_volume
+        # Добавляем защиту от неадекватного соотношения объемов.
+        # Если наш ордер больше всего объема на свече, считаем, что мы "съели" 100% ликвидности.
+        # Это предотвращает volume_ratio > 1 и экспоненциальный рост проскальзывания.
+        volume_ratio = min(quantity / candle_volume, 1.0)
 
-        # Используем модель "квадратного корня" — это стандартная аппроксимация в индустрии.
-        # Она симулирует нелинейное влияние на цену: чем больше наш ордер, тем непропорционально сильнее он двигает цену.
-        # Модель "квадратного корня" (Проскальзывание = Coeff * (Объем_сделки / Объем_на_свече) ^ 0.5)
         slippage_percent = self.impact_coefficient * (volume_ratio ** 0.5)
 
-        # Применяем проскальзывание. Важно, что оно ВСЕГДА работает против нас.
+        # Добавляем "предохранитель" - максимальный размер проскальзывания.
+        # Это защищает от любых непредвиденных сценариев. Цена не может измениться более чем на 20%
+        # из-за нашей сделки в рамках одной свечи. Это очень консервативное допущение.
+        MAX_SLIPPAGE_PERCENT = 0.20 # 20%
+        if slippage_percent > MAX_SLIPPAGE_PERCENT:
+            slippage_percent = MAX_SLIPPAGE_PERCENT
+
         if direction == 'BUY':
-            # При покупке цена становится ВЫШЕ
             return ideal_price * (1 + slippage_percent)
         else:  # Для SELL
-            # При продаже цена становится НИЖЕ
             return ideal_price * (1 - slippage_percent)
 
     def _check_stop_loss_take_profit(self, event: MarketEvent, position: Dict[str, Any]) -> None:
@@ -118,7 +119,7 @@ class Portfolio:
         # Логика выхода из существующей позиции !ПО СТОП_ЛОСС ИЛИ ТЕЙК_ПРОФИТ И ТОЛЬКО ПО НИМ!
         # Закрытие по сигналу в on_signal
         if exit_reason:
-            logging.warning(f"!!! СРАБОТАЛ {exit_reason.upper()} для {event.instrument}. Генерирую ордер на закрытие.")
+            logger.warning(f"!!! СРАБОТАЛ {exit_reason.upper()} для {event.instrument}. Генерирую ордер на закрытие.")
             # Создаем приказ (OrderEvent) на закрытие позиции
             order = OrderEvent(
                 timestamp=event.timestamp,
@@ -138,7 +139,7 @@ class Portfolio:
         # Получаем последнюю свечу, чтобы иметь доступ к цене и ATR
         last_candle = self.last_market_data.get(event.instrument)
         if last_candle is None:
-            logging.warning(f"Нет рыночных данных для обработки сигнала по {event.instrument}, сигнал проигнорирован.")
+            logger.warning(f"Нет рыночных данных для обработки сигнала по {event.instrument}, сигнал проигнорирован.")
             return
 
         # В качестве "идеальной" цены входа мы берем цену открытия текущей свечи.
@@ -170,16 +171,16 @@ class Portfolio:
 
             # Если расчет показал, что мы можем купить хотя бы 1  возможный лот (например 0.001 btc), генерируем ордер.
             if quantity > 0:
-                logging.info(
+                logger.info(
                     f"Расчетное кол-во: {quantity_float:.4f}, скорректировано до {quantity} с учетом правил биржи.")
                 order = OrderEvent(timestamp=event.timestamp, instrument=event.instrument, quantity=quantity, direction=event.direction)
                 self.events_queue.put(order)
                 self.pending_orders.add(event.instrument)
-                logging.info(f"Портфель генерирует ордер на {event.direction} {quantity} лот(ов) {event.instrument}")
+                logger.info(f"Портфель генерирует ордер на {event.direction} {quantity} лот(ов) {event.instrument}")
 
         except ValueError as e:
             # Ловим ошибку от AtrRiskManager, если, например, ATR некорректен.
-            logging.warning(f"Не удалось рассчитать профиль риска для {event.instrument}: {e}. Сигнал проигнорирован.")
+            logger.warning(f"Не удалось рассчитать профиль риска для {event.instrument}: {e}. Сигнал проигнорирован.")
 
     def _adjust_quantity_for_rules(self, quantity_float: float) -> float | int:
         """
@@ -243,13 +244,11 @@ class Portfolio:
                 self.events_queue.put(order)
                 # Также помечаем ордер на закрытие как ожидающий
                 self.pending_orders.add(event.instrument)
-                logging.info(f"Портфель генерирует ордер на ЗАКРЫТИЕ позиции по {event.instrument}")
+                logger.info(f"Портфель генерирует ордер на ЗАКРЫТИЕ позиции по {event.instrument}")
             # ToDo: Можно и докупать если была открыта позиция на Buy и пришел опять Buy. Нужно ли?
 
     def _handle_fill_open(self, event: FillEvent, last_candle: pd.Series) -> None:
         """Обрабатывает исполнение ордера на открытие позиции."""
-        # Рассчитываем цену с учетом проскальзывания
-        # Так как мы уже знаем размер позиции
         execution_price = self._simulate_slippage(
             ideal_price=last_candle['open'],
             quantity=event.quantity,
@@ -257,8 +256,6 @@ class Portfolio:
             candle_volume=last_candle['volume']
         )
 
-        # Ключевой момент: мы ПЕРЕСЧИТЫВАЕМ профиль риска на основе РЕАЛЬНОЙ цены входа (execution_price).
-        # Это гарантирует, что наши уровни SL/TP будут установлены максимально точно относительно фактической точки входа.
         final_risk_profile = self.risk_manager.calculate_risk_profile(
             entry_price=execution_price,
             direction=event.direction,
@@ -266,7 +263,6 @@ class Portfolio:
             last_candle=last_candle
         )
 
-        # Сохраняем позицию, используя данные из профиля
         self.current_positions[event.instrument] = {
             'quantity': event.quantity,
             'entry_price': execution_price,
@@ -276,7 +272,9 @@ class Portfolio:
             'take_profit': final_risk_profile.take_profit_price,
             'exit_reason': None
         }
-        logging.info(
+
+        # Логируем открытие позиции
+        logger.info(
             f"Позиция ОТКРЫТА: {event.direction} {event.quantity} {event.instrument} @ {execution_price:.2f} | "
             f"SL: {final_risk_profile.stop_loss_price:.2f}, TP: {final_risk_profile.take_profit_price:.2f}")
 
@@ -284,21 +282,20 @@ class Portfolio:
         """Обрабатывает исполнение ордера на закрытие позиции."""
 
         entry_price = position['entry_price']
+        exit_reason = position.get('exit_reason')
 
-        # Определяем цену в зависимости от причины выхода
-        if position.get('exit_reason') == "Stop Loss":
-            # Если позиция закрывается по стопу, цена выхода равна уровню стопа
+        # ИБолее надежная логика определения цены выхода
+        if exit_reason == "Stop Loss":
+            # Цена выхода при стоп-лоссе - это сам уровень стоп-лосса.
             ideal_exit_price = position['stop_loss']
-            exit_reason = "Stop Loss"
-        elif position.get('exit_reason') == "Take Profit":
-            # Если по тейку - то цена равна уровню тейка
+        elif exit_reason == "Take Profit":
+            # Цена выхода при тейк-профите - это сам уровень тейк-профита.
             ideal_exit_price = position['take_profit']
-            exit_reason = "Take Profit"
-        else:  # Закрытие по сигналу от стратегии
-            # Если причина не указана, значит, это закрытие по сигналу от стратегии.
+        else:
+            # Если причина не SL/TP, значит, это закрытие по сигналу.
             # Цена выхода - цена открытия текущей свечи.
             ideal_exit_price = last_candle['open']
-            exit_reason = "Signal"
+            exit_reason = "Signal" # Устанавливаем причину, если она была None
 
         # Рассчитываем РЕАЛЬНУЮ цену выхода с учетом проскальзывания.
         exit_price = self._simulate_slippage(
@@ -320,7 +317,7 @@ class Portfolio:
         # Обновляем текущий капитал
         self.current_capital += pnl
 
-        # Логируем сделку в CSV
+        # Логируем сделку
         log_trade(
             trade_log_file=self.trade_log_file,
             strategy_name=self.strategy.name,
@@ -336,17 +333,14 @@ class Portfolio:
             interval=self.interval,
             risk_manager=self.risk_manager_type
         )
-        # Сохраняем информацию о сделке для финального отчета
         self.closed_trades.append({
             'pnl': pnl,
-            # Опционально, но полезно для будущих расширений анализатора
             'entry_timestamp': position['entry_timestamp'],
             'exit_timestamp': last_candle['time']
         })
 
-        # Окончательно удаляем позицию из списка активных
         del self.current_positions[event.instrument]
-        logging.info(
+        logger.info(
             f"Позиция ЗАКРЫТА по причине '{exit_reason}': {event.instrument}. PnL: {pnl:.2f}. Капитал: {self.current_capital:.2f}")
 
     def update_market_price(self, event: MarketEvent) -> None:
@@ -412,7 +406,7 @@ class Portfolio:
         # чтобы last_market_data содержал данные по этому instrument". Это самодокументируемый код.
 
         if last_candle is None:
-            logging.error(f"Нет рыночных данных для исполнения ордера по {event.instrument}")
+            logger.error(f"Нет рыночных данных для исполнения ордера по {event.instrument}")
             return
         
         position = self.current_positions.get(event.instrument)

@@ -46,26 +46,25 @@ class FixedRiskManager(BaseRiskManager):
     def calculate_risk_profile(self, entry_price: float, direction: str, capital: float,
                                last_candle: pd.Series) -> TradeRiskProfile:
 
-        # На каком проценте от входной стоимости ставим стоп-лосс (например на вход число 3)
-        risk_percent = RISK_CONFIG["DEFAULT_RISK_PERCENT_LONG"] if direction == 'BUY' else RISK_CONFIG["DEFAULT_RISK_PERCENT_SHORT"]
-
-        # Перевод процент во float 3-> 0.03
-        sl_percent = risk_percent / 100.0
-        # Рассчитываем абсолютный уровень стоп-лосса. Ex:Buy:100*(1-0.03)=97
-        # Для покупки (BUY) он ниже цены входа, для продажи (SELL) - выше.
-        stop_loss_price = entry_price * (1 - sl_percent) if direction == 'BUY' else entry_price * (1 + sl_percent)
-
-        # Рассчитываем, сколько мы теряем на одной акции, если сработает стоп. Ex:100-97=3
-        risk_per_share = abs(entry_price - stop_loss_price)
-        # Получаем соотношение риска к прибыли из нашего конфига.
+        risk_percent_config = RISK_CONFIG["DEFAULT_RISK_PERCENT_LONG"] if direction == 'BUY' else RISK_CONFIG["DEFAULT_RISK_PERCENT_SHORT"]
+        sl_percent = risk_percent_config / 100.0
         tp_ratio = RISK_CONFIG["FIXED_TP_RATIO"]
-        # Рассчитываем тейк-профит на основе соотношения риска к прибыли (tp_ratio). Ex:100+(3*2)=106
-        take_profit_price = entry_price + (risk_per_share * tp_ratio) if direction == 'BUY' else entry_price - (
-                    risk_per_share * tp_ratio)
 
-        # Рассчитываем общую сумму, которой мы готовы рискнуть в этой сделке.
-        # Потом посчитаем сколько акций получится купить
+        if direction == 'BUY':
+            stop_loss_price = entry_price * (1 - sl_percent)
+            # ИЗМЕНЕНО: Расчет TP теперь тоже от entry_price, а не от risk_per_share, для симметрии
+            take_profit_price = entry_price * (1 + (sl_percent * tp_ratio))
+        else: # Для SELL
+            stop_loss_price = entry_price * (1 + sl_percent)
+            # ИЗМЕНЕНО: Правильная формула для TP шорта
+            take_profit_price = entry_price * (1 - (sl_percent * tp_ratio))
+
+        risk_per_share = abs(entry_price - stop_loss_price)
         risk_amount = capital * sl_percent
+
+        # Добавим проверку, чтобы TP не стал отрицательным
+        if take_profit_price < 0:
+            take_profit_price = 0.0001 # Устанавливаем минимально возможное значение
 
         return TradeRiskProfile(
             stop_loss_price=stop_loss_price,

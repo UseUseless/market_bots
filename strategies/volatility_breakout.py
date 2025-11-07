@@ -6,6 +6,7 @@ from core.event import MarketEvent, SignalEvent
 from strategies.base_strategy import BaseStrategy
 from config import STRATEGY_CONFIG
 
+logger = logging.getLogger('backtester')
 
 class VolatilityBreakoutStrategy(BaseStrategy):
     _config = STRATEGY_CONFIG["VolatilityBreakoutStrategy"]
@@ -29,7 +30,7 @@ class VolatilityBreakoutStrategy(BaseStrategy):
             entry_mode = "Консервативный (с откатом)"
         elif self.confirm_breakout:
             entry_mode = "Сбалансированный (с подтверждением)"
-        logging.info(f"Стратегия '{self.name}' ({self.variant}) инициализирована. Режим входа: {entry_mode}")
+        logger.info(f"Стратегия '{self.name}' ({self.variant}) инициализирована. Режим входа: {entry_mode}")
 
         self.required_indicators = []
         if self.variant == "ADX_Donchian":
@@ -75,7 +76,7 @@ class VolatilityBreakoutStrategy(BaseStrategy):
 
     def prepare_data(self, data: pd.DataFrame) -> pd.DataFrame:
         if self.variant == "ADX_Donchian":
-            logging.info(f"Стратегия '{self.name}' рассчитывает кастомный 'squeeze_on'...")
+            logger.info(f"Стратегия '{self.name}' рассчитывает кастомный 'squeeze_on'...")
 
             std_str = str(self.params["bb_std"]).replace('.', '_')
             bb_upper_col = f'BBU_{self.params["bb_len"]}_{std_str}'
@@ -83,7 +84,7 @@ class VolatilityBreakoutStrategy(BaseStrategy):
             bb_mid_col = f'BBM_{self.params["bb_len"]}_{std_str}'
 
             if not all(col in data.columns for col in [bb_upper_col, bb_lower_col, bb_mid_col]):
-                logging.error("Не найдены колонки Bollinger Bands. Расчет 'squeeze_on' невозможен.")
+                logger.error("Не найдены колонки Bollinger Bands. Расчет 'squeeze_on' невозможен.")
                 return pd.DataFrame()
 
             bband_width = (data[bb_upper_col] - data[bb_lower_col]) / data[bb_mid_col]
@@ -125,7 +126,7 @@ class VolatilityBreakoutStrategy(BaseStrategy):
             pullback_ema = last_candle[f'EMA_{self.pullback_ema_period}']
 
             if self.state["pullback_bar_counter"] > self.pullback_timeout_bars:
-                logging.info(f"Откат не произошел в течение {self.pullback_timeout_bars} свечей. Сигнал отменен.")
+                logger.info(f"Откат не произошел в течение {self.pullback_timeout_bars} свечей. Сигнал отменен.")
                 self._reset_state()
                 return
 
@@ -133,8 +134,8 @@ class VolatilityBreakoutStrategy(BaseStrategy):
                                  (direction == "SELL" and last_candle['high'] >= pullback_ema)
 
             if pullback_triggered:
-                logging.info(f"Откат к EMA({self.pullback_ema_period}) произошел. Генерирую сигнал {direction}.")
-                self.events_queue.put(SignalEvent(self.instrument, direction, self.name))
+                logger.info(f"Откат к EMA({self.pullback_ema_period}) произошел. Генерирую сигнал {direction}.")
+                self.events_queue.put(SignalEvent(event.timestamp, self.instrument, direction, self.name))
                 self._reset_state()
             return
 
@@ -149,41 +150,41 @@ class VolatilityBreakoutStrategy(BaseStrategy):
                         (direction == "SELL" and last_candle['close'] < donchian_lower)
 
             if confirmed:
-                logging.info("Пробой ПОДТВЕРЖДЕН.")
+                logger.info("Пробой ПОДТВЕРЖДЕН.")
                 if self.wait_for_pullback:
-                    logging.info("Перехожу в режим ожидания отката.")
+                    logger.info("Перехожу в режим ожидания отката.")
                     self.state["waiting_for_confirmation"] = False
                     self.state["waiting_for_pullback"] = True
                     self.state["pullback_bar_counter"] = 0
                 else:
-                    logging.info("Генерирую сигнал НЕМЕДЛЕННО после подтверждения.")
-                    self.events_queue.put(SignalEvent(self.instrument, direction, self.name))
+                    logger.info("Генерирую сигнал НЕМЕДЛЕННО после подтверждения.")
+                    self.events_queue.put(SignalEvent(event.timestamp, self.instrument, direction, self.name))
                     self._reset_state()
             else:
-                logging.info("Пробой НЕ подтвержден, сигнал отменен.")
+                logger.info("Пробой НЕ подтвержден, сигнал отменен.")
                 self._reset_state()
             return
 
         # --- Состояние 3: Ожидание пробоя после "выстрела" ---
         if self.state["waiting_for_breakout"]:
             self.state["breakout_bar_counter"] += 1
-            logging.debug(f"Ожидание пробоя, свеча #{self.state['breakout_bar_counter']}...")
+            logger.debug(f"Ожидание пробоя, свеча #{self.state['breakout_bar_counter']}...")
 
             if self.state["breakout_bar_counter"] > self.breakout_timeout_bars:
-                logging.info(f"Пробой не произошел в течение {self.breakout_timeout_bars} свечей. Сигнал отменен.")
+                logger.info(f"Пробой не произошел в течение {self.breakout_timeout_bars} свечей. Сигнал отменен.")
                 self._reset_state()
                 return
 
             direction = self._check_breakout_conditions(last_candle, prev_candle)
             if direction:
                 if self.confirm_breakout:
-                    logging.info(f"Обнаружен пробой {direction}. Ожидаю подтверждения на следующей свече.")
+                    logger.info(f"Обнаружен пробой {direction}. Ожидаю подтверждения на следующей свече.")
                     self.state["waiting_for_confirmation"] = True
                     self.state["breakout_direction"] = direction
                     self.state["waiting_for_breakout"] = False
                 else:
-                    logging.info(f"Обнаружен пробой {direction}. Генерирую сигнал НЕМЕДЛЕННО.")
-                    self.events_queue.put(SignalEvent(self.instrument, direction, self.name))
+                    logger.info(f"Обнаружен пробой {direction}. Генерирую сигнал НЕМЕДЛЕННО.")
+                    self.events_queue.put(SignalEvent(event.timestamp, self.instrument, direction, self.name))
                     self._reset_state()
             return
 
@@ -195,8 +196,8 @@ class VolatilityBreakoutStrategy(BaseStrategy):
             return
 
         if self.state["squeeze_was_on"] and not last_candle['squeeze_on']:
-            logging.info(f"[SQUEEZE FIRED] Обнаружен выход из сжатия на свече {last_candle['time']}")
+            logger.info(f"[SQUEEZE FIRED] Обнаружен выход из сжатия на свече {last_candle['time']}")
             self.state["squeeze_was_on"] = False
             self.state["waiting_for_breakout"] = True
             self.state["breakout_bar_counter"] = 0
-            logging.info(f"Перехожу в режим ожидания пробоя на {self.breakout_timeout_bars} свечей.")
+            logger.info(f"Перехожу в режим ожидания пробоя на {self.breakout_timeout_bars} свечей.")

@@ -26,6 +26,7 @@ class SignalEvent(Event):
     Событие генерации торгового сигнала стратегией.
     Генерируется Strategy.
     """
+    timestamp: datetime
     instrument: str
     direction: str  # 'BUY' или 'SELL'
 

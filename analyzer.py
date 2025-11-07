@@ -8,6 +8,8 @@ from rich.table import Table
 
 from config import PATH_CONFIG, EXCHANGE_SPECIFIC_CONFIG
 
+logger = logging.getLogger('backtester')
+
 class BacktestAnalyzer:
     """
     Анализирует результаты бэктеста на основе DataFrame с закрытыми сделками.
@@ -159,4 +161,4 @@ class BacktestAnalyzer:
                 table.add_row(key, str(value))
 
         console.print(table)
-        logging.info(f"Графический отчет сохранен в файл: {full_path}")
+        logger.info(f"Графический отчет сохранен в файл: {full_path}")
