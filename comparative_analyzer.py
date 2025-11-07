@@ -319,3 +319,67 @@ class ComparativeAnalyzer:
         )
 
         return final_metrics_df, fig
+
+    def compare_two_portfolios(
+            self,
+            portfolio_a_params: Dict[str, Any],
+            portfolio_b_params: Dict[str, Any]
+    ) -> Tuple[pd.DataFrame, go.Figure]:
+        """
+        Сравнивает два произвольно собранных портфеля.
+        Каждый портфель определяется набором стратегий, инструментов, интервалом и РМ.
+        """
+        all_metrics = []
+        fig = go.Figure()
+
+        # --- Обработка Портфеля А ---
+        try:
+            metrics_a_df, fig_a = self.analyze_instrument_robustness(
+                strategy_name=portfolio_a_params['strategy'],
+                instruments=portfolio_a_params['instruments'],
+                interval=portfolio_a_params['interval'],
+                risk_manager=portfolio_a_params['rm']
+            )
+            if not metrics_a_df.empty:
+                summary_a = metrics_a_df.loc['ИТОГО (портфель)'].copy()
+                summary_a.name = "Портфель A"
+                all_metrics.append(summary_a)
+
+                trace_a = fig_a.data[0]
+                trace_a.name = "Портфель A"
+                fig.add_trace(trace_a)
+        except Exception as e:
+            print(f"Ошибка при расчете Портфеля A: {e}")
+
+        # --- Обработка Портфеля B ---
+        try:
+            metrics_b_df, fig_b = self.analyze_instrument_robustness(
+                strategy_name=portfolio_b_params['strategy'],
+                instruments=portfolio_b_params['instruments'],
+                interval=portfolio_b_params['interval'],
+                risk_manager=portfolio_b_params['rm']
+            )
+            if not metrics_b_df.empty:
+                summary_b = metrics_b_df.loc['ИТОГО (портфель)'].copy()
+                summary_b.name = "Портфель B"
+                all_metrics.append(summary_b)
+
+                trace_b = fig_b.data[0]
+                trace_b.name = "Портфель B"
+                fig.add_trace(trace_b)
+        except Exception as e:
+            print(f"Ошибка при расчете Портфеля B: {e}")
+
+        if not all_metrics:
+            return pd.DataFrame(), go.Figure().update_layout(
+                title_text="Не удалось собрать данные ни для одного портфеля")
+
+        final_metrics_df = pd.DataFrame(all_metrics)
+        fig.update_layout(
+            title_text="Сравнение двух портфелей",
+            xaxis_title="Количество сделок (во времени)",
+            yaxis_title="Портфельный капитал",
+            legend_title_text="Портфели"
+        )
+
+        return final_metrics_df, fig

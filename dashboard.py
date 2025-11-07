@@ -78,6 +78,52 @@ def _process_single_backtest_file(file_path: str) -> Optional[Dict[str, Any]]:
         return {"error": f"Не удалось обработать файл {os.path.basename(file_path)}: {e}"}
 
 
+def _render_portfolio_selector_pane(pane_title: str, key_prefix: str, summary_df: pd.DataFrame) -> Optional[Dict[str, Any]]:
+    """Отрисовывает одну колонку для выбора параметров портфеля."""
+    st.subheader(pane_title)
+
+    selected_strategy = st.selectbox("Стратегия:", summary_df["Strategy"].unique(), key=f"{key_prefix}_strat")
+    selected_interval = st.selectbox("Интервал:", summary_df["Interval"].unique(), key=f"{key_prefix}_interval")
+    selected_rm = st.selectbox("Риск-менеджер:", summary_df["Risk Manager"].unique(), key=f"{key_prefix}_rm")
+
+    available_instruments = sorted(summary_df[
+        (summary_df['Strategy'] == selected_strategy) &
+        (summary_df['Interval'] == selected_interval) &
+        (summary_df['Risk Manager'] == selected_rm)
+    ]['Instrument'].unique())
+
+    if not available_instruments:
+        st.warning("Нет данных для этой комбинации.")
+        return None
+
+    select_all = st.checkbox("Выбрать все", key=f"{key_prefix}_select_all")
+
+    if select_all:
+        selected_instruments = st.multiselect(
+            "Инструменты:",
+            options=available_instruments,
+            default=available_instruments,
+            key=f"{key_prefix}_instrs_all"  # Ключ для режима "все выбраны"
+        )
+    else:
+        selected_instruments = st.multiselect(
+            "Инструменты:",
+            options=available_instruments,
+            default=[],
+            key=f"{key_prefix}_instrs_manual"  # Другой ключ для ручного режима
+        )
+
+    if not selected_instruments:
+        st.info("Выберите инструменты для портфеля.")
+        return None
+
+    return {
+        "strategy": selected_strategy,
+        "interval": selected_interval,
+        "rm": selected_rm,
+        "instruments": selected_instruments
+    }
+
 @st.cache_data
 def load_all_backtests(logs_dir: str) -> Tuple[pd.DataFrame, List[str]]:
     """
@@ -210,12 +256,43 @@ def _render_mode1_ui(comp_analyzer: ComparativeAnalyzer, summary_df: pd.DataFram
                 st.plotly_chart(fig, use_container_width=True)
 
 def _render_mode2_ui(comp_analyzer: ComparativeAnalyzer, summary_df: pd.DataFrame):
-    st.subheader("2. Анализ одной стратегии на разных инструментах")
+    st.subheader("2. Анализ одной стратегии на разных инструментах (анализ робастности)")
     col1, col2, col3 = st.columns(3)
     with col1: selected_strategy = st.selectbox("Стратегия:", summary_df["Strategy"].unique(), key="c2_strat")
     with col2: selected_interval = st.selectbox("Интервал:", summary_df["Interval"].unique(), key="c2_interval")
     with col3: selected_rm = st.selectbox("Риск-менеджер:", summary_df["Risk Manager"].unique(), key="c2_rm")
-    selected_instruments = st.multiselect("Выберите инструменты для агрегации:", summary_df["Instrument"].unique(), key="c2_instrs")
+
+    # --- ИЗМЕНЕНИЕ 2.1: Логика "Выбрать все" ---
+    # 1. Находим все инструменты, для которых есть бэктесты с выбранными параметрами
+    available_instruments = sorted(summary_df[
+        (summary_df['Strategy'] == selected_strategy) &
+        (summary_df['Interval'] == selected_interval) &
+        (summary_df['Risk Manager'] == selected_rm)
+    ]['Instrument'].unique())
+
+    if not available_instruments:
+        st.warning("Не найдено бэктестов для выбранной комбинации Стратегия/Интервал/РМ.")
+        return
+
+    # 2. Создаем чекбокс
+    select_all = st.checkbox("Выбрать все доступные инструменты", key="c2_select_all")
+
+    # 3. В зависимости от состояния чекбокса, формируем список выбранных инструментов
+    if select_all:
+        selected_instruments = st.multiselect(
+            "Инструменты для агрегации:",
+            options=available_instruments,
+            default=available_instruments, # <-- Устанавливаем все как дефолт
+            key="c2_instrs_all"
+        )
+    else:
+        selected_instruments = st.multiselect(
+            "Инструменты для агрегации:",
+            options=available_instruments,
+            key="c2_instrs_manual"
+        )
+    # --- Конец ИЗМЕНЕНИЯ 2.1 ---
+
     if st.button("Анализировать стратегию", key="c2_btn"):
         if len(selected_instruments) < 2: st.warning("Пожалуйста, выберите хотя бы два инструмента.")
         else:
@@ -226,22 +303,27 @@ def _render_mode2_ui(comp_analyzer: ComparativeAnalyzer, summary_df: pd.DataFram
                 st.dataframe(metrics_df.style.format(subset=pd.IndexSlice[:, metrics_df.columns != 'Total Trades'], formatter="{:.2f}"))
                 st.plotly_chart(fig, use_container_width=True)
 
+
 def _render_mode3_ui(comp_analyzer: ComparativeAnalyzer, summary_df: pd.DataFrame):
-    st.subheader("3. Сравнение агрегированных результатов\n(выбери разные стратегии и одинаковые инструменты, на которых был проведен бэктест на этих стратегиях)")
+    st.subheader("3. Сравнение двух портфелей (A vs B)")
     col1, col2 = st.columns(2)
-    with col1: selected_interval = st.selectbox("Общий интервал:", summary_df["Interval"].unique(), key="c3_interval")
-    with col2: selected_rm = st.selectbox("Общий риск-менеджер:", summary_df["Risk Manager"].unique(), key="c3_rm")
-    selected_strategies = st.multiselect("Выберите стратегии:", summary_df["Strategy"].unique(), key="c3_strats")
-    selected_instruments = st.multiselect("Выберите инструменты для агрегации и сравнения:", summary_df["Instrument"].unique(), key="c3_instrs")
-    if st.button("Сравнить результаты", key="c3_btn"):
-        if len(selected_strategies) < 2 or len(selected_instruments) < 2: st.warning("Пожалуйста, выберите хотя бы 2 стратегии и 2 инструмента.")
-        else:
-            with st.spinner("Выполняется сравнение результатов..."):
-                metrics_df, fig = comp_analyzer.compare_aggregated_strategies(
-                    strategy_names=selected_strategies, instruments=selected_instruments,
-                    interval=selected_interval, risk_manager=selected_rm)
-                st.dataframe(metrics_df.style.format(subset=pd.IndexSlice[:, metrics_df.columns != 'Total Trades'], formatter="{:.2f}"))
-                st.plotly_chart(fig, use_container_width=True)
+    with col1:
+        params_a = _render_portfolio_selector_pane("Портфель A", "c3_A", summary_df)
+    with col2:
+        params_b = _render_portfolio_selector_pane("Портфель B", "c3_B", summary_df)
+    st.markdown("---")
+    if st.button("Сравнить портфели", key="c3_btn"):
+        if not params_a or not params_b:
+            st.error("Необходимо полностью сконфигурировать оба портфеля.")
+            return
+        with st.spinner("Выполняется сравнение портфелей..."):
+            metrics_df, fig = comp_analyzer.compare_two_portfolios(
+                portfolio_a_params=params_a,
+                portfolio_b_params=params_b
+            )
+            st.dataframe(metrics_df.style.format(subset=pd.IndexSlice[:, metrics_df.columns != 'Total Trades'],
+                                                 formatter="{:.2f}"))
+            st.plotly_chart(fig, use_container_width=True)
 
 def render_detailed_analysis_section(filtered_df: pd.DataFrame):
     st.header("Детальный анализ отдельного бэктеста")
@@ -272,7 +354,7 @@ def render_comparative_analysis_section(summary_df: pd.DataFrame):
     comp_analyzer = ComparativeAnalyzer(summary_df)
     comparison_mode = st.radio(
         "Выберите режим сравнения:",
-        ["1. Стратегия vs Стратегия", "2. 1 стратегия. Разные инструменты", "3. Агрегированный результат vs Агрегированный результат"],
+        ["1. Стратегия vs Стратегия", "2. Анализ робастности", "3. Портфель vs Портфель"],
         horizontal=True)
     st.markdown("---")
     if "1." in comparison_mode: _render_mode1_ui(comp_analyzer, summary_df)
@@ -309,7 +391,14 @@ def main():
     ]
 
     st.header("Сводная таблица результатов")
-    st.dataframe(style_summary_table(filtered_df), use_container_width=True)
+    if not filtered_df.empty:
+        df_display = filtered_df.copy()
+        # Создаем новый индекс, который начинается с 1
+        df_display.index = pd.RangeIndex(start=1, stop=len(df_display) + 1, step=1)
+        st.dataframe(style_summary_table(df_display), use_container_width=True)
+    else:
+        # Если DataFrame пуст, просто отображаем его как есть
+        st.dataframe(filtered_df, use_container_width=True)
     render_detailed_analysis_section(filtered_df)
     render_comparative_analysis_section(summary_df)
 
