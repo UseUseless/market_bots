@@ -162,3 +162,57 @@ class BacktestAnalyzer:
 
         console.print(table)
         logger.info(f"Графический отчет сохранен в файл: {full_path}")
+
+
+class BatchTestAnalyzer:
+    """
+    Анализирует и представляет сводные результаты пакетного тестирования.
+    """
+
+    def __init__(self, results_df: pd.DataFrame, strategy_name: str, interval: str, risk_manager_type: str):
+        if not isinstance(results_df, pd.DataFrame):
+            raise TypeError("results_df должен быть pandas DataFrame.")
+
+        self.results_df = results_df
+        self.strategy_name = strategy_name
+        self.interval = interval
+        self.risk_manager_type = risk_manager_type
+
+    def generate_summary_report(self):
+        """
+        Генерирует и выводит в консоль сводную таблицу и общую статистику.
+        """
+        from rich.console import Console
+        from rich.table import Table
+
+        if self.results_df.empty:
+            logging.warning("DataFrame с результатами пуст. Отчет не будет сгенерирован.")
+            return
+
+        console = Console()
+        table = Table(
+            title=f"Результаты пакетного тестирования: {self.strategy_name} ({self.interval}, RM: {self.risk_manager_type})")
+        table.add_column("Инструмент", style="cyan", no_wrap=True)
+        table.add_column("PnL, %", justify="right")
+        table.add_column("Кол-во сделок", justify="right")
+
+        for _, row in self.results_df.sort_values("pnl_percent", ascending=False).iterrows():
+            pnl_style = "green" if row['pnl_percent'] > 0 else "red"
+            table.add_row(
+                row['instrument'],
+                f"[{pnl_style}]{row['pnl_percent']:.2f}[/{pnl_style}]",
+                str(int(row['total_trades']))
+            )
+
+        console.print(table)
+
+        # Общая статистика
+        avg_pnl = self.results_df['pnl_percent'].mean()
+        win_instruments_rate = (self.results_df['pnl_percent'] > 0).mean() * 100
+        total_trades_sum = self.results_df['total_trades'].sum()
+
+        console.print("\n--- Общая статистика по портфелю ---")
+        console.print(
+            f"Средний PnL по инструментам: [bold {'green' if avg_pnl > 0 else 'red'}]{avg_pnl:.2f}%[/bold {'green' if avg_pnl > 0 else 'red'}]")
+        console.print(f"Доля прибыльных инструментов: [bold yellow]{win_instruments_rate:.2f}%[/bold yellow]")
+        console.print(f"Всего сделок по всем инструментам: [bold cyan]{total_trades_sum}[/bold cyan]")
