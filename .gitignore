@@ -30,3 +30,6 @@ datalists/
 
 # Кэш тестов
 .pytest_cache
+
+# Отчеты модуля оптимизации
+optimizer/reports/

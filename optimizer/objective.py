@@ -11,21 +11,37 @@ from optimizer.search_space import SEARCH_SPACE
 
 def _calculate_calmar_ratio(trades_df: pd.DataFrame, initial_capital: float) -> float:
     """Рассчитывает Calmar Ratio."""
-    if trades_df.empty:
+
+    if trades_df.empty or len(trades_df) < 2:
+        # Calmar Ratio не имеет смысла, если сделок меньше двух.
         return 0.0
 
+        # --- Расчет максимальной просадки (Max Drawdown) ---
     trades_df['cumulative_pnl'] = trades_df['pnl'].cumsum()
     trades_df['equity_curve'] = initial_capital + trades_df['cumulative_pnl']
-
     high_water_mark = trades_df['equity_curve'].cummax()
     drawdown = (trades_df['equity_curve'] - high_water_mark) / high_water_mark
     max_drawdown = abs(drawdown.min())
 
-    total_pnl = trades_df['equity_curve'].iloc[-1] - initial_capital
-    annualized_return = total_pnl / initial_capital  # Упрощенно, без учета времени
-
     if max_drawdown == 0:
-        return np.inf if annualized_return > 0 else 0.0
+        # Если просадки не было, возвращаем очень большое число (inf), если была прибыль, иначе 0.
+        return np.inf if trades_df['pnl'].sum() > 0 else 0.0
+
+    # --- Расчет годовой доходности (Annualized Return) ---
+    total_pnl = trades_df['cumulative_pnl'].iloc[-1]
+    total_return = total_pnl / initial_capital
+
+    # Рассчитываем продолжительность торгового периода в днях
+    start_date = pd.to_datetime(trades_df['entry_timestamp_utc'].iloc[0])
+    end_date = pd.to_datetime(trades_df['exit_timestamp_utc'].iloc[-1])
+    num_days = (end_date - start_date).days
+
+    # Избегаем деления на ноль и бессмысленных расчетов, если период слишком короткий
+    if num_days < 1:
+        num_days = 1
+
+    # Формула для расчета среднегодовой доходности
+    annualized_return = ((1 + total_return) ** (365.0 / num_days)) - 1
 
     return annualized_return / max_drawdown
 
@@ -33,12 +49,13 @@ def _calculate_calmar_ratio(trades_df: pd.DataFrame, initial_capital: float) -> 
 class Objective:
     """Класс-обертка для целевой функции, чтобы передавать статичные параметры."""
 
-    def __init__(self, strategy_name: str, exchange: str, instrument: str, interval: str, risk_manager_type: str):
+    def __init__(self, strategy_name: str, exchange: str, instrument: str, interval: str, risk_manager_type: str, data_slice: pd.DataFrame):
         self.strategy_name = strategy_name
         self.exchange = exchange
         self.instrument = instrument
         self.interval = interval
         self.risk_manager_type = risk_manager_type
+        self.data_slice = data_slice
 
     def __call__(self, trial: optuna.Trial) -> float:
         """Одна итерация оптимизации."""
@@ -64,7 +81,7 @@ class Objective:
                 risk_config_override[param] = value
 
             # --- 3. Собираем конфиг для движка бэктеста ---
-            backtest_config = {
+            backtest_settings = {
                 "strategy_class": AVAILABLE_STRATEGIES[self.strategy_name],
                 "exchange": self.exchange,
                 "instrument": self.instrument,
@@ -73,13 +90,14 @@ class Objective:
                 "initial_capital": BACKTEST_CONFIG["INITIAL_CAPITAL"],
                 "commission_rate": BACKTEST_CONFIG["COMMISSION_RATE"],
                 "data_dir": "data",
-                "trade_log_path": None,  # Не пишем логи сделок во время оптимизации
-                "strategy_config": strategy_config_override,  # Передаем измененные конфиги
+                "trade_log_path": None,
+                "strategy_config": strategy_config_override,
                 "risk_config": risk_config_override,
+                "data_slice": self.data_slice
             }
 
             # --- 4. Запускаем бэктест ---
-            backtest_results  = run_backtest_session(backtest_config)
+            backtest_results  = run_backtest_session(backtest_settings)
 
             # --- 5. Анализируем результат и возвращаем метрику ---
             if backtest_results ["status"] != "success" or backtest_results ["trades_df"].empty:
@@ -87,12 +105,16 @@ class Objective:
                 # Pruning - механизм Optuna для досрочного отсечения бесперспективных веток.
                 raise optuna.TrialPruned()
 
-            calmar_ratio = _calculate_calmar_ratio(backtest_results ["trades_df"], backtest_results ["initial_capital"])
+            trades_df = backtest_results["trades_df"].copy()
+            trades_df['entry_timestamp_utc'] = pd.to_datetime(trades_df['entry_timestamp_utc'])
+            trades_df['exit_timestamp_utc'] = pd.to_datetime(trades_df['exit_timestamp_utc'])
+
+            calmar_ratio = _calculate_calmar_ratio(trades_df, backtest_results["initial_capital"])
             return calmar_ratio
 
         except optuna.TrialPruned:
             raise
         except Exception as e:
-            # Если произошла любая другая ошибка, тоже считаем попытку неудачной.
-            print(f"Ошибка в trial: {e}")
+            import logging
+            logging.getLogger(__name__).error(f"Ошибка в trial #{trial.number}: {e}", exc_info=True)
             return -1.0
