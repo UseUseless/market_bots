@@ -22,7 +22,8 @@ class Portfolio:
 
     def __init__(self, events_queue: Queue, trade_log_file: str, strategy: BaseStrategy,
                  exchange: str, initial_capital: float, commission_rate: float, interval: str,
-                 risk_manager_type: str, instrument_info: Dict[str, Any]):
+                 risk_manager_type: str, instrument_info: Dict[str, Any],
+                 risk_config: Dict[str, Any], strategy_config: Dict[str, Any]):
         self.events_queue: Queue[Event] = events_queue  # Ссылка на общую очередь событий для отправки ордеров
         self.trade_log_file: str = trade_log_file       # Путь к CSV-файлу для записи сделок
         self.strategy: BaseStrategy = strategy          # Экземпляр текущей стратегии (нужен для доступа к SL/TP)

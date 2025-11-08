@@ -110,7 +110,7 @@ class TinkoffTradeClient(BaseTradeClient):
 class BybitTradeClient(BaseTradeClient):
     def __init__(self, trade_mode: TradeModeType):
         use_testnet = (trade_mode == "SANDBOX")
-        # TODO: Добавить ключи для реальной торговли в .env и config.py
+        # TODO: Добавить ключи для реальной торговли в .env и search_space.py
         api_key = BYBIT_TESTNET_API_KEY if use_testnet else 'Нет_ничего. Тут будет реальные ключи'
         api_secret = BYBIT_TESTNET_API_SECRET if use_testnet else 'Нет_ничего. Тут будет реальные ключи'
 

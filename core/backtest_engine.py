@@ -11,31 +11,30 @@ from core.feature_engine import FeatureEngine
 from strategies.base_strategy import BaseStrategy
 from utils.context_logger import backtest_time_filter
 from utils.file_io import load_instrument_info
-from config import RISK_CONFIG
 
 logger = logging.getLogger('backtester')
 
 
-def _initialize_components(config: Dict[str, Any]) -> Dict[str, Any]:
+def _initialize_components(settings: Dict[str, Any]) -> Dict[str, Any]:
     """Инициализирует и возвращает все ключевые компоненты системы на основе конфига."""
     logger.info("Инициализация компонентов бэктеста...")
     events_queue = queue.Queue()
 
     instrument_info = load_instrument_info(
-        exchange=config["exchange"],
-        instrument=config["instrument"],
-        interval=config["interval"],
-        data_dir=config["data_dir"]
+        exchange=settings["exchange"],
+        instrument=settings["instrument"],
+        interval=settings["interval"],
+        data_dir=settings["data_dir"]
     )
 
-    strategy = config["strategy_class"](events_queue, config["instrument"])
+    strategy = settings["strategy_class"](events_queue, settings["instrument"])
 
     data_handler = HistoricLocalDataHandler(
         events_queue,
-        config["exchange"],
-        config["instrument"],
-        config["interval"],
-        data_path=config["data_dir"]
+        settings["exchange"],
+        settings["instrument"],
+        settings["interval"],
+        data_path=settings["data_dir"]
     )
 
     feature_engine = FeatureEngine()
@@ -43,14 +42,16 @@ def _initialize_components(config: Dict[str, Any]) -> Dict[str, Any]:
 
     portfolio = Portfolio(
         events_queue=events_queue,
-        trade_log_file=config.get("trade_log_path"),  # Может быть None
+        trade_log_file=settings.get("trade_log_path"),  # Может быть None
         strategy=strategy,
-        exchange=config["exchange"],
-        initial_capital=config["initial_capital"],
-        commission_rate=config["commission_rate"],
-        interval=config["interval"],
-        risk_manager_type=config["risk_manager_type"],
-        instrument_info=instrument_info
+        exchange=settings["exchange"],
+        initial_capital=settings["initial_capital"],
+        commission_rate=settings["commission_rate"],
+        interval=settings["interval"],
+        risk_manager_type=settings["risk_manager_type"],
+        instrument_info=instrument_info,
+        risk_config=settings["risk_config"],
+        strategy_config=settings["strategy_config"]
     )
 
     return {
@@ -63,6 +64,7 @@ def _prepare_data(
         feature_engine: FeatureEngine,
         strategy: BaseStrategy,
         risk_manager_type: str,
+        risk_config: Dict[str, Any],
         data_slice: pd.DataFrame = None
 ) -> pd.DataFrame | None:
     """Подготавливает исторические данные, добавляя индикаторы."""
@@ -77,7 +79,7 @@ def _prepare_data(
     logger.info(f"Стратегия '{strategy.name}' требует индикаторы: {all_requirements}")
 
     if risk_manager_type == "ATR":
-        atr_requirement = {"name": "atr", "params": {"period": RISK_CONFIG["ATR_PERIOD"]}}
+        atr_requirement = {"name": "atr", "params": {"period": risk_config["ATR_PERIOD"]}}
         all_requirements.append(atr_requirement)
         logger.info(f"AtrRiskManager требует индикатор: {atr_requirement}")
 
@@ -143,18 +145,19 @@ def _run_event_loop(
     logger.info("Основной цикл завершен.")
 
 
-def run_backtest_session(config: Dict[str, Any]) -> Dict[str, Any]:
+def run_backtest_session(settings: Dict[str, Any]) -> Dict[str, Any]:
     """
     Главная функция-движок. Запускает одну сессию бэктеста и возвращает результаты.
     """
-    components = _initialize_components(config)
+    components = _initialize_components(settings)
 
     enriched_data = _prepare_data(
         components["data_handler"],
         components["feature_engine"],
         components["strategy"],
-        config["risk_manager_type"],
-        data_slice=config.get("data_slice")  # Для WFO
+        settings["risk_manager_type"],
+        settings["risk_config"],
+        data_slice=settings.get("data_slice")  # Для WFO
     )
 
     if enriched_data is None:
@@ -162,7 +165,7 @@ def run_backtest_session(config: Dict[str, Any]) -> Dict[str, Any]:
         return
 
     _run_event_loop(
-        enriched_data, config["instrument"], components["events_queue"],
+        enriched_data, settings["instrument"], components["events_queue"],
         components["portfolio"], components["strategy"], components["execution_handler"]
     )
 
@@ -171,14 +174,14 @@ def run_backtest_session(config: Dict[str, Any]) -> Dict[str, Any]:
     trades_df = pd.DataFrame(portfolio.closed_trades) if portfolio.closed_trades else pd.DataFrame()
 
     final_capital = portfolio.current_capital
-    total_pnl = final_capital - config["initial_capital"]
+    total_pnl = final_capital - settings["initial_capital"]
 
     return {
         "status": "success",
         "trades_df": trades_df,
         "final_capital": final_capital,
         "total_pnl": total_pnl,
-        "initial_capital": config["initial_capital"],
+        "initial_capital": settings["initial_capital"],
         "enriched_data": enriched_data,
         "open_positions": portfolio.current_positions
     }
