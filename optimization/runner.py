@@ -6,19 +6,40 @@ import logging
 from datetime import datetime
 from copy import deepcopy
 
-from optimizer.objective import Objective
-from optimizer.splitter import split_data_by_periods, walk_forward_generator
+from optimization.objective import Objective
+from optimization.splitter import split_data_by_periods, walk_forward_generator
+from optimization.search_space import SEARCH_SPACE
+
 from strategies import AVAILABLE_STRATEGIES
 from core.data_handler import HistoricLocalDataHandler
 from core.backtest_engine import run_backtest_session
 from config import BACKTEST_CONFIG, STRATEGY_CONFIG, RISK_CONFIG
-from optimizer.search_space import SEARCH_SPACE
 
 # Настраиваем логирование, чтобы Optuna не "спамила" в консоль
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+
+def _build_reverse_param_map(strategy_name: str, rm_type: str) -> dict:
+    """
+    Создает обратный словарь для быстрого применения найденных параметров.
+    Ключ: имя параметра в Optuna, Значение: (категория, имя в конфиге).
+    Пример: {'ema_fast': ('strategy', 'ema_fast_period')}
+    """
+    reverse_map = {}
+
+    strategy_space = SEARCH_SPACE["strategy_params"].get(strategy_name, {})
+    for config_name, settings in strategy_space.items():
+        optuna_name = settings["kwargs"]["name"]
+        reverse_map[optuna_name] = ("strategy", config_name)
+
+    rm_space = SEARCH_SPACE["risk_manager_params"].get(rm_type, {})
+    for config_name, settings in rm_space.items():
+        optuna_name = settings["kwargs"]["name"]
+        reverse_map[optuna_name] = ("risk", config_name)
+
+    return reverse_map
 
 def run_wfo(args):
     """Главная функция, управляющая процессом Walk-Forward Optimization."""
@@ -114,7 +135,7 @@ def run_wfo(args):
     logger.info("\n--- WFO Завершена. Генерация итоговых отчетов ---")
 
     # 1. Настройка путей и имен файлов
-    report_dir = "optimizer/reports"
+    report_dir = "optimization/reports"
     os.makedirs(report_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     base_filename = f"{report_dir}/{timestamp}_WFO_{args.strategy}_{args.instrument}"
@@ -137,13 +158,23 @@ def run_wfo(args):
     if last_study:
         logger.info("Сохранение визуальных отчетов Optuna для последнего шага WFO...")
         try:
+            # Отчет 1: История оптимизации (создается всегда)
             fig_history = optuna.visualization.plot_optimization_history(last_study)
             fig_history.write_html(f"{base_filename}_last_step_history.html")
 
-            fig_importance = optuna.visualization.plot_param_importances(last_study)
-            fig_importance.write_html(f"{base_filename}_last_step_importance.html")
+            # Отчет 2: Важность параметров (создается, только если это возможно)
 
-            logger.info("HTML-отчеты Optuna успешно сохранены.")
+            # Проверяем, есть ли достаточное количество завершенных trials для анализа
+            completed_trials = [t for t in last_study.trials if t.state == optuna.trial.TrialState.COMPLETE]
+            if len(completed_trials) >= 2:
+                fig_importance = optuna.visualization.plot_param_importances(last_study)
+                fig_importance.write_html(f"{base_filename}_last_step_importance.html")
+                logger.info("HTML-отчеты Optuna (History, Importance) успешно сохранены.")
+            else:
+                logger.warning(
+                    "Недостаточно успешных итераций для расчета важности параметров. Отчет 'Importance' не будет создан.")
+                logger.info("HTML-отчет Optuna (History) успешно сохранен.")
+
         except (ImportError, ModuleNotFoundError):
             logger.warning("Для сохранения HTML-отчетов установите plotly: pip install plotly")
         except Exception as e:
@@ -159,7 +190,7 @@ def main():
     parser.add_argument("--exchange", type=str, required=True, choices=['tinkoff', 'bybit'])
     parser.add_argument("--instrument", type=str, required=True, help="Тикер/символ инструмента.")
     parser.add_argument("--interval", type=str, required=True, help="Таймфрейм.")
-    parser.add_argument("--rm", dest="risk_manager_type", type=str, default="FIXED", choices=["FIXED", "ATR"])
+    parser.add_argument("--rm", type=str, default="FIXED", choices=["FIXED", "ATR"])
     parser.add_argument("--n_trials", type=int, default=100, help="Количество итераций оптимизации.")
     parser.add_argument("--total_periods", type=int, required=True, help="На сколько частей делить весь датасет.")
     parser.add_argument("--train_periods", type=int, required=True, help="Сколько частей использовать для обучения.")

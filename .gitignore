@@ -32,4 +32,4 @@ datalists/
 .pytest_cache
 
 # Отчеты модуля оптимизации
-optimizer/reports/
+optimization/reports/

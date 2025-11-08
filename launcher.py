@@ -271,6 +271,81 @@ def run_sandbox_trading():
         break
 
 
+def run_optimizer():
+    """Интерактивный запуск Walk-Forward Optimizer."""
+    print("\n--- Запуск оптимизации параметров (Walk-Forward) ---\n")
+
+    strategies = get_available_strategies()
+    if not strategies:
+        print("Ошибка: не найдено ни одной доступной стратегии.")
+        return
+
+    # --- Сбор параметров ---
+    while True:
+        strategy_name = questionary.select("Выберите стратегию для оптимизации:",
+                                           choices=[*strategies.keys(), GO_BACK_OPTION]).ask()
+        if strategy_name is None or strategy_name == GO_BACK_OPTION: return
+
+        exchange = questionary.select("Выберите биржу:", choices=["tinkoff", "bybit", GO_BACK_OPTION]).ask()
+        if exchange is None: return
+        if exchange == GO_BACK_OPTION: continue
+
+        available_intervals = list(EXCHANGE_INTERVAL_MAPS[exchange].keys())
+        interval = questionary.select("Выберите интервал:", choices=[*available_intervals, GO_BACK_OPTION]).ask()
+        if interval is None: return
+        if interval == GO_BACK_OPTION: continue
+
+        available_instruments = get_available_instruments(exchange, interval)
+        if not available_instruments:
+            print(f"Ошибка: не найдено скачанных данных для биржи '{exchange}' и интервала '{interval}'.")
+            continue
+
+        instrument = questionary.select("Выберите ОДИН инструмент для проведения WFO:",
+                                        choices=[*available_instruments, GO_BACK_OPTION]).ask()
+        if instrument is None: return
+        if instrument == GO_BACK_OPTION: continue
+
+        rm_type = questionary.select("Выберите риск-менеджер для оптимизации:",
+                                     choices=["FIXED", "ATR", GO_BACK_OPTION]).ask()
+        if rm_type is None: return
+        if rm_type == GO_BACK_OPTION: continue
+
+        n_trials = questionary.text(
+            "Введите количество итераций на каждом шаге WFO (например, 100):",
+            default="100", validate=lambda text: text.isdigit() and int(text) > 0
+        ).ask()
+        if n_trials is None: continue
+
+        total_periods = questionary.text(
+            "На сколько частей разделить всю историю (например, 10):",
+            default="10", validate=lambda text: text.isdigit() and int(text) > 1
+        ).ask()
+        if total_periods is None: continue
+
+        train_periods = questionary.text(
+            f"Сколько частей использовать для обучения (1-{int(total_periods) - 1}):",
+            default="5", validate=lambda text: text.isdigit() and 0 < int(text) < int(total_periods)
+        ).ask()
+        if train_periods is None: continue
+
+        # Собираем команду для запуска
+        command = [
+            sys.executable, "-m", "optimization.runner",
+            "--strategy", strategy_name,
+            "--exchange", exchange,
+            "--instrument", instrument,
+            "--interval", interval,
+            "--rm", rm_type,
+            "--n_trials", n_trials,
+            "--total_periods", total_periods,
+            "--train_periods", train_periods,
+        ]
+
+        print("\nЗапускаю Walk-Forward Optimizer... Это может занять много времени.")
+        print("Следите за прогрессом в этом окне. По завершении отчеты будут в папке optimization/reports/.")
+        subprocess.run(command)
+        break
+
 def run_dashboard():
     """Запуск Streamlit дашборда."""
     print("\n--- Запуск панели анализа (Dashboard) ---\n")
@@ -288,8 +363,9 @@ def main():
         "3. Запустить бэктест на одном инструменте": run_single_backtest,
         "4. Запустить массовый бэктест (по папке)": run_batch_backtest,
         "5. Проанализировать результаты (Dashboard)": run_dashboard,
+        "6. Запустить оптимизацию параметров (WFO)": run_optimizer,
         "------------------------------------------": None,
-        "6. Запустить симуляцию в 'песочнице'": run_sandbox_trading,
+        "7. Запустить симуляцию в 'песочнице'": run_sandbox_trading,
         "Выход": "EXIT"
     }
 

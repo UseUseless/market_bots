@@ -5,14 +5,20 @@ import logging
 
 
 def log_trade(
-    trade_log_file: str, strategy_name: str, exchange: str, instrument: str, direction: str,
+    trade_log_file: str | None,
+    strategy_name: str, exchange: str, instrument: str, direction: str,
     entry_timestamp: datetime, exit_timestamp: datetime,
     entry_price: float, exit_price: float, pnl: float, exit_reason: str,
     interval: str, risk_manager: str
 ):
     """
     Записывает информацию о завершенной сделке в указанный файл в формате JSONL.
+    Если trade_log_file равен None, функция ничего не делает.
     """
+
+    if trade_log_file is None:
+        return
+
     try:
         os.makedirs(os.path.dirname(trade_log_file), exist_ok=True)
 

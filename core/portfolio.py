@@ -20,18 +20,18 @@ class Portfolio:
     4.  **Оркестрация**: Принимает события и на основе их генерирует новые при выполнении условия
     """
 
-    def __init__(self, events_queue: Queue, trade_log_file: str, strategy: BaseStrategy,
+    def __init__(self, events_queue: Queue, trade_log_file: str | None, strategy: BaseStrategy,
                  exchange: str, initial_capital: float, commission_rate: float, interval: str,
                  risk_manager_type: str, instrument_info: Dict[str, Any],
                  risk_config: Dict[str, Any], strategy_config: Dict[str, Any]):
-        self.events_queue: Queue[Event] = events_queue  # Ссылка на общую очередь событий для отправки ордеров
-        self.trade_log_file: str = trade_log_file       # Путь к CSV-файлу для записи сделок
-        self.strategy: BaseStrategy = strategy          # Экземпляр текущей стратегии (нужен для доступа к SL/TP)
-        self.initial_capital: float = initial_capital   # Начальный капитал для бэктеста
-        self.commission_rate: float = commission_rate   # Размер комиссии в долях Ex:(0.0005 = 0.05%)
-        self.interval: str = interval                   # Текущий таймфрейм (например, '5min'). Нужен для логирования.
+        self.events_queue: Queue[Event] = events_queue      # Ссылка на общую очередь событий для отправки ордеров
+        self.trade_log_file: str | None = trade_log_file    # Путь к CSV-файлу для записи сделок
+        self.strategy: BaseStrategy = strategy              # Экземпляр текущей стратегии (нужен для доступа к SL/TP)
+        self.initial_capital: float = initial_capital       # Начальный капитал для бэктеста
+        self.commission_rate: float = commission_rate       # Размер комиссии в долях Ex:(0.0005 = 0.05%)
+        self.interval: str = interval                       # Текущий таймфрейм (например, '5min'). Нужен для логирования.
         self.instrument_info: Dict[str, Any] = instrument_info  # Сохраняем метаданные
-        self.exchange: str = exchange                   # Какая биржа
+        self.exchange: str = exchange                       # Какая биржа
 
         # Создаем экземпляр калькулятора размера позиции.
         self.position_sizer: BasePositionSizer = FixedRiskSizer()
@@ -372,8 +372,8 @@ class Portfolio:
         )
         self.closed_trades.append({
             'pnl': pnl,
-            'entry_timestamp': position['entry_timestamp'],
-            'exit_timestamp': last_candle['time']
+            'entry_timestamp_utc': position['entry_timestamp'],
+            'exit_timestamp_utc': last_candle['time']
         })
 
         del self.current_positions[event.instrument]

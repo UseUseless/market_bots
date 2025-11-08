@@ -6,7 +6,7 @@ from copy import deepcopy
 from core.backtest_engine import run_backtest_session
 from config import BACKTEST_CONFIG, STRATEGY_CONFIG, RISK_CONFIG
 from strategies import AVAILABLE_STRATEGIES
-from optimizer.search_space import SEARCH_SPACE
+from optimization.search_space import SEARCH_SPACE
 
 
 def _calculate_calmar_ratio(trades_df: pd.DataFrame, initial_capital: float) -> float:

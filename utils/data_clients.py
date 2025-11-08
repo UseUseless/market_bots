@@ -6,16 +6,15 @@ from tqdm import tqdm
 from abc import ABC, abstractmethod
 import time
 
-# --- Библиотеки для Tinkoff ---
 from tinkoff.invest import Client, RequestError, CandleInterval, InstrumentStatus, SecurityTradingStatus
 from tinkoff.invest.utils import now, quotation_to_decimal
 from config import TOKEN_READONLY, EXCHANGE_SPECIFIC_CONFIG
 
-# --- Библиотеки для Bybit ---
 from pybit.unified_trading import HTTP
 
 from config import EXCHANGE_INTERVAL_MAPS
 
+logger = logging.getLogger('backtester')
 
 class BaseDataClient(ABC):
     @abstractmethod
@@ -50,23 +49,60 @@ class TinkoffClient(BaseDataClient):
             raise ConnectionAbortedError(f"Невалидный токен Tinkoff: {e.details}")
 
     def _resolve_figi(self, instrument: str) -> str:
-        if instrument.startswith("BBG"): return instrument
-        logging.info(f"Поиск FIGI для тикера '{instrument}'...")
+        """
+        ИЗМЕНЕНО: Финальная версия. Логика поиска FIGI с приоритетом на class_code.
+        1. Ищет точное совпадение по тикеру И class_code.
+        2. Если не найдено, ищет точное совпадение только по тикеру.
+        3. Если не найдено, использует лучший результат нечеткого поиска.
+        """
+        if instrument.startswith("BBG"):
+            return instrument
+
+        logger.info(f"Поиск FIGI для тикера '{instrument}'...")
+
         with Client(self.read_token) as c:
             try:
                 found = c.instruments.find_instrument(query=instrument)
-                if not found.instruments: raise ValueError(f"Инструмент '{instrument}' не найден.")
+                if not found.instruments:
+                    raise ValueError(f"Инструмент '{instrument}' не найден через API.")
+
+                instrument_upper = instrument.upper()
                 class_code = EXCHANGE_SPECIFIC_CONFIG['tinkoff']['DEFAULT_CLASS_CODE']
-                target_instrument = next((instr for instr in found.instruments if instr.class_code == class_code),
-                                         found.instruments[0])
-                if target_instrument.class_code != class_code:
-                    logging.warning(
-                        f"Инструмент для '{instrument}' не найден в class_code '{class_code}'. Используется: {target_instrument.name} ({target_instrument.class_code})")
+
+                # --- НОВАЯ УСИЛЕННАЯ ЛОГИКА ---
+
+                # 1. СТРОГИЙ ПОИСК: Точное совпадение тикера И class_code
+                strict_match = next((
+                    instr for instr in found.instruments
+                    if instr.ticker == instrument_upper and instr.class_code == class_code
+                ), None)
+
+                if strict_match:
+                    logger.info(
+                        f"Найдено строгое совпадение: тикер='{strict_match.ticker}', class_code='{class_code}' ({strict_match.name})")
+                    target_instrument = strict_match
+                else:
+                    # 2. МЯГКИЙ ПОИСК: Точное совпадение только по тикеру (если строгий не сработал)
+                    logger.warning(
+                        f"Строгое совпадение для '{instrument_upper}' в class_code='{class_code}' не найдено. Поиск только по тикеру...")
+                    exact_match = next((instr for instr in found.instruments if instr.ticker == instrument_upper), None)
+
+                    if exact_match:
+                        logger.info(f"Найдено точное совпадение по тикеру: '{exact_match.ticker}' ({exact_match.name})")
+                        target_instrument = exact_match
+                    else:
+                        # 3. НЕЧЕТКИЙ ПОИСК: Если ничего не найдено, берем лучший результат от API
+                        logger.warning(
+                            f"Точное совпадение для тикера '{instrument_upper}' не найдено. Используется лучший результат нечеткого поиска.")
+                        target_instrument = found.instruments[0]
+
                 figi = target_instrument.figi
-                logging.info(f"Найден FIGI: {figi} для инструмента '{target_instrument.name}'")
+                logger.info(
+                    f"Выбран инструмент: '{target_instrument.name}' с FIGI: {figi} (class_code: {target_instrument.class_code})")
                 return figi
+
             except RequestError as e:
-                logging.error(f"Ошибка API при поиске инструмента '{instrument}': {e}")
+                logger.error(f"Ошибка API при поиске инструмента '{instrument}': {e}")
                 raise
 
     def get_historical_data(self, instrument: str, interval: str, days: int, **kwargs) -> pd.DataFrame:
@@ -115,11 +151,17 @@ class TinkoffClient(BaseDataClient):
             return {}
 
     def get_top_liquid_by_turnover(self, count: int) -> List[str]:
-        logging.info(f"Tinkoff Client: Запрос топ-{count} ликвидных акций MOEX по дневному обороту...")
+        """
+        ИЗМЕНЕНО: Запрашивает топ-N ликвидных акций MOEX на основе СУММАРНОГО оборота
+        за последний месяц (~31 день).
+        """
+        logger.info(f"Tinkoff Client: Запрос топ-{count} ликвидных акций MOEX по месячному обороту...")
         try:
             with Client(self.read_token) as client:
+                # Шаг 1: Получаем список всех торгуемых рублевых акций для неквалифицированных инвесторов
                 all_shares = client.instruments.shares(
                     instrument_status=InstrumentStatus.INSTRUMENT_STATUS_BASE).instruments
+
                 tqbr_shares = [
                     s for s in all_shares
                     if s.class_code == 'TQBR'
@@ -130,32 +172,53 @@ class TinkoffClient(BaseDataClient):
                            SecurityTradingStatus.SECURITY_TRADING_STATUS_NOT_AVAILABLE_FOR_TRADING
                        ]
                 ]
+
                 share_data = []
-                for share_info in tqdm(tqbr_shares, desc="Получение оборотов по акциям"):
+
+                # Шаг 2: Для каждой акции рассчитываем суммарный оборот за месяц
+                for share_info in tqdm(tqbr_shares, desc="Получение месячных оборотов по акциям"):
                     try:
+                        # ИЗМЕНЕНИЕ: Запрашиваем дневные свечи за последний 31 день
                         candles_response = client.market_data.get_candles(
                             figi=share_info.figi,
-                            from_=now() - timedelta(days=5),
+                            from_=now() - timedelta(days=31),
                             to=now(),
                             interval=CandleInterval.CANDLE_INTERVAL_DAY
                         )
+
                         if candles_response.candles:
-                            last_day_candle = candles_response.candles[-1]
-                            close_price = float(quotation_to_decimal(last_day_candle.close))
-                            volume_in_lots = last_day_candle.volume
-                            lot_size = share_info.lot
-                            turnover_rub = close_price * volume_in_lots * lot_size
-                            share_data.append({"ticker": share_info.ticker, "turnover_rub": turnover_rub})
+                            # ИЗМЕНЕНИЕ: Суммируем обороты по каждой свече
+                            total_turnover_rub = 0
+                            for candle in candles_response.candles:
+                                close_price = float(quotation_to_decimal(candle.close))
+                                volume_in_lots = candle.volume
+                                lot_size = share_info.lot
+                                daily_turnover = close_price * volume_in_lots * lot_size
+                                total_turnover_rub += daily_turnover
+
+                            share_data.append({"ticker": share_info.ticker, "turnover_rub": total_turnover_rub})
+
+                        # Уважительная пауза, чтобы не получить бан от API
                         time.sleep(0.1)
+
                     except RequestError as e:
-                        logging.warning(f"Не удалось получить данные для {share_info.ticker}: {e.details}")
+                        # Если по инструменту нет данных (например, он новый), просто пропускаем его
+                        if e.code == 'NOT_FOUND':
+                            logger.debug(
+                                f"Нет исторических данных для {share_info.ticker}, возможно, новый инструмент. Пропускаем.")
+                        else:
+                            logger.warning(f"Не удалось получить данные для {share_info.ticker}: {e.details}")
                         continue
+
+                # Шаг 3: Сортируем и возвращаем топ-N тикеров
                 sorted_shares = sorted(share_data, key=lambda x: x['turnover_rub'], reverse=True)
                 top_tickers = [s['ticker'] for s in sorted_shares[:count]]
-                logging.info(f"Получено {len(top_tickers)} самых ликвидных тикеров по дневному обороту.")
+
+                logger.info(f"Получено {len(top_tickers)} самых ликвидных тикеров по месячному обороту.")
                 return top_tickers
+
         except Exception as e:
-            logging.error(f"Ошибка API при получении списка ликвидных инструментов Tinkoff: {e}", exc_info=True)
+            logger.error(f"Ошибка API при получении списка ликвидных инструментов Tinkoff: {e}", exc_info=True)
             return []
 
     @staticmethod
