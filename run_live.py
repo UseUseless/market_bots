@@ -16,9 +16,6 @@ from strategies.base_strategy import BaseStrategy
 from core.risk_manager import RiskManagerType
 
 from strategies import AVAILABLE_STRATEGIES
-from config import LIVE_TRADING_CONFIG
-
-# --- Основной асинхронный движок ---
 
 async def main_event_loop(
         events_queue: AsyncQueue,
@@ -26,16 +23,8 @@ async def main_event_loop(
         strategy: BaseStrategy,
         execution_handler: Any
 ):
-    """Главный асинхронный цикл обработки событий."""
+    """Главный асинхронный цикл обработки событий (УПРОЩЕННАЯ ВЕРСИЯ)."""
     logging.info("Основной цикл обработки событий запущен...")
-    schema = {
-        "time": "datetime64[ns, UTC]", "open": "float64", "high": "float64",
-        "low": "float64", "close": "float64", "volume": "int64"
-    }
-    history_df = pd.DataFrame({col: pd.Series(dtype=typ) for col, typ in schema.items()})
-    min_history_size = strategy.min_history_needed
-    buffer_size = int(min_history_size * LIVE_TRADING_CONFIG['LIVE_HISTORY_BUFFER_MULTIPLIER'])
-    logging.info(f"Стратегия требует минимум {min_history_size} свечей для начала работы.")
 
     while True:
         event = await events_queue.get()
@@ -49,31 +38,8 @@ async def main_event_loop(
             )
             logging.info(candle_info)
 
-            new_candle = event.data.to_frame().T
-            history_df = pd.concat([history_df, new_candle], ignore_index=True)
-            history_df = history_df.astype(schema)
-
-            if len(history_df) > buffer_size:
-                history_df = history_df.iloc[-buffer_size:].reset_index(drop=True)
-
-            if len(history_df) < min_history_size:
-                logging.debug(f"Накопление данных... {len(history_df)}/{min_history_size} свечей.")
-                continue
-
-            enriched_history = strategy.prepare_data(history_df.copy())
-            if enriched_history.empty:
-                logging.warning("prepare_data вернул пустой DataFrame, пропускаем свечу.")
-                continue
-
-            last_enriched_candle = enriched_history.iloc[-1]
-            enriched_event = MarketEvent(
-                timestamp=event.timestamp,
-                instrument=event.instrument,
-                data=last_enriched_candle
-            )
-
-            portfolio.update_market_price(enriched_event)
-            strategy.calculate_signals(enriched_event)
+            portfolio.update_market_price(event)
+            strategy.on_market_event(event)
 
         elif isinstance(event, SignalEvent):
             portfolio.on_signal(event)
@@ -83,7 +49,6 @@ async def main_event_loop(
             portfolio.on_fill(event)
 
         events_queue.task_done()
-
 
 async def run_sandbox(
         exchange: str,

@@ -7,13 +7,11 @@ from core.event import MarketEvent, SignalEvent, OrderEvent, FillEvent
 from core.data_handler import HistoricLocalDataHandler
 from core.portfolio import Portfolio
 from core.execution import SimulatedExecutionHandler
-from core.feature_engine import FeatureEngine
 from strategies.base_strategy import BaseStrategy
 from utils.context_logger import backtest_time_filter
 from utils.file_io import load_instrument_info
 
 logger = logging.getLogger('backtester')
-
 
 def _initialize_components(settings: Dict[str, Any]) -> Dict[str, Any]:
     """Инициализирует и возвращает все ключевые компоненты системы на основе конфига."""
@@ -30,7 +28,9 @@ def _initialize_components(settings: Dict[str, Any]) -> Dict[str, Any]:
     strategy = settings["strategy_class"](
         events_queue,
         settings["instrument"],
-        strategy_config=settings["strategy_config"]
+        strategy_config=settings["strategy_config"],
+        risk_manager_type=settings["risk_manager_type"],
+        risk_config=settings["risk_config"]
     )
 
     data_handler = HistoricLocalDataHandler(
@@ -41,7 +41,6 @@ def _initialize_components(settings: Dict[str, Any]) -> Dict[str, Any]:
         data_path=settings["data_dir"]
     )
 
-    feature_engine = FeatureEngine()
     execution_handler = SimulatedExecutionHandler(events_queue)
 
     portfolio = Portfolio(
@@ -60,18 +59,16 @@ def _initialize_components(settings: Dict[str, Any]) -> Dict[str, Any]:
 
     return {
         "events_queue": events_queue, "strategy": strategy, "data_handler": data_handler,
-        "portfolio": portfolio, "execution_handler": execution_handler, "feature_engine": feature_engine
+        "portfolio": portfolio, "execution_handler": execution_handler
     }
+
 
 def _prepare_data(
         data_handler: HistoricLocalDataHandler,
-        feature_engine: FeatureEngine,
         strategy: BaseStrategy,
-        risk_manager_type: str,
-        risk_config: Dict[str, Any],
         data_slice: pd.DataFrame = None
 ) -> pd.DataFrame | None:
-    """Подготавливает исторические данные, добавляя индикаторы."""
+    """Подготавливает исторические данные, полностью делегируя это стратегии."""
     logger.info("Начало этапа подготовки данных...")
 
     raw_data = data_slice if data_slice is not None else data_handler.load_raw_data()
@@ -79,28 +76,17 @@ def _prepare_data(
         logger.error("Не удалось получить данные для бэктеста. Завершение работы.")
         return None
 
-    all_requirements = strategy.required_indicators.copy()
-    logger.info(f"Стратегия '{strategy.name}' требует индикаторы: {all_requirements}")
+    enriched_data = strategy.process_data(raw_data.copy())
 
-    if risk_manager_type == "ATR":
-        atr_requirement = {"name": "atr", "params": {"period": risk_config["ATR_PERIOD"]}}
-        all_requirements.append(atr_requirement)
-        logger.info(f"AtrRiskManager требует индикатор: {atr_requirement}")
-
-    prepared_data = feature_engine.add_required_features(raw_data, all_requirements) if all_requirements else raw_data
-    enriched_data = strategy.prepare_data(prepared_data)
-
-    enriched_data.dropna(inplace=True)
-    enriched_data.reset_index(drop=True, inplace=True)
-
+    # Проверяем, остались ли данные ПОСЛЕ всех манипуляций внутри стратегии
     if len(enriched_data) < strategy.min_history_needed:
         logger.error(f"Ошибка: Недостаточно данных для запуска стратегии '{strategy.name}'.")
         logger.error(
-            f"Требуется как минимум {strategy.min_history_needed} свечей, но после подготовки и очистки доступно только {len(enriched_data)}.")
+            f"Требуется как минимум {strategy.min_history_needed} свечей, но после полной обработки доступно только {len(enriched_data)}.")
         return None
 
     if enriched_data.empty:
-        logger.warning("Нет данных для запуска бэктеста после подготовки.")
+        logger.warning("Нет данных для запуска бэктеста после полной подготовки стратегии.")
         return None
 
     logger.info("Этап подготовки данных завершен.")
@@ -135,7 +121,7 @@ def _run_event_loop(
                 if isinstance(event, MarketEvent):
                     backtest_time_filter.set_sim_time(event.timestamp)
                     portfolio.update_market_price(event)
-                    strategy.calculate_signals(event)
+                    strategy.on_market_event(event)
                 elif isinstance(event, SignalEvent):
                     portfolio.on_signal(event)
                 elif isinstance(event, OrderEvent):
@@ -158,10 +144,7 @@ def run_backtest_session(settings: Dict[str, Any]) -> Dict[str, Any]:
 
     enriched_data = _prepare_data(
         components["data_handler"],
-        components["feature_engine"],
         components["strategy"],
-        settings["risk_manager_type"],
-        settings["risk_config"],
         data_slice=settings.get("data_slice")  # Для WFO
     )
 
