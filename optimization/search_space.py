@@ -1,8 +1,11 @@
 SEARCH_SPACE = {
     "strategy_params": {
         "SimpleSMACrossStrategy": {
-        # Оставляем пустым, т.к. SMA(50) захардкожен
-        },
+        "sma_period": {
+            "method": "suggest_int",
+            "kwargs": {"name": "sma_period", "low": 10, "high": 100}
+        }
+    },
         "TripleFilterStrategy": {
             "ema_fast_period": {
                 "method": "suggest_int",

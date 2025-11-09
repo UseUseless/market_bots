@@ -135,7 +135,13 @@ def main():
     # Берем на будущее на каком интервале используется стратегия (для логов и поиска файлов)
     # Из стратегии или из командной строки
     strategy_class = AVAILABLE_STRATEGIES[args.strategy]
-    current_interval = args.interval or strategy_class.candle_interval
+    strategy_default_config = STRATEGY_CONFIG.get(args.strategy, {})
+    default_interval = strategy_default_config.get("candle_interval")
+    current_interval = args.interval or default_interval
+
+    if not current_interval:
+        # Защита на случай, если интервал не указан нигде
+        raise ValueError(f"Интервал для стратегии {args.strategy} не определен ни в аргументах, ни в config.py")
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     # Имена логов для текущего запуска бэктеста

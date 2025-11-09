@@ -1,23 +1,22 @@
 import pandas as pd
 from queue import Queue
 import logging
+from typing import Dict, Any, Optional
 
 from core.event import MarketEvent, SignalEvent
 from strategies.base_strategy import BaseStrategy
-from config import STRATEGY_CONFIG
 
 logger = logging.getLogger('backtester')
 
 class VolatilityBreakoutStrategy(BaseStrategy):
-    _config = STRATEGY_CONFIG["VolatilityBreakoutStrategy"]
-    candle_interval: str = _config["candle_interval"]
 
-    def __init__(self, events_queue: Queue, instrument: str):
-        super().__init__(events_queue, instrument)
+    def __init__(self, events_queue: Queue, instrument: str, strategy_config: Optional[Dict[str, Any]] = None):
+        super().__init__(events_queue, instrument, strategy_config)
 
-        self.variant = self._config["variant"]
-        self.params = self._config[f"{self.variant}_params"]
-        self.entry_params = self._config["entry_logic"]
+        strategy_params = self.strategy_config.get(self.name, {})
+        self.variant = strategy_params.get("variant", "ADX_Donchian")
+        self.params = strategy_params.get(f"{self.variant}_params", {})
+        self.entry_params = strategy_params.get("entry_logic", {})
 
         self.breakout_timeout_bars = self.entry_params.get("breakout_timeout_bars", 3)
         self.confirm_breakout = self.entry_params.get("confirm_breakout", False)

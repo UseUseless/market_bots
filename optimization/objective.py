@@ -2,10 +2,11 @@ import optuna
 import pandas as pd
 import numpy as np
 from copy import deepcopy
+from typing import Type
 
 from core.backtest_engine import run_backtest_session
 from config import BACKTEST_CONFIG, STRATEGY_CONFIG, RISK_CONFIG
-from strategies import AVAILABLE_STRATEGIES
+from strategies.base_strategy import BaseStrategy
 from optimization.search_space import SEARCH_SPACE
 
 
@@ -49,13 +50,14 @@ def _calculate_calmar_ratio(trades_df: pd.DataFrame, initial_capital: float) -> 
 class Objective:
     """Класс-обертка для целевой функции, чтобы передавать статичные параметры."""
 
-    def __init__(self, strategy_name: str, exchange: str, instrument: str, interval: str, risk_manager_type: str, data_slice: pd.DataFrame):
-        self.strategy_name = strategy_name
+    def __init__(self, strategy_class: Type[BaseStrategy], exchange: str, instrument: str, interval: str, risk_manager_type: str, data_slice: pd.DataFrame):
+        self.strategy_class = strategy_class
         self.exchange = exchange
         self.instrument = instrument
         self.interval = interval
         self.risk_manager_type = risk_manager_type
         self.data_slice = data_slice
+        self.strategy_key = self.strategy_class.__name__
 
     def __call__(self, trial: optuna.Trial) -> float:
         """Одна итерация оптимизации."""
@@ -67,22 +69,21 @@ class Objective:
             # --- 2. Получаем параметры от Optuna и обновляем конфиги ---
 
             # Параметры стратегии
-            strategy_search_space = SEARCH_SPACE["strategy_params"].get(self.strategy_name, {})
+            strategy_search_space = SEARCH_SPACE["strategy_params"].get(self.strategy_key, {})
             for param, settings in strategy_search_space.items():
                 method = getattr(trial, settings["method"])
                 value = method(**settings["kwargs"])
-                strategy_config_override[self.strategy_name][param] = value
+                # Используем правильный ключ (имя класса)
+                strategy_config_override[self.strategy_key][param] = value
 
-            # Параметры риск-менеджера
             rm_search_space = SEARCH_SPACE["risk_manager_params"].get(self.risk_manager_type, {})
             for param, settings in rm_search_space.items():
                 method = getattr(trial, settings["method"])
                 value = method(**settings["kwargs"])
                 risk_config_override[param] = value
 
-            # --- 3. Собираем конфиг для движка бэктеста ---
             backtest_settings = {
-                "strategy_class": AVAILABLE_STRATEGIES[self.strategy_name],
+                "strategy_class": self.strategy_class,  # Передаем сам класс
                 "exchange": self.exchange,
                 "instrument": self.instrument,
                 "interval": self.interval,

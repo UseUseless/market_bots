@@ -5,13 +5,10 @@ import os
 from typing import List, Dict, Type
 
 from strategies.base_strategy import BaseStrategy
-from config import PATH_CONFIG
-
-from config import EXCHANGE_INTERVAL_MAPS
+from config import PATH_CONFIG, EXCHANGE_INTERVAL_MAPS, STRATEGY_CONFIG
 
 # --- Константа для опции "Назад" ---
 GO_BACK_OPTION = "Назад"
-
 
 def get_available_strategies() -> Dict[str, Type[BaseStrategy]]:
     """Динамически находит и импортирует все доступные стратегии."""
@@ -143,11 +140,16 @@ def run_single_backtest():
 
         # Используем импортированный маппинг
         available_intervals = list(EXCHANGE_INTERVAL_MAPS[exchange].keys())
+
+        # Читаем рекомендуемый интервал из конфига
+        strategy_default_config = STRATEGY_CONFIG.get(strategy_name, {})
+        default_interval = strategy_default_config.get("candle_interval")
+
         interval = questionary.select(
             "Выберите интервал:",
             choices=[*available_intervals, GO_BACK_OPTION],
-            default=strategies[strategy_name].candle_interval if strategies[
-                                                                     strategy_name].candle_interval in available_intervals else None
+            # Используем значение из конфига как default
+            default=default_interval if default_interval in available_intervals else None
         ).ask()
         if interval is None: return
         if interval == GO_BACK_OPTION: continue
@@ -194,11 +196,16 @@ def run_batch_backtest():
 
         # Используем импортированный маппинг
         available_intervals = list(EXCHANGE_INTERVAL_MAPS[exchange].keys())
+
+        # Читаем рекомендуемый интервал из конфига
+        strategy_default_config = STRATEGY_CONFIG.get(strategy_name, {})
+        default_interval = strategy_default_config.get("candle_interval")
+
         interval = questionary.select(
             "Выберите интервал:",
             choices=[*available_intervals, GO_BACK_OPTION],
-            default=strategies[strategy_name].candle_interval if strategies[
-                                                                     strategy_name].candle_interval in available_intervals else None
+            # Используем значение из конфига как default
+            default=default_interval if default_interval in available_intervals else None
         ).ask()
         if interval is None: return
         if interval == GO_BACK_OPTION: continue

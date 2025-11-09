@@ -123,6 +123,10 @@ EXCHANGE_SPECIFIC_CONFIG = {
 # --- НАСТРОЙКИ КОНКРЕТНЫХ СТРАТЕГИЙ ---
 # Свой собственный словарь с настройками для каждой стратегии.
 STRATEGY_CONFIG = {
+    "SimpleSMACrossStrategy": {
+        "candle_interval": "1hour",
+        "sma_period": 50
+    },
     "TripleFilterStrategy": {
         "candle_interval": "5min", # Рекомендуемый свечной интервал
         # Специфичные параметры для этой стратегии

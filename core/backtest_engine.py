@@ -27,7 +27,11 @@ def _initialize_components(settings: Dict[str, Any]) -> Dict[str, Any]:
         data_dir=settings["data_dir"]
     )
 
-    strategy = settings["strategy_class"](events_queue, settings["instrument"])
+    strategy = settings["strategy_class"](
+        events_queue,
+        settings["instrument"],
+        strategy_config=settings["strategy_config"]
+    )
 
     data_handler = HistoricLocalDataHandler(
         events_queue,
@@ -86,13 +90,14 @@ def _prepare_data(
     prepared_data = feature_engine.add_required_features(raw_data, all_requirements) if all_requirements else raw_data
     enriched_data = strategy.prepare_data(prepared_data)
 
-    if len(enriched_data) < strategy.min_history_needed:
-        logger.error(f"Ошибка: Недостаточно данных для запуска стратегии '{strategy.name}'.")
-        logger.error(f"Требуется как минимум {strategy.min_history_needed} свечей, но после подготовки доступно только {len(enriched_data)}.")
-        return None
-
     enriched_data.dropna(inplace=True)
     enriched_data.reset_index(drop=True, inplace=True)
+
+    if len(enriched_data) < strategy.min_history_needed:
+        logger.error(f"Ошибка: Недостаточно данных для запуска стратегии '{strategy.name}'.")
+        logger.error(
+            f"Требуется как минимум {strategy.min_history_needed} свечей, но после подготовки и очистки доступно только {len(enriched_data)}.")
+        return None
 
     if enriched_data.empty:
         logger.warning("Нет данных для запуска бэктеста после подготовки.")

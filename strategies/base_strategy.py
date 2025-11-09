@@ -1,7 +1,7 @@
 from queue import Queue
 import pandas as pd
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from core.event import MarketEvent
 
 class BaseStrategy(ABC):
@@ -19,11 +19,13 @@ class BaseStrategy(ABC):
     # Каждая дочерняя стратегия будет переопределять этот список.
     # Пример: [{"name": "ema", "params": {"period": 9}}, {"name": "sma", "params": {"period": 20, "column": "volume"}}]
     required_indicators: List[Dict[str, Any]] = []
-    def __init__(self, events_queue: Queue, instrument: str):
+    def __init__(self, events_queue: Queue, instrument: str, strategy_config: Optional[Dict[str, Any]] = None):
         self.events_queue = events_queue
         self.instrument: str = instrument
 
         self.name: str = self.__class__.__name__
+
+        self.strategy_config = strategy_config if strategy_config is not None else {}
 
     # Методы, которые должна определить каждая стратегия
 

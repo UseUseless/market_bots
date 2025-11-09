@@ -1,9 +1,9 @@
 import pandas as pd
 from queue import Queue
+from typing import Dict, Any, Optional
 
 from core.event import MarketEvent, SignalEvent
 from strategies.base_strategy import BaseStrategy
-from config import STRATEGY_CONFIG
 
 class TripleFilterStrategy(BaseStrategy):
     """
@@ -13,17 +13,18 @@ class TripleFilterStrategy(BaseStrategy):
     3. Подтверждение объемом (Volume > SMA 20)
     """
 
-    _config = STRATEGY_CONFIG["TripleFilterStrategy"]
-    candle_interval: str = _config["candle_interval"]
-    min_history_needed: int = _config["ema_trend_period"] + 1
 
-    def __init__(self, events_queue: Queue, instrument: str):
-        super().__init__(events_queue, instrument)
+    def __init__(self, events_queue: Queue, instrument: str, strategy_config: Optional[Dict[str, Any]] = None):
+        super().__init__(events_queue, instrument, strategy_config)
 
-        self.ema_fast_period = self._config["ema_fast_period"]
-        self.ema_slow_period = self._config["ema_slow_period"]
-        self.ema_trend_period = self._config["ema_trend_period"]
-        self.volume_sma_period = self._config["volume_sma_period"]
+        strategy_params = self.strategy_config.get(self.name, {})
+
+        self.ema_fast_period = strategy_params.get("ema_fast_period", 9)
+        self.ema_slow_period = strategy_params.get("ema_slow_period", 21)
+        self.ema_trend_period = strategy_params.get("ema_trend_period", 200)
+        self.volume_sma_period = strategy_params.get("volume_sma_period", 20)
+
+        self.min_history_needed = self.ema_trend_period + 1
 
         # Декларируем наши потребности
         self.required_indicators = [

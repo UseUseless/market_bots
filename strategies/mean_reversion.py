@@ -1,10 +1,11 @@
 import pandas as pd
 from queue import Queue
 import logging
+from typing import Dict, Any, Optional
 
 from core.event import MarketEvent, SignalEvent
 from strategies.base_strategy import BaseStrategy
-from config import STRATEGY_CONFIG
+
 
 logger = logging.getLogger('backtester')
 
@@ -15,15 +16,13 @@ class MeanReversionStrategy(BaseStrategy):
     - Выходит из позиции, когда цена возвращается к среднему (пересекает 0).
     """
 
-    _config = STRATEGY_CONFIG["MeanReversionStrategy"]
-    candle_interval: str = _config["candle_interval"]
+    def __init__(self, events_queue: Queue, instrument: str, strategy_config: Optional[Dict[str, Any]] = None):
+        super().__init__(events_queue, instrument, strategy_config)
 
-    def __init__(self, events_queue: Queue, instrument: str):
-        super().__init__(events_queue, instrument)
-
-        self.sma_period = self._config["sma_period"]
-        self.upper_threshold = self._config["z_score_upper_threshold"]
-        self.lower_threshold = self._config["z_score_lower_threshold"]
+        strategy_params = self.strategy_config.get(self.name, {})
+        self.sma_period = strategy_params.get("sma_period", 20)
+        self.upper_threshold = strategy_params.get("z_score_upper_threshold", 2.0)
+        self.lower_threshold = strategy_params.get("z_score_lower_threshold", -2.0)
         self.min_history_needed = self.sma_period + 1
 
         self.required_indicators = [

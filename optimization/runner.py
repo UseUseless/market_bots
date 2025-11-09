@@ -21,7 +21,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
-def _build_reverse_param_map(strategy_name: str, rm_type: str) -> dict:
+def _build_reverse_param_map(strategy_class_name: str, rm_type: str) -> dict:
     """
     Создает обратный словарь для быстрого применения найденных параметров.
     Ключ: имя параметра в Optuna, Значение: (категория, имя в конфиге).
@@ -29,7 +29,7 @@ def _build_reverse_param_map(strategy_name: str, rm_type: str) -> dict:
     """
     reverse_map = {}
 
-    strategy_space = SEARCH_SPACE["strategy_params"].get(strategy_name, {})
+    strategy_space = SEARCH_SPACE["strategy_params"].get(strategy_class_name, {})
     for config_name, settings in strategy_space.items():
         optuna_name = settings["kwargs"]["name"]
         reverse_map[optuna_name] = ("strategy", config_name)
@@ -69,7 +69,8 @@ def run_wfo(args):
     step_results = []
     last_study = None  # Сохраняем study последнего шага
 
-    param_map = _build_reverse_param_map(args.strategy, args.rm)
+    strategy_class_name_for_map = AVAILABLE_STRATEGIES[args.strategy].__name__
+    param_map = _build_reverse_param_map(strategy_class_name_for_map, args.rm)
 
     logger.info(f"--- Начало Walk-Forward Optimization ({num_steps} шагов) ---")
 
@@ -78,11 +79,26 @@ def run_wfo(args):
             f"\n--- Шаг {step_num}/{num_steps}: Обучение на {len(train_df)} свечах, тест на {len(test_df)} свечах ---")
 
         study = optuna.create_study(direction="maximize")
+
+        strategy_class = AVAILABLE_STRATEGIES[args.strategy]
+
         objective = Objective(
-            strategy_name=args.strategy, exchange=args.exchange, instrument=args.instrument,
-            interval=args.interval, risk_manager_type=args.rm, data_slice=train_df
+            strategy_class=strategy_class,
+            exchange=args.exchange,
+            instrument=args.instrument,
+            interval=args.interval,
+            risk_manager_type=args.rm,
+            data_slice=train_df
         )
-        study.optimize(objective, n_trials=args.n_trials, show_progress_bar=True)
+        try:
+            study.optimize(objective, n_trials=args.n_trials, n_jobs=-1, show_progress_bar=True)
+        except KeyboardInterrupt:
+            logger.warning("\nОптимизация прервана пользователем. Завершение работы...")
+            # Вежливо просим Optuna остановить все дочерние процессы
+            study.stop()
+            # Прерываем и внешний цикл WFO
+            break
+
         last_study = study
 
         if not study.best_trial or study.best_value < 0:  # Добавлена проверка на отрицательный результат
@@ -94,14 +110,15 @@ def run_wfo(args):
         for key, value in best_params.items():
             logger.info(f"  - {key}: {value}")
 
-        # --- УЛУЧШЕНИЕ 2 (продолжение): Применяем параметры через маппинг ---
         strategy_config_best = deepcopy(STRATEGY_CONFIG)
         risk_config_best = deepcopy(RISK_CONFIG)
 
+        strategy_class_name = strategy_class.__name__
         for optuna_name, value in best_params.items():
             category, config_name = param_map[optuna_name]
+
             if category == "strategy":
-                strategy_config_best[args.strategy][config_name] = value
+                strategy_config_best[strategy_class_name][config_name] = value
             elif category == "risk":
                 risk_config_best[config_name] = value
 
@@ -127,10 +144,9 @@ def run_wfo(args):
         step_results.append({"step": step_num, "best_value_in_sample": study.best_value, **best_params})
 
     if not all_oos_trades:
-        logger.error("Оптимизация завершена, но ни на одном из шагов не было получено сделок на тестовых данных.")
+        logger.error("Оптимизация завершена (или прервана) без единой сделки на тестовых данных. Отчеты не будут сгенерированы.")
         return
 
-    # --- ИЗМЕНЕНИЕ: Полностью переработанный блок отчетности ---
 
     logger.info("\n--- WFO Завершена. Генерация итоговых отчетов ---")
 
@@ -156,31 +172,62 @@ def run_wfo(args):
 
     # 4. Визуальные отчеты Optuna по ПОСЛЕДНЕМУ шагу
     if last_study:
+        logger.info("--- Топ-5 лучших итераций последнего шага WFO ---")
+        all_completed_trials = sorted(
+            [t for t in last_study.trials if t.state == optuna.trial.TrialState.COMPLETE],
+            key=lambda t: t.value,
+            reverse=True
+        )
+        for i, trial in enumerate(all_completed_trials[:5]):
+            logger.info(f"  Место #{i + 1}: Trial #{trial.number}, Calmar = {trial.value:.4f}")
+            logger.info(f"    Параметры: {trial.params}")
+        # ---------------------------------------------
+
         logger.info("Сохранение визуальных отчетов Optuna для последнего шага WFO...")
         try:
             # Отчет 1: История оптимизации (создается всегда)
+            logger.info("Попытка #1: Сохранение отчета 'history'...")
             fig_history = optuna.visualization.plot_optimization_history(last_study)
-            fig_history.write_html(f"{base_filename}_last_step_history.html")
+            history_path = f"{base_filename}_last_step_history.html"
+            fig_history.write_html(history_path)
+            logger.info(f"Успешно сохранено: {history_path}")
 
-            # Отчет 2: Важность параметров (создается, только если это возможно)
+            # 2. Проверяем условия для второго отчета (importance)
+            logger.info("Попытка #2: Проверка условий для отчета 'importance'...")
 
-            # Проверяем, есть ли достаточное количество завершенных trials для анализа
+            # Получаем все УСПЕШНО завершенные итерации
             completed_trials = [t for t in last_study.trials if t.state == optuna.trial.TrialState.COMPLETE]
+
+            # Логируем, сколько их на самом деле
+            logger.info(f"Найдено {len(last_study.trials)} итераций всего.")
+            logger.info(f"Из них {len(completed_trials)} имеют статус 'COMPLETE'.")
+
+            # Проверяем, достаточно ли их для анализа
             if len(completed_trials) >= 2:
+                logger.info("Условие (>= 2 успешных итераций) выполнено. Попытка построить график 'importance'...")
+
+                # Строим и сохраняем второй отчет
                 fig_importance = optuna.visualization.plot_param_importances(last_study)
-                fig_importance.write_html(f"{base_filename}_last_step_importance.html")
-                logger.info("HTML-отчеты Optuna (History, Importance) успешно сохранены.")
+                importance_path = f"{base_filename}_last_step_importance.html"
+                fig_importance.write_html(importance_path)
+                logger.info(f"Успешно сохранено: {importance_path}")
+                logger.info("Оба HTML-отчета (History, Importance) успешно сохранены.")
             else:
+                # Если условие не выполнено, выводим подробное предупреждение
+                logger.warning("Условие НЕ выполнено. Недостаточно успешных итераций для расчета важности параметров.")
                 logger.warning(
-                    "Недостаточно успешных итераций для расчета важности параметров. Отчет 'Importance' не будет создан.")
-                logger.info("HTML-отчет Optuna (History) успешно сохранен.")
+                    "Отчет 'Importance' не будет создан. Это нормально, если почти все комбинации параметров были неудачными.")
+                logger.info("HTML-отчет Optuna (History) сохранен.")
 
-        except (ImportError, ModuleNotFoundError):
-            logger.warning("Для сохранения HTML-отчетов установите plotly: pip install plotly")
+        except (ImportError, ModuleNotFoundError) as e:
+            logger.error(f"Критическая ошибка: библиотека Plotly не найдена, хотя она необходима. {e}")
+            logger.error(
+                "Пожалуйста, убедитесь, что виртуальное окружение активировано и выполните: pip install --upgrade plotly")
         except Exception as e:
-            logger.error(f"Не удалось сохранить HTML-отчеты Optuna: {e}")
+            # Ловим любые другие ошибки, которые могут возникнуть при построении графика
+            logger.error(f"Не удалось сохранить HTML-отчеты Optuna из-за неожиданной ошибки: {e}", exc_info=True)
 
-    logger.info(f"Все отчеты сохранены в папку: {report_dir}")
+        logger.info(f"Все отчеты сохранены в папку: {report_dir}")
 
 
 def main():
