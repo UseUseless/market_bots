@@ -120,7 +120,7 @@ class Portfolio:
         # Если на предыдущем шаге мы определили, что стоп-лосс сработал...
         if exit_reason == "Stop Loss":
             # Логируем это важное событие.
-            logger.warning(f"!!! СРАБОТАЛ STOP LOSS для {event.instrument}. Генерирую ордер на закрытие.")
+            logger.info(f"!!! СРАБОТАЛ STOP LOSS для {event.instrument}. Генерирую ордер на закрытие.")
 
             # ...создаем событие-приказ (OrderEvent) на закрытие позиции.
             order = OrderEvent(
@@ -157,7 +157,7 @@ class Portfolio:
         # Если на предыдущем шаге мы определили, что сработал тейк-профит...
         if exit_reason == "Take Profit":
             # ...выполняем те же действия, что и для стоп-лосса: логируем, создаем ордер и обновляем состояние.
-            logger.warning(f"!!! СРАБОТАЛ TAKE PROFIT для {event.instrument}. Генерирую ордер на закрытие.")
+            logger.info(f"!!! СРАБОТАЛ TAKE PROFIT для {event.instrument}. Генерирую ордер на закрытие.")
             order = OrderEvent(
                 timestamp=event.timestamp,
                 instrument=event.instrument,
