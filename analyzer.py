@@ -193,26 +193,39 @@ class BatchTestAnalyzer:
         table = Table(
             title=f"Результаты пакетного тестирования: {self.strategy_name} ({self.interval}, RM: {self.risk_manager_type})")
         table.add_column("Инструмент", style="cyan", no_wrap=True)
-        table.add_column("PnL, %", justify="right")
+        table.add_column("PnL (Стратегия), %", justify="right")
+        table.add_column("PnL (B&H), %", justify="right")
         table.add_column("Кол-во сделок", justify="right")
 
         for _, row in self.results_df.sort_values("pnl_percent", ascending=False).iterrows():
             pnl_style = "green" if row['pnl_percent'] > 0 else "red"
+            bh_pnl_val = row.get('bh_pnl_percent', float('nan'))
+            if pd.isna(bh_pnl_val):
+                bh_pnl_str = "[dim]N/A[/dim]"
+            else:
+                bh_pnl_style = "green" if bh_pnl_val > 0 else "red"
+                bh_pnl_str = f"[{bh_pnl_style}]{bh_pnl_val:.2f}[/{bh_pnl_style}]"
             table.add_row(
                 row['instrument'],
                 f"[{pnl_style}]{row['pnl_percent']:.2f}[/{pnl_style}]",
+                bh_pnl_str,
                 str(int(row['total_trades']))
             )
 
         console.print(table)
 
-        # Общая статистика
         avg_pnl = self.results_df['pnl_percent'].mean()
+        avg_bh_pnl = self.results_df['bh_pnl_percent'].mean()  # Средний B&H
         win_instruments_rate = (self.results_df['pnl_percent'] > 0).mean() * 100
+        strategy_beats_bh_rate = (self.results_df['pnl_percent'] > self.results_df['bh_pnl_percent']).mean() * 100
         total_trades_sum = self.results_df['total_trades'].sum()
 
         console.print("\n--- Общая статистика по портфелю ---")
         console.print(
-            f"Средний PnL по инструментам: [bold {'green' if avg_pnl > 0 else 'red'}]{avg_pnl:.2f}%[/bold {'green' if avg_pnl > 0 else 'red'}]")
+            f"Средний PnL (Стратегия): [bold {'green' if avg_pnl > 0 else 'red'}]{avg_pnl:.2f}%[/bold {'green' if avg_pnl > 0 else 'red'}]")
+        console.print(
+            f"Средний PnL (Buy & Hold): [bold {'green' if avg_bh_pnl > 0 else 'red'}]{avg_bh_pnl:.2f}%[/bold {'green' if avg_bh_pnl > 0 else 'red'}]")
         console.print(f"Доля прибыльных инструментов: [bold yellow]{win_instruments_rate:.2f}%[/bold yellow]")
+        console.print(
+            f"Стратегия лучше 'Buy & Hold' (% инстр.): [bold magenta]{strategy_beats_bh_rate:.2f}%[/bold magenta]")
         console.print(f"Всего сделок по всем инструментам: [bold cyan]{total_trades_sum}[/bold cyan]")
