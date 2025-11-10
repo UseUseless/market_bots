@@ -5,6 +5,7 @@ import pandas as pd
 import logging
 from datetime import datetime
 from copy import deepcopy
+from typing import List
 
 from optimization.objective import Objective
 from optimization.splitter import split_data_by_periods, walk_forward_generator
@@ -20,6 +21,17 @@ optuna.logging.set_verbosity(optuna.logging.WARNING)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+def _create_hover_text_for_trials(trials: List[optuna.trial.FrozenTrial]) -> List[str]:
+    """
+    Создает список HTML-форматированных строк с параметрами для каждой итерации.
+    Это будет использоваться для кастомных всплывающих подсказок на графике.
+    """
+    hover_texts = []
+    for trial in trials:
+        # Собираем параметры в одну строку, разделяя их тегом <br> (перенос строки в HTML)
+        params_str = "<br>".join([f"&nbsp;&nbsp;{key}: {value}" for key, value in trial.params.items()])
+        hover_texts.append(params_str)
+    return hover_texts
 
 def _build_reverse_param_map(strategy_class_name: str, rm_type: str) -> dict:
     """
@@ -185,15 +197,28 @@ def run_wfo(args):
 
         logger.info("Сохранение визуальных отчетов Optuna для последнего шага WFO...")
         try:
-            # Отчет 1: История оптимизации (создается всегда)
-            logger.info("Попытка #1: Сохранение отчета 'history'...")
+            # 1. Генерируем график как обычно
             fig_history = optuna.visualization.plot_optimization_history(last_study)
+
+            # 2. Создаем кастомные тексты для подсказок
+            hover_texts = _create_hover_text_for_trials(last_study.trials)
+
+            # 3. ИСПРАВЛЕНИЕ: Обновляем слой графика с ТОЧКАМИ (это первый слой, data[0])
+            #    Проверяем, что в графике есть хотя бы один слой
+            if fig_history.data:
+                fig_history.data[0].customdata = hover_texts
+                fig_history.data[0].hovertemplate = (
+                    "<b>Trial: %{x}</b><br>"
+                    "Value: %{y}<br>"
+                    "<br><b>Parameters:</b><br>"
+                    "%{customdata}"
+                    "<extra></extra>"  # Убираем "мусорную" информацию
+                )
+
+            # 4. Сохраняем модифицированный график
             history_path = f"{base_filename}_last_step_history.html"
             fig_history.write_html(history_path)
             logger.info(f"Успешно сохранено: {history_path}")
-
-            # 2. Проверяем условия для второго отчета (importance)
-            logger.info("Попытка #2: Проверка условий для отчета 'importance'...")
 
             # Получаем все УСПЕШНО завершенные итерации
             completed_trials = [t for t in last_study.trials if t.state == optuna.trial.TrialState.COMPLETE]
