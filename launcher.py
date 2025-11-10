@@ -5,7 +5,7 @@ import os
 from typing import List, Dict, Type
 
 from strategies.base_strategy import BaseStrategy
-from config import PATH_CONFIG, EXCHANGE_INTERVAL_MAPS, STRATEGY_CONFIG
+from config import PATH_CONFIG, EXCHANGE_INTERVAL_MAPS
 
 # --- Константа для опции "Назад" ---
 GO_BACK_OPTION = "Назад"
@@ -141,9 +141,9 @@ def run_single_backtest():
         # Используем импортированный маппинг
         available_intervals = list(EXCHANGE_INTERVAL_MAPS[exchange].keys())
 
-        # Читаем рекомендуемый интервал из конфига
-        strategy_default_config = STRATEGY_CONFIG.get(strategy_name, {})
-        default_interval = strategy_default_config.get("candle_interval")
+        strategy_class = strategies[strategy_name]
+        default_params = strategy_class.get_default_params()
+        default_interval = default_params.get("candle_interval")
 
         interval = questionary.select(
             "Выберите интервал:",
@@ -197,16 +197,19 @@ def run_batch_backtest():
         # Используем импортированный маппинг
         available_intervals = list(EXCHANGE_INTERVAL_MAPS[exchange].keys())
 
-        # Читаем рекомендуемый интервал из конфига
-        strategy_default_config = STRATEGY_CONFIG.get(strategy_name, {})
-        default_interval = strategy_default_config.get("candle_interval")
+        strategy_class = strategies[strategy_name]
+
+        # Читаем рекомендуемый интервал из новой конфигурации класса стратегии
+        default_params = strategy_class.get_default_params()
+        default_interval = default_params.get("candle_interval")
 
         interval = questionary.select(
             "Выберите интервал:",
             choices=[*available_intervals, GO_BACK_OPTION],
-            # Используем значение из конфига как default
+            # Используем значение из новой конфигурации как default
             default=default_interval if default_interval in available_intervals else None
         ).ask()
+
         if interval is None: return
         if interval == GO_BACK_OPTION: continue
 

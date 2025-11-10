@@ -8,7 +8,7 @@ from utils.trade_logger import log_trade
 from strategies.base_strategy import BaseStrategy
 from config import BACKTEST_CONFIG
 from core.sizer import BasePositionSizer, FixedRiskSizer
-from core.risk_manager import BaseRiskManager, FixedRiskManager, AtrRiskManager
+from core.risk_manager import AVAILABLE_RISK_MANAGERS, BaseRiskManager
 
 logger = logging.getLogger('backtester')
 
@@ -22,8 +22,7 @@ class Portfolio:
 
     def __init__(self, events_queue: Queue, trade_log_file: str | None, strategy: BaseStrategy,
                  exchange: str, initial_capital: float, commission_rate: float, interval: str,
-                 risk_manager_type: str, instrument_info: Dict[str, Any],
-                 risk_config: Dict[str, Any], strategy_config: Dict[str, Any]):
+                 risk_manager_type: str, instrument_info: Dict[str, Any], risk_manager_params: Dict[str, Any] | None = None):
         self.events_queue: Queue[Event] = events_queue      # Ссылка на общую очередь событий для отправки ордеров
         self.trade_log_file: str | None = trade_log_file    # Путь к CSV-файлу для записи сделок
         self.strategy: BaseStrategy = strategy              # Экземпляр текущей стратегии (нужен для доступа к SL/TP)
@@ -37,14 +36,12 @@ class Portfolio:
         self.position_sizer: BasePositionSizer = FixedRiskSizer()
         # Тип риск-менеджера ('FIXED' или 'ATR'). Нужен для создания экземпляра риск-менеджера и логирования
         self.risk_manager_type: str = risk_manager_type
-        self.risk_manager: BaseRiskManager
-        if self.risk_manager_type == "FIXED":
-            self.risk_manager: BaseRiskManager = FixedRiskManager()
-        elif self.risk_manager_type == "ATR":
-            self.risk_manager: BaseRiskManager = AtrRiskManager()
-        else:
-            # Если тип не распознан, система не сможет работать.
+        rm_class = AVAILABLE_RISK_MANAGERS.get(self.risk_manager_type)
+        if not rm_class:
             raise ValueError(f"Unknown risk manager type: {risk_manager_type}")
+        # Получаем параметры по умолчанию из класса РМ
+        final_rm_params = risk_manager_params if risk_manager_params is not None else rm_class.get_default_params()
+        self.risk_manager: BaseRiskManager = rm_class(params=final_rm_params)
 
         # Настройки проскальзывания
         self.slippage_config: dict[str, Any] = BACKTEST_CONFIG.get("SLIPPAGE_CONFIG", {"ENABLED": False})

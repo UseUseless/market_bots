@@ -9,12 +9,12 @@ from typing import List
 
 from optimization.objective import Objective
 from optimization.splitter import split_data_by_periods, walk_forward_generator
-from optimization.search_space import SEARCH_SPACE
 
 from strategies import AVAILABLE_STRATEGIES
+from core.risk_manager import AVAILABLE_RISK_MANAGERS
 from core.data_handler import HistoricLocalDataHandler
 from core.backtest_engine import run_backtest_session
-from config import BACKTEST_CONFIG, STRATEGY_CONFIG, RISK_CONFIG
+from config import BACKTEST_CONFIG
 
 # Настраиваем логирование, чтобы Optuna не "спамила" в консоль
 optuna.logging.set_verbosity(optuna.logging.WARNING)
@@ -32,26 +32,6 @@ def _create_hover_text_for_trials(trials: List[optuna.trial.FrozenTrial]) -> Lis
         params_str = "<br>".join([f"&nbsp;&nbsp;{key}: {value}" for key, value in trial.params.items()])
         hover_texts.append(params_str)
     return hover_texts
-
-def _build_reverse_param_map(strategy_class_name: str, rm_type: str) -> dict:
-    """
-    Создает обратный словарь для быстрого применения найденных параметров.
-    Ключ: имя параметра в Optuna, Значение: (категория, имя в конфиге).
-    Пример: {'ema_fast': ('strategy', 'ema_fast_period')}
-    """
-    reverse_map = {}
-
-    strategy_space = SEARCH_SPACE["strategy_params"].get(strategy_class_name, {})
-    for config_name, settings in strategy_space.items():
-        optuna_name = settings["kwargs"]["name"]
-        reverse_map[optuna_name] = ("strategy", config_name)
-
-    rm_space = SEARCH_SPACE["risk_manager_params"].get(rm_type, {})
-    for config_name, settings in rm_space.items():
-        optuna_name = settings["kwargs"]["name"]
-        reverse_map[optuna_name] = ("risk", config_name)
-
-    return reverse_map
 
 def run_wfo(args):
     """Главная функция, управляющая процессом Walk-Forward Optimization."""
@@ -80,9 +60,6 @@ def run_wfo(args):
     all_oos_trades = []
     step_results = []
     last_study = None  # Сохраняем study последнего шага
-
-    strategy_class_name_for_map = AVAILABLE_STRATEGIES[args.strategy].__name__
-    param_map = _build_reverse_param_map(strategy_class_name_for_map, args.rm)
 
     logger.info(f"--- Начало Walk-Forward Optimization ({num_steps} шагов) ---")
 
@@ -122,28 +99,39 @@ def run_wfo(args):
         for key, value in best_params.items():
             logger.info(f"  - {key}: {value}")
 
-        strategy_config_best = deepcopy(STRATEGY_CONFIG)
-        risk_config_best = deepcopy(RISK_CONFIG)
+            # 1. Получаем полные конфиги по умолчанию для стратегии и РМ
+            rm_class = AVAILABLE_RISK_MANAGERS[args.rm]
+            strategy_default_params = strategy_class.get_default_params()
+            rm_default_params = rm_class.get_default_params()
 
-        strategy_class_name = strategy_class.__name__
-        for optuna_name, value in best_params.items():
-            category, config_name = param_map[optuna_name]
+            # 2. Разделяем найденные лучшие параметры на две группы
+            best_strategy_params = {}
+            best_rm_params = {}
+            for key, value in best_params.items():
+                if key.startswith("rm_"):
+                    # Убираем префикс "rm_"
+                    param_name = key[3:]
+                    best_rm_params[param_name] = value
+                else:
+                    best_strategy_params[key] = value
 
-            if category == "strategy":
-                strategy_config_best[strategy_class_name][config_name] = value
-            elif category == "risk":
-                risk_config_best[config_name] = value
+            # 3. "Склеиваем" дефолтные и найденные параметры. Найденные перезаписывают дефолтные.
+            final_strategy_params = {**strategy_default_params, **best_strategy_params}
+            final_rm_params = {**rm_default_params, **best_rm_params}
 
-        backtest_settings = {
-            "strategy_class": AVAILABLE_STRATEGIES[args.strategy],
-            "exchange": args.exchange, "instrument": args.instrument, "interval": args.interval,
-            "risk_manager_type": args.rm,
-            "initial_capital": BACKTEST_CONFIG["INITIAL_CAPITAL"],
-            "commission_rate": BACKTEST_CONFIG["COMMISSION_RATE"],
-            "data_dir": "data", "trade_log_path": None,
-            "strategy_config": strategy_config_best, "risk_config": risk_config_best,
-            "data_slice": test_df
-        }
+            # 4. Собираем настройки для OOS бэктеста
+            backtest_settings = {
+                "strategy_class": strategy_class,
+                "exchange": args.exchange, "instrument": args.instrument, "interval": args.interval,
+                "risk_manager_type": args.rm,
+                "initial_capital": BACKTEST_CONFIG["INITIAL_CAPITAL"],
+                "commission_rate": BACKTEST_CONFIG["COMMISSION_RATE"],
+                "data_dir": "data",
+                "trade_log_path": None,
+                "strategy_params": final_strategy_params,
+                "risk_manager_params": final_rm_params,
+                "data_slice": test_df
+            }
 
         oos_results = run_backtest_session(backtest_settings)
 

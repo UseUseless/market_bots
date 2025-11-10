@@ -13,30 +13,48 @@ class VolatilityBreakoutStrategy(BaseStrategy):
     Стратегия пробоя волатильности, основанная на концепции "сжатия" (Squeeze).
     """
 
-    def __init__(self, events_queue: Queue, instrument: str, strategy_config: Optional[Dict[str, Any]] = None,
-                 risk_manager_type: str = "FIXED", risk_config: Optional[Dict[str, Any]] = None):
-        # --- Сначала определяем параметры и зависимости ---
-        _strategy_config = strategy_config if strategy_config is not None else {}
-        strategy_params = _strategy_config.get(self.__class__.__name__, {})
+    params_config = {
+        "candle_interval": {"type": "str", "default": "1hour", "optimizable": False},
+        "variant": {"type": "str", "default": "ADX_Donchian", "optimizable": False},  # Вариант не оптимизируем
 
-        self.variant = strategy_params.get("variant", "ADX_Donchian")
-        self.params = strategy_params.get(f"{self.variant}_params", {})
-        self.entry_params = strategy_params.get("entry_logic", {})
+        # Группа entry_logic
+        "entry_breakout_timeout_bars": {"type": "int", "default": 3, "optimizable": True, "low": 2, "high": 7},
+        "entry_confirm_breakout": {"type": "bool", "default": False, "optimizable": False},
+        # Булевы пока не оптимизируем
+        "entry_wait_for_pullback": {"type": "bool", "default": False, "optimizable": False},
+        "entry_pullback_ema_period": {"type": "int", "default": 8, "optimizable": True, "low": 5, "high": 13},
+        "entry_pullback_timeout_bars": {"type": "int", "default": 5, "optimizable": True, "low": 3, "high": 8},
 
-        self.breakout_timeout_bars = self.entry_params.get("breakout_timeout_bars", 3)
-        self.confirm_breakout = self.entry_params.get("confirm_breakout", False)
-        self.wait_for_pullback = self.entry_params.get("wait_for_pullback", False)
-        self.pullback_ema_period = self.entry_params.get("pullback_ema_period", 8)
-        self.pullback_timeout_bars = self.entry_params.get("pullback_timeout_bars", 5)
+        # Группа ADX_Donchian_params
+        "adx_bb_len": {"type": "int", "default": 20, "optimizable": True, "low": 15, "high": 30},
+        "adx_bb_std": {"type": "float", "default": 2.0, "optimizable": True, "low": 1.5, "high": 2.5, "step": 0.1},
+        "adx_squeeze_period": {"type": "int", "default": 50, "optimizable": True, "low": 30, "high": 70},
+        "adx_squeeze_quantile": {"type": "float", "default": 0.05, "optimizable": True, "low": 0.01, "high": 0.15,
+                                 "step": 0.01},
+        "adx_donchian_len": {"type": "int", "default": 20, "optimizable": True, "low": 15, "high": 30},
+        "adx_adx_len": {"type": "int", "default": 14, "optimizable": True, "low": 10, "high": 20},
+        "adx_adx_threshold": {"type": "int", "default": 20, "optimizable": True, "low": 18, "high": 30},
+    }
 
+    def __init__(self, events_queue: Queue, instrument: str, params: Dict[str, Any],
+                 risk_manager_type: str, risk_manager_params: Optional[Dict[str, Any]] = None):
+
+        # 1. Извлекаем параметры из `params`
+        self.variant = params["variant"]
+        self.breakout_timeout_bars = params["entry_breakout_timeout_bars"]
+        self.confirm_breakout = params["entry_confirm_breakout"]
+        self.wait_for_pullback = params["entry_wait_for_pullback"]
+        self.pullback_ema_period = params["entry_pullback_ema_period"]
+        self.pullback_timeout_bars = params["entry_pullback_timeout_bars"]
+
+        # 2. Динамически формируем зависимости
         self.required_indicators = []
         if self.variant == "ADX_Donchian":
             self.required_indicators.extend([
-                {"name": "bbands",
-                 "params": {"period": self.params.get("bb_len", 20), "std": self.params.get("bb_std", 2.0)}},
-                {"name": "donchian", "params": {"lower_period": self.params.get("donchian_len", 20),
-                                                "upper_period": self.params.get("donchian_len", 20)}},
-                {"name": "adx", "params": {"period": self.params.get("adx_len", 14)}},
+                {"name": "bbands", "params": {"period": params["adx_bb_len"], "std": params["adx_bb_std"]}},
+                {"name": "donchian",
+                 "params": {"lower_period": params["adx_donchian_len"], "upper_period": params["adx_donchian_len"]}},
+                {"name": "adx", "params": {"period": params["adx_adx_len"]}},
             ])
         if self.wait_for_pullback:
             self.required_indicators.append({"name": "ema", "params": {"period": self.pullback_ema_period}})
@@ -44,17 +62,16 @@ class VolatilityBreakoutStrategy(BaseStrategy):
         self.min_history_needed = 0
         if self.variant == "ADX_Donchian":
             self.min_history_needed = max(
-                self.params.get("squeeze_period", 50), self.params.get("donchian_len", 20),
-                self.params.get("adx_len", 14)
+                params["adx_squeeze_period"], params["adx_donchian_len"], params["adx_adx_len"]
             )
         if self.wait_for_pullback:
             self.min_history_needed = max(self.min_history_needed, self.pullback_ema_period)
         self.min_history_needed += 1
 
-        # Теперь вызываем родительский конструктор
-        super().__init__(events_queue, instrument, strategy_config, risk_manager_type, risk_config)
+        # 3. Вызываем родительский __init__
+        super().__init__(events_queue, instrument, params, risk_manager_type, risk_manager_params)
 
-        # Инициализация состояний
+        # 4. Инициализация состояний
         self.state = {
             "squeeze_was_on": False, "waiting_for_breakout": False, "breakout_bar_counter": 0,
             "breakout_direction": None, "waiting_for_confirmation": False,
@@ -62,13 +79,11 @@ class VolatilityBreakoutStrategy(BaseStrategy):
         }
 
     def _prepare_custom_features(self, data: pd.DataFrame) -> pd.DataFrame:
-        """
-        Рассчитывает кастомный индикатор 'squeeze_on'.
-        """
         if self.variant == "ADX_Donchian":
             logger.info(f"Стратегия '{self.name}' рассчитывает кастомный 'squeeze_on'...")
-            std_str = str(self.params.get("bb_std", 2.0)).replace('.', '_')
-            bb_len = self.params.get("bb_len", 20)
+            # Используем параметры из self.params
+            std_str = str(self.params["adx_bb_std"]).replace('.', '_')
+            bb_len = self.params["adx_bb_len"]
             bb_upper_col = f'BBU_{bb_len}_{std_str}'
             bb_lower_col = f'BBL_{bb_len}_{std_str}'
             bb_mid_col = f'BBM_{bb_len}_{std_str}'
@@ -78,11 +93,9 @@ class VolatilityBreakoutStrategy(BaseStrategy):
                 return pd.DataFrame()
 
             bband_width = (data[bb_upper_col] - data[bb_lower_col]) / data[bb_mid_col]
-            quantile_threshold = bband_width.rolling(self.params.get('squeeze_period', 50)).quantile(
-                self.params.get('squeeze_quantile', 0.05))
+            quantile_threshold = bband_width.rolling(self.params['adx_squeeze_period']).quantile(
+                self.params['adx_squeeze_quantile'])
             data['squeeze_on'] = bband_width < quantile_threshold
-
-            # Добавляем кастомную колонку в список для проверки
             self._required_cols.append('squeeze_on')
         return data
 
@@ -95,9 +108,9 @@ class VolatilityBreakoutStrategy(BaseStrategy):
 
     def _check_breakout_conditions(self, current_candle: pd.Series, prev_candle: pd.Series) -> str | None:
         if self.variant == "ADX_Donchian":
-            donchian_len = self.params.get("donchian_len", 20)
-            adx_len = self.params.get("adx_len", 14)
-            adx_threshold = self.params.get("adx_threshold", 20)
+            donchian_len = self.params["adx_donchian_len"]
+            adx_len = self.params["adx_adx_len"]
+            adx_threshold = self.params["adx_adx_threshold"]
 
             donchian_upper = prev_candle[f'DCU_{donchian_len}_{donchian_len}']
             donchian_lower = prev_candle[f'DCL_{donchian_len}_{donchian_len}']

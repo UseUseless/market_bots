@@ -5,9 +5,9 @@ from copy import deepcopy
 from typing import Type
 
 from core.backtest_engine import run_backtest_session
-from config import BACKTEST_CONFIG, STRATEGY_CONFIG, RISK_CONFIG
+from config import BACKTEST_CONFIG
 from strategies.base_strategy import BaseStrategy
-from optimization.search_space import SEARCH_SPACE
+from core.risk_manager import AVAILABLE_RISK_MANAGERS, BaseRiskManager
 
 
 def _calculate_calmar_ratio(trades_df: pd.DataFrame, initial_capital: float) -> float:
@@ -57,33 +57,51 @@ class Objective:
         self.interval = interval
         self.risk_manager_type = risk_manager_type
         self.data_slice = data_slice
-        self.strategy_key = self.strategy_class.__name__
 
     def __call__(self, trial: optuna.Trial) -> float:
         """Одна итерация оптимизации."""
         try:
-            # --- 1. Создаем временные копии конфигов ---
-            strategy_config_override = deepcopy(STRATEGY_CONFIG)
-            risk_config_override = deepcopy(RISK_CONFIG)
+            # 1. Собираем параметры для стратегии
+            strategy_params = {}
+            strategy_full_config = {}
+            for base in reversed(self.strategy_class.__mro__):
+                if hasattr(base, 'params_config'):
+                    strategy_full_config.update(base.params_config)
 
-            # --- 2. Получаем параметры от Optuna и обновляем конфиги ---
+            for name, config in strategy_full_config.items():
+                if config.get("optimizable", False):
+                    if config["type"] == "int":
+                        strategy_params[name] = trial.suggest_int(name, config["low"], config["high"],
+                                                                  step=config.get("step", 1))
+                    elif config["type"] == "float":
+                        strategy_params[name] = trial.suggest_float(name, config["low"], config["high"],
+                                                                    step=config.get("step"))
+                else:
+                    strategy_params[name] = config["default"]
 
-            # Параметры стратегии
-            strategy_search_space = SEARCH_SPACE["strategy_params"].get(self.strategy_key, {})
-            for param, settings in strategy_search_space.items():
-                method = getattr(trial, settings["method"])
-                value = method(**settings["kwargs"])
-                # Используем правильный ключ (имя класса)
-                strategy_config_override[self.strategy_key][param] = value
+            # 2. Собираем параметры для риск-менеджера
+            rm_class = AVAILABLE_RISK_MANAGERS[self.risk_manager_type]
+            rm_params = {}
+            rm_full_config = {}
+            for base in reversed(rm_class.__mro__):
+                if hasattr(base, 'params_config'):
+                    rm_full_config.update(base.params_config)
 
-            rm_search_space = SEARCH_SPACE["risk_manager_params"].get(self.risk_manager_type, {})
-            for param, settings in rm_search_space.items():
-                method = getattr(trial, settings["method"])
-                value = method(**settings["kwargs"])
-                risk_config_override[param] = value
+            for name, config in rm_full_config.items():
+                if config.get("optimizable", False):
+                    optuna_name = f"rm_{name}"
+                    if config["type"] == "int":
+                        rm_params[name] = trial.suggest_int(optuna_name, config["low"], config["high"],
+                                                            step=config.get("step", 1))
+                    elif config["type"] == "float":
+                        rm_params[name] = trial.suggest_float(optuna_name, config["low"], config["high"],
+                                                              step=config.get("step"))
+                else:
+                    rm_params[name] = config["default"]
 
+            # 3. Готовим настройки для бэктеста
             backtest_settings = {
-                "strategy_class": self.strategy_class,  # Передаем сам класс
+                "strategy_class": self.strategy_class,
                 "exchange": self.exchange,
                 "instrument": self.instrument,
                 "interval": self.interval,
@@ -92,13 +110,13 @@ class Objective:
                 "commission_rate": BACKTEST_CONFIG["COMMISSION_RATE"],
                 "data_dir": "data",
                 "trade_log_path": None,
-                "strategy_config": strategy_config_override,
-                "risk_config": risk_config_override,
+                "strategy_params": strategy_params,
+                "risk_manager_params": rm_params,
                 "data_slice": self.data_slice
             }
 
-            # --- 4. Запускаем бэктест ---
-            backtest_results  = run_backtest_session(backtest_settings)
+            # 4. Запускаем бэктест
+            backtest_results = run_backtest_session(backtest_settings)
 
             # --- 5. Анализируем результат и возвращаем метрику ---
             if backtest_results ["status"] != "success" or backtest_results ["trades_df"].empty:

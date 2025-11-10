@@ -9,7 +9,7 @@ from analyzer import BacktestAnalyzer # Создает аналитически�
 from utils.context_logger import backtest_time_filter # Добавляет время свечи в логи
 from core.risk_manager import RiskManagerType
 
-from config import BACKTEST_CONFIG, PATH_CONFIG, RISK_CONFIG, STRATEGY_CONFIG
+from config import BACKTEST_CONFIG, PATH_CONFIG
 
 from strategies import AVAILABLE_STRATEGIES
 
@@ -135,13 +135,13 @@ def main():
     # Берем на будущее на каком интервале используется стратегия (для логов и поиска файлов)
     # Из стратегии или из командной строки
     strategy_class = AVAILABLE_STRATEGIES[args.strategy]
-    strategy_default_config = STRATEGY_CONFIG.get(args.strategy, {})
-    default_interval = strategy_default_config.get("candle_interval")
+    default_params = strategy_class.get_default_params()
+    default_interval = default_params.get("candle_interval")
     current_interval = args.interval or default_interval
 
     if not current_interval:
-        # Защита на случай, если интервал не указан нигде
-        raise ValueError(f"Интервал для стратегии {args.strategy} не определен ни в аргументах, ни в config.py")
+        raise ValueError(
+            f"Интервал для стратегии {args.strategy} не определен ни в аргументах, ни в параметрах стратегии.")
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     # Имена логов для текущего запуска бэктеста
@@ -158,17 +158,7 @@ def main():
 
     logger.info(
         f"Запуск бэктеста: Стратегия='{strategy_class.__name__}', Инструмент='{args.instrument}', Интервал='{current_interval}'")
-    risk_params_info = (
-        f"Risk % (L/S): {RISK_CONFIG['DEFAULT_RISK_PERCENT_LONG']}%/"
-        f"{RISK_CONFIG['DEFAULT_RISK_PERCENT_SHORT']}%"
-    )
-    if args.risk_manager_type == "ATR":
-        risk_params_info += (
-            f", ATR Period: {RISK_CONFIG['ATR_PERIOD']}, "
-            f"SL/TP Multipliers: {RISK_CONFIG['ATR_MULTIPLIER_SL']}/"
-            f"{RISK_CONFIG['ATR_MULTIPLIER_TP']}"
-        )
-    logger.info(f"Параметры риска ({args.risk_manager_type}): {risk_params_info}")
+    logger.info(f"Риск-менеджер: {args.risk_manager_type}. Используются параметры по умолчанию.")
 
     backtest_settings = {
         "strategy_class": strategy_class,
@@ -180,8 +170,6 @@ def main():
         "commission_rate": BACKTEST_CONFIG["COMMISSION_RATE"],
         "data_dir": PATH_CONFIG["DATA_DIR"],
         "trade_log_path": trade_log_path,
-        "strategy_config": STRATEGY_CONFIG,
-        "risk_config": RISK_CONFIG,
     }
 
     try:

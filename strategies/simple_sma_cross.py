@@ -12,18 +12,33 @@ class SimpleSMACrossStrategy(BaseStrategy):
     Параметры считываются из переданного конфига.
     """
 
-    def __init__(self, events_queue: Queue, instrument: str, strategy_config: Optional[Dict[str, Any]] = None,
-                 risk_manager_type: str = "FIXED", risk_config: Optional[Dict[str, Any]] = None):
-        _strategy_config = strategy_config if strategy_config is not None else {}
-        strategy_params = _strategy_config.get(self.__class__.__name__, {})
-        self.sma_period = strategy_params.get("sma_period", 50)
+    params_config = {
+        "sma_period": {
+            "type": "int",
+            "default": 50,
+            "optimizable": True,
+            "low": 10,
+            "high": 100,
+            "step": 1,
+            "description": "Период скользящей средней."
+        },
+        "candle_interval": {
+            "type": "str",
+            "default": "1hour",
+            "optimizable": False,
+            "description": "Рекомендуемый таймфрейм для стратегии."
+        }
+    }
+
+    def __init__(self, events_queue: Queue, instrument: str, params: Dict[str, Any],
+                 risk_manager_type: str, risk_manager_params: Optional[Dict[str, Any]] = None):
+        self.sma_period = params["sma_period"]
 
         self.min_history_needed = self.sma_period + 1
         self.required_indicators = [{"name": "sma", "params": {"period": self.sma_period}}]
-
         self.sma_name = f"SMA_{self.sma_period}"
 
-        super().__init__(events_queue, instrument, strategy_config, risk_manager_type, risk_config)
+        super().__init__(events_queue, instrument, params, risk_manager_type, risk_manager_params)
 
     def _calculate_signals(self, prev_candle: pd.Series, last_candle: pd.Series, timestamp: pd.Timestamp):
         """

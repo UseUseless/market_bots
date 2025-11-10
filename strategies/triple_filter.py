@@ -10,17 +10,55 @@ class TripleFilterStrategy(BaseStrategy):
     """
     Реализация интрадей-стратегии "Тройной Фильтр" Александра Элдера.
     """
+    params_config = {
+        "candle_interval": {
+            "type": "str",
+            "default": "5min",
+            "optimizable": False,
+            "description": "Рекомендуемый таймфрейм."
+        },
+        "ema_fast_period": {
+            "type": "int",
+            "default": 9,
+            "optimizable": True,
+            "low": 5,
+            "high": 20,
+            "step": 1,
+            "description": "Период быстрой EMA (импульс)."
+        },
+        "ema_slow_period": {
+            "type": "int",
+            "default": 21,
+            "optimizable": True,
+            "low": 21,
+            "high": 50,
+            "step": 1,
+            "description": "Период медленной EMA (импульс)."
+        },
+        "ema_trend_period": {
+            "type": "int",
+            "default": 200,
+            "optimizable": False, # Обычно не оптимизируют
+            "description": "Период трендовой EMA."
+        },
+        "volume_sma_period": {
+            "type": "int",
+            "default": 20,
+            "optimizable": False, # Обычно не оптимизируют
+            "description": "Период SMA для фильтра объема."
+        }
+    }
 
-    def __init__(self, events_queue: Queue, instrument: str, strategy_config: Optional[Dict[str, Any]] = None,
-                 risk_manager_type: str = "FIXED", risk_config: Optional[Dict[str, Any]] = None):
-        _strategy_config = strategy_config if strategy_config is not None else {}
-        strategy_params = _strategy_config.get(self.__class__.__name__, {})
+    def __init__(self, events_queue: Queue, instrument: str, params: Dict[str, Any],
+                 risk_manager_type: str, risk_manager_params: Optional[Dict[str, Any]] = None):
 
-        self.ema_fast_period = strategy_params.get("ema_fast_period", 9)
-        self.ema_slow_period = strategy_params.get("ema_slow_period", 21)
-        self.ema_trend_period = strategy_params.get("ema_trend_period", 200)
-        self.volume_sma_period = strategy_params.get("volume_sma_period", 20)
+        # 1. Извлекаем параметры из переданного словаря `params`
+        self.ema_fast_period = params["ema_fast_period"]
+        self.ema_slow_period = params["ema_slow_period"]
+        self.ema_trend_period = params["ema_trend_period"]
+        self.volume_sma_period = params["volume_sma_period"]
 
+        # 2. Динамически формируем зависимости на основе параметров
         self.min_history_needed = self.ema_trend_period + 1
         self.required_indicators = [
             {"name": "ema", "params": {"period": self.ema_fast_period}},
@@ -29,8 +67,10 @@ class TripleFilterStrategy(BaseStrategy):
             {"name": "sma", "params": {"period": self.volume_sma_period, "column": "volume"}},
         ]
 
-        super().__init__(events_queue, instrument, strategy_config, risk_manager_type, risk_config)
+        # 3. Вызываем родительский __init__ ПОСЛЕ определения зависимостей
+        super().__init__(events_queue, instrument, params, risk_manager_type, risk_manager_params)
 
+        # 4. Определяем имена колонок для удобства
         self.ema_fast_name = f'EMA_{self.ema_fast_period}'
         self.ema_slow_name = f'EMA_{self.ema_slow_period}'
         self.ema_trend_name = f'EMA_{self.ema_trend_period}'

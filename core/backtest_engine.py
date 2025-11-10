@@ -25,12 +25,14 @@ def _initialize_components(settings: Dict[str, Any]) -> Dict[str, Any]:
         data_dir=settings["data_dir"]
     )
 
-    strategy = settings["strategy_class"](
+    strategy_class = settings["strategy_class"]
+    strategy_params = settings.get("strategy_params", strategy_class.get_default_params())
+
+    strategy = strategy_class(
         events_queue,
         settings["instrument"],
-        strategy_config=settings["strategy_config"],
-        risk_manager_type=settings["risk_manager_type"],
-        risk_config=settings["risk_config"]
+        params=strategy_params,
+        risk_manager_type=settings["risk_manager_type"]
     )
 
     data_handler = HistoricLocalDataHandler(
@@ -53,8 +55,7 @@ def _initialize_components(settings: Dict[str, Any]) -> Dict[str, Any]:
         interval=settings["interval"],
         risk_manager_type=settings["risk_manager_type"],
         instrument_info=instrument_info,
-        risk_config=settings["risk_config"],
-        strategy_config=settings["strategy_config"]
+        risk_manager_params=settings.get("risk_manager_params")
     )
 
     return {
@@ -149,8 +150,7 @@ def run_backtest_session(settings: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     if enriched_data is None:
-        logger.error("Подготовка данных провалилась. Бэктест прерван.")
-        return
+        return {"status": "error", "message": "Data preparation failed", "trades_df": pd.DataFrame()}
 
     _run_event_loop(
         enriched_data, settings["instrument"], components["events_queue"],
