@@ -19,6 +19,7 @@ st.set_page_config(
     layout="wide",
 )
 
+
 def _process_single_backtest_file(file_path: str) -> Optional[Dict[str, Any]]:
     """
     Обрабатывает один .jsonl файл с результатами бэктеста.
@@ -78,7 +79,8 @@ def _process_single_backtest_file(file_path: str) -> Optional[Dict[str, Any]]:
         return {"error": f"Не удалось обработать файл {os.path.basename(file_path)}: {e}"}
 
 
-def _render_portfolio_selector_pane(pane_title: str, key_prefix: str, summary_df: pd.DataFrame) -> Optional[Dict[str, Any]]:
+def _render_portfolio_selector_pane(pane_title: str, key_prefix: str, summary_df: pd.DataFrame) -> Optional[
+    Dict[str, Any]]:
     """Отрисовывает одну колонку для выбора параметров портфеля."""
     st.subheader(pane_title)
 
@@ -87,10 +89,10 @@ def _render_portfolio_selector_pane(pane_title: str, key_prefix: str, summary_df
     selected_rm = st.selectbox("Риск-менеджер:", summary_df["Risk Manager"].unique(), key=f"{key_prefix}_rm")
 
     available_instruments = sorted(summary_df[
-        (summary_df['Strategy'] == selected_strategy) &
-        (summary_df['Interval'] == selected_interval) &
-        (summary_df['Risk Manager'] == selected_rm)
-    ]['Instrument'].unique())
+                                       (summary_df['Strategy'] == selected_strategy) &
+                                       (summary_df['Interval'] == selected_interval) &
+                                       (summary_df['Risk Manager'] == selected_rm)
+                                       ]['Instrument'].unique())
 
     if not available_instruments:
         st.warning("Нет данных для этой комбинации.")
@@ -103,14 +105,14 @@ def _render_portfolio_selector_pane(pane_title: str, key_prefix: str, summary_df
             "Инструменты:",
             options=available_instruments,
             default=available_instruments,
-            key=f"{key_prefix}_instrs_all"  # Ключ для режима "все выбраны"
+            key=f"{key_prefix}_instrs_all"
         )
     else:
         selected_instruments = st.multiselect(
             "Инструменты:",
             options=available_instruments,
             default=[],
-            key=f"{key_prefix}_instrs_manual"  # Другой ключ для ручного режима
+            key=f"{key_prefix}_instrs_manual"
         )
 
     if not selected_instruments:
@@ -123,6 +125,7 @@ def _render_portfolio_selector_pane(pane_title: str, key_prefix: str, summary_df
         "rm": selected_rm,
         "instruments": selected_instruments
     }
+
 
 @st.cache_data
 def load_all_backtests(logs_dir: str) -> Tuple[pd.DataFrame, List[str]]:
@@ -150,30 +153,40 @@ def load_all_backtests(logs_dir: str) -> Tuple[pd.DataFrame, List[str]]:
 
     return pd.DataFrame(all_results), failed_files
 
+
 def plot_equity_and_drawdown(analyzer: BacktestAnalyzer):
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05,
                         row_heights=[0.7, 0.3])
-    fig.add_trace(go.Scatter(x=analyzer.trades.index, y=analyzer.trades['equity_curve'],
+
+    trades_df = analyzer.calculator.trades
+
+    fig.add_trace(go.Scatter(x=trades_df.index, y=trades_df['equity_curve'],
                              mode='lines', name='Equity Curve'), row=1, col=1)
+
     benchmark_resampled = analyzer.benchmark_equity.reset_index(drop=True)
-    benchmark_resampled.index = np.linspace(0, len(analyzer.trades) - 1, len(benchmark_resampled))
+    benchmark_resampled.index = np.linspace(0, len(trades_df) - 1, len(benchmark_resampled))
+
     fig.add_trace(go.Scatter(x=benchmark_resampled.index, y=benchmark_resampled.values,
                              mode='lines', name='Buy & Hold', line=dict(dash='dash', color='grey')), row=1, col=1)
-    fig.add_trace(go.Scatter(x=analyzer.trades.index, y=analyzer.trades['drawdown_percent'],
+
+    fig.add_trace(go.Scatter(x=trades_df.index, y=trades_df['drawdown_percent'],
                              mode='lines', name='Drawdown', fill='tozeroy', line_color='red'), row=2, col=1)
+
     fig.update_layout(title_text="Кривая капитала и просадки", height=600)
     fig.update_yaxes(title_text="Капитал", row=1, col=1)
     fig.update_yaxes(title_text="Просадка (%)", row=2, col=1)
     st.plotly_chart(fig, use_container_width=True)
 
+
 def plot_pnl_distribution(analyzer: BacktestAnalyzer):
-    fig = px.histogram(analyzer.trades, x="pnl", nbins=50,
+    fig = px.histogram(analyzer.calculator.trades, x="pnl", nbins=50,
                        title="Распределение PnL по сделкам",
                        labels={"pnl": "Прибыль/убыток по сделке"})
     st.plotly_chart(fig, use_container_width=True)
 
+
 def plot_monthly_pnl(analyzer: BacktestAnalyzer):
-    df = analyzer.trades.copy()
+    df = analyzer.calculator.trades.copy()
     df['exit_timestamp_utc'] = pd.to_datetime(df['exit_timestamp_utc'])
     df.set_index('exit_timestamp_utc', inplace=True)
     monthly_pnl = df['pnl'].resample('M').sum().reset_index()
@@ -183,6 +196,7 @@ def plot_monthly_pnl(analyzer: BacktestAnalyzer):
                  labels={"pnl": "Месячный PnL", "month": "Месяц"},
                  color='pnl', color_continuous_scale=px.colors.diverging.RdYlGn)
     st.plotly_chart(fig, use_container_width=True)
+
 
 def plot_trades_on_chart(historical_data: pd.DataFrame, trades_df: pd.DataFrame):
     fig = go.Figure()
@@ -207,11 +221,13 @@ def plot_trades_on_chart(historical_data: pd.DataFrame, trades_df: pd.DataFrame)
     signal_exits = trades_df[trades_df['exit_reason'] == 'Signal']
     fig.add_trace(go.Scatter(
         x=tp_exits['exit_timestamp_utc'], y=tp_exits['exit_price'], mode='markers',
-        marker=dict(symbol='circle', color='#2ca02c', size=10, line=dict(width=2, color='DarkSlateGrey')), name='Take Profit'
+        marker=dict(symbol='circle', color='#2ca02c', size=10, line=dict(width=2, color='DarkSlateGrey')),
+        name='Take Profit'
     ))
     fig.add_trace(go.Scatter(
         x=sl_exits['exit_timestamp_utc'], y=sl_exits['exit_price'], mode='markers',
-        marker=dict(symbol='circle', color='#d62728', size=10, line=dict(width=2, color='DarkSlateGrey')), name='Stop Loss'
+        marker=dict(symbol='circle', color='#d62728', size=10, line=dict(width=2, color='DarkSlateGrey')),
+        name='Stop Loss'
     ))
     fig.add_trace(go.Scatter(
         x=signal_exits['exit_timestamp_utc'], y=signal_exits['exit_price'],
@@ -241,12 +257,17 @@ def style_summary_table(df: pd.DataFrame):
 def _render_mode1_ui(comp_analyzer: ComparativeAnalyzer, summary_df: pd.DataFrame):
     st.subheader("1. Сравнение стратегий на одном инструменте")
     col1, col2, col3 = st.columns(3)
-    with col1: selected_instrument = st.selectbox("Инструмент:", summary_df["Instrument"].unique(), key="c1_instr")
-    with col2: selected_interval = st.selectbox("Интервал:", summary_df["Interval"].unique(), key="c1_interval")
-    with col3: selected_rm = st.selectbox("Риск-менеджер:", summary_df["Risk Manager"].unique(), key="c1_rm")
-    selected_strategies = st.multiselect("Выберите стратегии для сравнения:", summary_df["Strategy"].unique(), key="c1_strats")
+    with col1:
+        selected_instrument = st.selectbox("Инструмент:", summary_df["Instrument"].unique(), key="c1_instr")
+    with col2:
+        selected_interval = st.selectbox("Интервал:", summary_df["Interval"].unique(), key="c1_interval")
+    with col3:
+        selected_rm = st.selectbox("Риск-менеджер:", summary_df["Risk Manager"].unique(), key="c1_rm")
+    selected_strategies = st.multiselect("Выберите стратегии для сравнения:", summary_df["Strategy"].unique(),
+                                         key="c1_strats")
     if st.button("Сравнить стратегии", key="c1_btn"):
-        if len(selected_strategies) < 2: st.warning("Пожалуйста, выберите хотя бы две стратегии.")
+        if len(selected_strategies) < 2:
+            st.warning("Пожалуйста, выберите хотя бы две стратегии.")
         else:
             with st.spinner("Выполняется сравнение..."):
                 metrics_df, fig = comp_analyzer.compare_strategies_on_instrument(
@@ -258,31 +279,30 @@ def _render_mode1_ui(comp_analyzer: ComparativeAnalyzer, summary_df: pd.DataFram
 def _render_mode2_ui(comp_analyzer: ComparativeAnalyzer, summary_df: pd.DataFrame):
     st.subheader("2. Анализ одной стратегии на разных инструментах (анализ робастности)")
     col1, col2, col3 = st.columns(3)
-    with col1: selected_strategy = st.selectbox("Стратегия:", summary_df["Strategy"].unique(), key="c2_strat")
-    with col2: selected_interval = st.selectbox("Интервал:", summary_df["Interval"].unique(), key="c2_interval")
-    with col3: selected_rm = st.selectbox("Риск-менеджер:", summary_df["Risk Manager"].unique(), key="c2_rm")
+    with col1:
+        selected_strategy = st.selectbox("Стратегия:", summary_df["Strategy"].unique(), key="c2_strat")
+    with col2:
+        selected_interval = st.selectbox("Интервал:", summary_df["Interval"].unique(), key="c2_interval")
+    with col3:
+        selected_rm = st.selectbox("Риск-менеджер:", summary_df["Risk Manager"].unique(), key="c2_rm")
 
-    # --- ИЗМЕНЕНИЕ 2.1: Логика "Выбрать все" ---
-    # 1. Находим все инструменты, для которых есть бэктесты с выбранными параметрами
     available_instruments = sorted(summary_df[
-        (summary_df['Strategy'] == selected_strategy) &
-        (summary_df['Interval'] == selected_interval) &
-        (summary_df['Risk Manager'] == selected_rm)
-    ]['Instrument'].unique())
+                                       (summary_df['Strategy'] == selected_strategy) &
+                                       (summary_df['Interval'] == selected_interval) &
+                                       (summary_df['Risk Manager'] == selected_rm)
+                                       ]['Instrument'].unique())
 
     if not available_instruments:
         st.warning("Не найдено бэктестов для выбранной комбинации Стратегия/Интервал/РМ.")
         return
 
-    # 2. Создаем чекбокс
     select_all = st.checkbox("Выбрать все доступные инструменты", key="c2_select_all")
 
-    # 3. В зависимости от состояния чекбокса, формируем список выбранных инструментов
     if select_all:
         selected_instruments = st.multiselect(
             "Инструменты для агрегации:",
             options=available_instruments,
-            default=available_instruments, # <-- Устанавливаем все как дефолт
+            default=available_instruments,
             key="c2_instrs_all"
         )
     else:
@@ -291,18 +311,18 @@ def _render_mode2_ui(comp_analyzer: ComparativeAnalyzer, summary_df: pd.DataFram
             options=available_instruments,
             key="c2_instrs_manual"
         )
-    # --- Конец ИЗМЕНЕНИЯ 2.1 ---
 
     if st.button("Анализировать стратегию", key="c2_btn"):
-        if len(selected_instruments) < 2: st.warning("Пожалуйста, выберите хотя бы два инструмента.")
+        if len(selected_instruments) < 2:
+            st.warning("Пожалуйста, выберите хотя бы два инструмента.")
         else:
             with st.spinner("Выполняется анализ..."):
                 metrics_df, fig = comp_analyzer.analyze_instrument_robustness(
                     strategy_name=selected_strategy, instruments=selected_instruments,
                     interval=selected_interval, risk_manager=selected_rm)
-                st.dataframe(metrics_df.style.format(subset=pd.IndexSlice[:, metrics_df.columns != 'Total Trades'], formatter="{:.2f}"))
+                st.dataframe(metrics_df.style.format(subset=pd.IndexSlice[:, metrics_df.columns != 'Total Trades'],
+                                                     formatter="{:.2f}"))
                 st.plotly_chart(fig, use_container_width=True)
-
 
 def _render_mode3_ui(comp_analyzer: ComparativeAnalyzer, summary_df: pd.DataFrame):
     st.subheader("3. Сравнение двух портфелей (A vs B)")
@@ -333,16 +353,22 @@ def render_detailed_analysis_section(filtered_df: pd.DataFrame):
     selected_file = st.selectbox("Выберите бэктест для детального анализа:", options=filtered_df["File"].tolist())
     if selected_file:
         trades_df = load_trades_from_file(os.path.join(PATH_CONFIG["LOGS_DIR"], selected_file))
+
         row = filtered_df[filtered_df["File"] == selected_file].iloc[0]
-        data_path = os.path.join(PATH_CONFIG["DATA_DIR"], row["Exchange"], row["Interval"], f"{row['Instrument'].upper()}.parquet")
+        data_path = os.path.join(PATH_CONFIG["DATA_DIR"], row["Exchange"], row["Interval"],
+                                 f"{row['Instrument'].upper()}.parquet")
         historical_data = pd.read_parquet(data_path)
+
         analyzer = BacktestAnalyzer(
             trades_df=trades_df, historical_data=historical_data,
             initial_capital=BACKTEST_CONFIG["INITIAL_CAPITAL"],
             interval=row["Interval"], risk_manager_type=row["Risk Manager"],
             exchange=row["Exchange"]
         )
-        analyzer.trades['drawdown_percent'] = (analyzer.trades['equity_curve'] / analyzer.trades['equity_curve'].cummax() - 1) * 100
+
+        analyzer.calculator.trades['drawdown_percent'] = (analyzer.calculator.trades['equity_curve'] /
+                                                          analyzer.calculator.trades['equity_curve'].cummax() - 1) * 100
+
         tab1, tab2, tab3 = st.tabs(["📈 Кривая капитала", "📊 Анализ PnL", "🕯️ График сделок"])
         with tab1: plot_equity_and_drawdown(analyzer)
         with tab2: plot_pnl_distribution(analyzer); plot_monthly_pnl(analyzer)
@@ -357,11 +383,13 @@ def render_comparative_analysis_section(summary_df: pd.DataFrame):
         ["1. Стратегия vs Стратегия", "2. Анализ робастности", "3. Портфель vs Портфель"],
         horizontal=True)
     st.markdown("---")
-    if "1." in comparison_mode: _render_mode1_ui(comp_analyzer, summary_df)
-    elif "2." in comparison_mode: _render_mode2_ui(comp_analyzer, summary_df)
-    elif "3." in comparison_mode: _render_mode3_ui(comp_analyzer, summary_df)
+    if "1." in comparison_mode:
+        _render_mode1_ui(comp_analyzer, summary_df)
+    elif "2." in comparison_mode:
+        _render_mode2_ui(comp_analyzer, summary_df)
+    elif "3." in comparison_mode:
+        _render_mode3_ui(comp_analyzer, summary_df)
 
-# Основная часть приложения
 def main():
     st.title("🤖 Панель анализа торговых стратегий")
 
@@ -373,32 +401,37 @@ def main():
                 st.warning(error_msg)
 
     if summary_df.empty:
-        st.warning("Не найдено ни одного корректно обработанного файла с результатами бэктестов (`_trades.jsonl`) в папке `logs/`.")
-        st.info("Убедитесь, что для каждого лога сделок существует соответствующий файл с историческими данными в папке `data/`.")
+        st.warning(
+            "Не найдено ни одного корректно обработанного файла с результатами бэктестов (`_trades.jsonl`) в папке `logs/`.")
+        st.info(
+            "Убедитесь, что для каждого лога сделок существует соответствующий файл с историческими данными в папке `data/`.")
         return
 
     st.sidebar.header("Фильтры")
-    selected_exchanges = st.sidebar.multiselect("Биржи", options=summary_df["Exchange"].unique(), default=summary_df["Exchange"].unique())
-    selected_strategies = st.sidebar.multiselect("Стратегии", options=summary_df["Strategy"].unique(), default=summary_df["Strategy"].unique())
-    selected_instruments = st.sidebar.multiselect("Инструменты", options=summary_df["Instrument"].unique(), default=summary_df["Instrument"].unique())
-    selected_rms = st.sidebar.multiselect("Риск-менеджеры", options=summary_df["Risk Manager"].unique(), default=summary_df["Risk Manager"].unique())
+    selected_exchanges = st.sidebar.multiselect("Биржи", options=summary_df["Exchange"].unique(),
+                                                default=summary_df["Exchange"].unique())
+    selected_strategies = st.sidebar.multiselect("Стратегии", options=summary_df["Strategy"].unique(),
+                                                 default=summary_df["Strategy"].unique())
+    selected_instruments = st.sidebar.multiselect("Инструменты", options=summary_df["Instrument"].unique(),
+                                                  default=summary_df["Instrument"].unique())
+    selected_rms = st.sidebar.multiselect("Риск-менеджеры", options=summary_df["Risk Manager"].unique(),
+                                          default=summary_df["Risk Manager"].unique())
 
     filtered_df = summary_df[
         (summary_df["Exchange"].isin(selected_exchanges)) &
         (summary_df["Strategy"].isin(selected_strategies)) &
         (summary_df["Instrument"].isin(selected_instruments)) &
         (summary_df["Risk Manager"].isin(selected_rms))
-    ]
+        ]
 
     st.header("Сводная таблица результатов")
     if not filtered_df.empty:
         df_display = filtered_df.copy()
-        # Создаем новый индекс, который начинается с 1
         df_display.index = pd.RangeIndex(start=1, stop=len(df_display) + 1, step=1)
         st.dataframe(style_summary_table(df_display), use_container_width=True)
     else:
-        # Если DataFrame пуст, просто отображаем его как есть
         st.dataframe(filtered_df, use_container_width=True)
+
     render_detailed_analysis_section(filtered_df)
     render_comparative_analysis_section(summary_df)
 

@@ -4,18 +4,13 @@ import logging
 import json
 import time
 
-# -> ИЗМЕНЕНИЕ: Импортируем наших новых клиентов
+from utils.logger_config import setup_global_logging
 from utils.data_clients import TinkoffClient, BybitClient, BaseDataClient
 from config import DATA_LOADER_CONFIG, PATH_CONFIG
-
-# Настройка логгеров
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logging.getLogger('tinkoff').setLevel(logging.WARNING)
 
 # --- Конфигурация ---
 DATA_DIR = PATH_CONFIG["DATA_DIR"]
 DEFAULT_DAYS_TO_LOAD = DATA_LOADER_CONFIG["DAYS_TO_LOAD"]
-
 
 def _fetch_and_save_candles(client: BaseDataClient, exchange: str, instrument: str, interval: str, days: int,
                             category: str, save_path: str):
@@ -31,7 +26,6 @@ def _fetch_and_save_candles(client: BaseDataClient, exchange: str, instrument: s
         logging.info(f"Успешно сохранено {len(df)} свечей для {instrument.upper()} в файл: {save_path}")
     else:
         logging.warning(f"Не получено данных по свечам для {instrument.upper()}. Файл не создан.")
-
 
 def _fetch_and_save_instrument_info(client: BaseDataClient, exchange: str, instrument: str, category: str,
                                     save_path: str):
@@ -55,8 +49,6 @@ def download_data(exchange: str, instrument_list: list[str], interval: str, days
     """
     logging.info(
         f"--- Загрузка данных с биржи '{exchange.upper()}' за {days_to_load} дней для интервала: {interval} ---")
-
-    # -> ИЗМЕНЕНИЕ: Фабрика клиентов
     client: BaseDataClient
     if exchange == 'tinkoff':
         client = TinkoffClient()
@@ -84,8 +76,8 @@ def download_data(exchange: str, instrument_list: list[str], interval: str, days
         if len(instrument_list) > 1:
             time.sleep(1)
 
-
 def main():
+    setup_global_logging()
     parser = argparse.ArgumentParser(
         description="Утилита для загрузки исторических данных с разных бирж.",
         formatter_class=argparse.RawTextHelpFormatter
@@ -147,11 +139,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-# Пример запуска
-# Скачать данные по акции Сбербанка с Tinkoff (используя тикер):
-# python download_data.py --exchange tinkoff --instrument SBER --interval 5min --days 365
-# Скачать данные по BTC/USDT с Bybit:
-# python download_data.py --exchange bybit --instrument BTCUSDT --interval 1hour --days 700
-# Скачать данные сразу по нескольким криптовалютам:
-# python download_data.py --exchange bybit --instrument BTCUSDT ETHUSDT --interval 1day --days 1000

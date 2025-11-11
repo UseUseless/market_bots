@@ -6,7 +6,7 @@ from typing import Type, Any, get_args
 
 from asyncio import Queue as AsyncQueue
 
-# --- Импорты компонентов ---
+from utils.logger_config import setup_global_logging
 from utils.data_clients import TinkoffClient, BybitClient
 from core.stream_data_handler import TinkoffStreamDataHandler, BybitStreamDataHandler, BaseStreamDataHandler
 from core.stream_execution import LiveExecutionHandler
@@ -130,6 +130,8 @@ async def run_sandbox(
 
 def main():
     """Парсер аргументов и точка входа."""
+    setup_global_logging()
+
     parser = argparse.ArgumentParser(description="Запуск торгового бота в режиме песочницы.")
 
     parser.add_argument("--exchange", type=str, required=True, choices=['tinkoff', 'bybit'])
@@ -171,7 +173,5 @@ def main():
     finally:
         asyncio.run(asyncio.sleep(1))
 
-
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     main()

@@ -26,14 +26,19 @@ class BaseRiskManager(ABC):
     Абстрактный базовый класс для всех менеджеров риска.
     Его задача - создавать полный профиль риска для сделки (объект TradeRiskProfile).
     """
+
+    # Процент риска от капитала по умолчанию. Это ключевой параметр для контроля убытков.
+    # Например, 1% означает, что при срабатывании стоп-лосса мы потеряем не более 1% от текущего капитала.
+    # Мы разделяем их для лонга и шорта, так как можем захотеть рисковать по-разному
+    # в зависимости от направления рынка (например, быть более консервативными в шортах).
     params_config: Dict[str, Dict[str, Any]] = {
         "risk_percent_long": {
-            "type": "float", "default": BACKTEST_CONFIG["DEFAULT_RISK_PERCENT_LONG"], "optimizable": True,
+            "type": "float", "default": 2.0, "optimizable": True,
             "low": 0.5, "high": 5.0, "step": 0.1,
             "description": "Процент риска от капитала для лонг позиций."
         },
         "risk_percent_short": {
-            "type": "float", "default": BACKTEST_CONFIG["DEFAULT_RISK_PERCENT_SHORT"], "optimizable": True,
+            "type": "float", "default": 2.0, "optimizable": True,
             "low": 0.5, "high": 5.0, "step": 0.1,
             "description": "Процент риска от капитала для шорт позиций."
         }

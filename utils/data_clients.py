@@ -232,6 +232,7 @@ class BybitClient(BaseDataClient):
         logging.info("Клиент Bybit инициализирован с таймаутом 10с.")
 
     def get_historical_data(self, instrument: str, interval: str, days: int, **kwargs) -> pd.DataFrame:
+        instrument_upper = instrument.upper()
         category = kwargs.get("category", "linear")
         logging.info(f"Bybit Client: используется категория '{category}'")
         api_interval = EXCHANGE_INTERVAL_MAPS["bybit"].get(interval)
@@ -250,7 +251,7 @@ class BybitClient(BaseDataClient):
             current_end_ts = end_ts
             while start_ts < current_end_ts:
                 try:
-                    resp = self.client.get_kline(category=category, symbol=instrument, interval=api_interval,
+                    resp = self.client.get_kline(category=category, symbol=instrument_upper, interval=api_interval,
                                                  limit=limit, end=current_end_ts)
                     if resp['retCode'] != 0:
                         logging.error(f"Ошибка API Bybit для {instrument}: {resp['retMsg']}")
@@ -289,9 +290,10 @@ class BybitClient(BaseDataClient):
         return df.sort_values('time').reset_index(drop=True)
 
     def get_instrument_info(self, instrument: str, category: str = "linear") -> dict:
+        instrument_upper = instrument.upper()
         logging.info(f"Bybit Client: Запрос информации об инструменте {instrument} (категория: {category})...")
         try:
-            response = self.client.get_instruments_info(category=category, symbol=instrument)
+            response = self.client.get_instruments_info(category=category, symbol=instrument_upper)
             if response.get("retCode") == 0 and response["result"]["list"]:
                 instr_info = response["result"]["list"][0]
                 lot_size_filter = instr_info.get("lotSizeFilter", {})

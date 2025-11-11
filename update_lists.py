@@ -3,14 +3,11 @@ import os
 import logging
 from typing import List
 
+from utils.logger_config import setup_global_logging
 from utils.data_clients import TinkoffClient, BybitClient
 from config import DATA_LOADER_CONFIG
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 LISTS_DIR = "datalists"
-
-
-# --- ИЗМЕНЕНИЕ: Создаем отдельные функции для каждого типа списка ---
 
 def _update_top_liquid_by_turnover(exchange: str, count: int) -> List[str]:
     """Получает список топ-N ликвидных инструментов для указанной биржи."""
@@ -24,14 +21,11 @@ def _update_top_liquid_by_turnover(exchange: str, count: int) -> List[str]:
 
     return client.get_top_liquid_by_turnover(count=count)
 
-
-# --- Словарь-диспетчер для выбора нужной функции ---
 LIST_UPDATERS = {
     "top_liquid_by_turnover": _update_top_liquid_by_turnover,
     # В будущем можно будет легко добавить новые типы:
     # "blue_chips": _update_blue_chips,
 }
-
 
 def update_and_save_list(exchange: str, list_type: str):
     """
@@ -39,8 +33,6 @@ def update_and_save_list(exchange: str, list_type: str):
     """
     logging.info(f"--- Обновление списка '{list_type}' для биржи: {exchange.upper()} ---")
 
-    # --- ИЗМЕНЕНИЕ: Автоматическое создание директории ---
-    # Это отвечает на твой последний вопрос. Папка будет создана здесь.
     os.makedirs(LISTS_DIR, exist_ok=True)
 
     # Выбираем нужную функцию-обработчик из словаря
@@ -58,7 +50,6 @@ def update_and_save_list(exchange: str, list_type: str):
             logging.warning("Получен пустой список тикеров. Файл не будет обновлен.")
             return
 
-        # --- ИЗМЕНЕНИЕ: Динамическое имя файла ---
         filename = f"{exchange}_{list_type}.txt"
         file_path = os.path.join(LISTS_DIR, filename)
 
@@ -73,6 +64,7 @@ def update_and_save_list(exchange: str, list_type: str):
 
 
 def main():
+    setup_global_logging()
     parser = argparse.ArgumentParser(description="Утилита для обновления списков инструментов.")
     parser.add_argument(
         "--exchange",
@@ -81,7 +73,6 @@ def main():
         choices=['tinkoff', 'bybit'],
         help="Биржа для обновления списка."
     )
-    # --- ИЗМЕНЕНИЕ: Новый обязательный аргумент ---
     parser.add_argument(
         "--list-type",
         type=str,
@@ -91,7 +82,6 @@ def main():
     )
     args = parser.parse_args()
     update_and_save_list(args.exchange, args.list_type)
-
 
 if __name__ == "__main__":
     main()

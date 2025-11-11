@@ -10,6 +10,7 @@ from core.execution import SimulatedExecutionHandler
 from strategies.base_strategy import BaseStrategy
 from utils.context_logger import backtest_time_filter
 from utils.file_io import load_instrument_info
+from config import PATH_CONFIG
 
 logger = logging.getLogger('backtester')
 
@@ -65,21 +66,33 @@ def _initialize_components(settings: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _prepare_data(
-        data_handler: HistoricLocalDataHandler,
         strategy: BaseStrategy,
-        data_slice: pd.DataFrame = None
+        settings: Dict[str, Any]
 ) -> pd.DataFrame | None:
     """Подготавливает исторические данные, полностью делегируя это стратегии."""
     logger.info("Начало этапа подготовки данных...")
 
-    raw_data = data_slice if data_slice is not None else data_handler.load_raw_data()
-    if raw_data.empty:
-        logger.error("Не удалось получить данные для бэктеста. Завершение работы.")
+    data_slice = settings.get("data_slice")
+
+    if data_slice is not None:
+        raw_data = data_slice
+    else:
+        data_dir = settings.get("data_dir", PATH_CONFIG["DATA_DIR"])
+        data_handler = HistoricLocalDataHandler(
+            events_queue=None,
+            exchange=settings["exchange"],
+            instrument_id=settings["instrument"],
+            interval_str=settings["interval"],
+            data_path=data_dir
+        )
+        raw_data = data_handler.load_raw_data()
+
+    if raw_data is None or raw_data.empty:
+        logger.error(f"Не удалось получить данные для бэктеста по инструменту {settings['instrument']}.")
         return None
 
     enriched_data = strategy.process_data(raw_data.copy())
 
-    # Проверяем, остались ли данные ПОСЛЕ всех манипуляций внутри стратегии
     if len(enriched_data) < strategy.min_history_needed:
         logger.error(f"Ошибка: Недостаточно данных для запуска стратегии '{strategy.name}'.")
         logger.error(
@@ -92,7 +105,6 @@ def _prepare_data(
 
     logger.info("Этап подготовки данных завершен.")
     return enriched_data
-
 
 def _run_event_loop(
         enriched_data: pd.DataFrame,
@@ -144,13 +156,13 @@ def run_backtest_session(settings: Dict[str, Any]) -> Dict[str, Any]:
     components = _initialize_components(settings)
 
     enriched_data = _prepare_data(
-        components["data_handler"],
-        components["strategy"],
-        data_slice=settings.get("data_slice")  # Для WFO
+        strategy=components["strategy"],
+        settings=settings
     )
 
     if enriched_data is None:
-        return {"status": "error", "message": "Data preparation failed", "trades_df": pd.DataFrame()}
+        return {"status": "error", "message": "Data preparation failed", "trades_df": pd.DataFrame(),
+                "open_positions": {}}
 
     _run_event_loop(
         enriched_data, settings["instrument"], components["events_queue"],

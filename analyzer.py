@@ -5,26 +5,29 @@ import os
 import logging
 from rich.console import Console
 from rich.table import Table
+from typing import Dict, Any, Optional
 
 from config import PATH_CONFIG, EXCHANGE_SPECIFIC_CONFIG
+from optimization.metrics import MetricsCalculator, METRIC_CONFIG
 
 logger = logging.getLogger('backtester')
 
 class BacktestAnalyzer:
     """
-    Анализирует результаты бэктеста на основе DataFrame с закрытыми сделками.
-    Рассчитывает ключевые метрики и генерирует графический отчет.
+    Анализирует результаты бэктеста.
+    Отвечает за расчет метрики "Buy & Hold", агрегацию всех метрик
+    и генерацию графического/консольного отчета.
+    Делегирует расчет метрик по сделкам классу MetricsCalculator.
     """
 
     def __init__(self, trades_df: pd.DataFrame, historical_data: pd.DataFrame,
                  initial_capital: float, interval: str, risk_manager_type: str,
                  report_dir: str = PATH_CONFIG["REPORTS_DIR"],
                  exchange: str = 'tinkoff'):
-        # Проверяем, что нам вообще передали какие-то данные
+
         if trades_df.empty:
             raise ValueError("DataFrame со сделками не может быть пустым.")
-            
-        self.trades = trades_df
+
         self.historical_data = historical_data
         self.initial_capital = initial_capital
         self.interval = interval
@@ -32,11 +35,10 @@ class BacktestAnalyzer:
         self.report_dir = report_dir
         self.exchange = exchange
         os.makedirs(self.report_dir, exist_ok=True)
-        
-        # Считаем накопительный PnL после каждой сделки
-        self.trades['cumulative_pnl'] = self.trades['pnl'].cumsum()
-        # Прибавляем накопительный PnL к начальному капиталу, чтобы получить кривую роста
-        self.trades['equity_curve'] = self.initial_capital + self.trades['cumulative_pnl']
+
+        exchange_config = EXCHANGE_SPECIFIC_CONFIG[self.exchange]
+        annualization_factor = exchange_config["SHARPE_ANNUALIZATION_FACTOR"]
+        self.calculator = MetricsCalculator(trades_df, initial_capital, annualization_factor)
 
         self.benchmark_equity = self._calculate_buy_and_hold()
 
@@ -53,101 +55,108 @@ class BacktestAnalyzer:
         # Создаем новую колонку, где стоимость портфеля пересчитывается на каждой свече
         # по цене закрытия (close)
         equity_curve = self.historical_data['close'] * quantity
-
         return equity_curve
 
     def calculate_metrics(self) -> dict:
-        """Рассчитывает ключевые метрики производительности стратегии."""
-        # Общий финансовый результат
-        total_pnl = self.trades['equity_curve'].iloc[-1] - self.initial_capital
+        if not self.calculator.is_valid:
+            logger.warning("Калькулятор метрик считает данные невалидными. Отчет будет содержать нули.")
+            raw_metrics = {
+                'pnl': 0.0, 'win_rate': 0.0, 'max_drawdown': 0.0,
+                'profit_factor': 0.0, 'sharpe_ratio': 0.0, 'total_trades': 0
+            }
+        else:
+            raw_metrics = {
+                'pnl': self.calculator.calculate('pnl'),
+                'win_rate': self.calculator.calculate('win_rate'),
+                'max_drawdown': self.calculator.calculate('max_drawdown'),
+                'profit_factor': self.calculator.calculate('profit_factor'),
+                'sharpe_ratio': self.calculator.calculate('sharpe_ratio'),
+                'total_trades': len(self.calculator.trades)
+            }
 
-        # Процент прибыльных сделок (Win Rate)
-        win_rate = (self.trades['pnl'] > 0).mean() * 100
-
-        # Расчет максимальной просадки (Max Drawdown)
-        # 1. Считаем "водяной знак" - максимальное значение капитала, достигнутое на данный момент.
-        high_water_mark = self.trades['equity_curve'].cummax()
-        # 2. Считаем просадку в каждый момент времени как отклонение от "водяного знака".
-        drawdown = (self.trades['equity_curve'] - high_water_mark) / high_water_mark
-        # 3. Находим максимальное значение этой просадки.
-        max_drawdown = abs(drawdown.min()) * 100
-
-        # Расчет Profit Factor
-        # Сумма всех прибылей
-        gross_profit = self.trades[self.trades['pnl'] > 0]['pnl'].sum()
-        # Сумма всех убытков (по модулю)
-        gross_loss = abs(self.trades[self.trades['pnl'] < 0]['pnl'].sum())
-        # Отношение прибылей к убыткам. Обрабатываем случай деления на ноль.
-        profit_factor = gross_profit / gross_loss if gross_loss != 0 else float('inf')
-
-        exchange_config = EXCHANGE_SPECIFIC_CONFIG[self.exchange]
-        sharpe_factor = exchange_config["SHARPE_ANNUALIZATION_FACTOR"]
-
-        # Упрощенный расчет Sharpe Ratio (без учета безрисковой ставки)
-        # 1. Считаем доходность от сделки к сделке.
-        daily_returns = self.trades['equity_curve'].pct_change().dropna()
-        # 2. Считаем по формуле: (средняя доходность / станд. отклонение доходности) * sqrt(252)
-        # sqrt(252) - это годовая поправка (примерное число торговых дней в году).
-        sharpe_ratio = (daily_returns.mean() / daily_returns.std()) * np.sqrt(252) if daily_returns.std() != 0 else 0
-
-        # Расчет метрик для "Buy and Hold
         benchmark_pnl = self.benchmark_equity.iloc[-1] - self.initial_capital
         benchmark_pnl_percent = (benchmark_pnl / self.initial_capital) * 100
 
+        pnl_percent = (raw_metrics['pnl'] / self.initial_capital) * 100
+        profit_factor_str = f"{raw_metrics['profit_factor']:.2f}" if np.isfinite(
+            raw_metrics['profit_factor']) else "inf"
+
         metrics = {
-            # --- Параметры запуска ---
             "Interval": self.interval,
             "Risk Manager Type": self.risk_manager_type,
-            "---": "---", # Разделитель
-            "Total PnL (Strategy)": f"{total_pnl:.2f} ({total_pnl / self.initial_capital * 100:.2f}%)",
-            "Total PnL (Buy & Hold)": f"{benchmark_pnl:.2f} ({benchmark_pnl_percent:.2f}%)", # Новая метрика
-            "--- ": "--- ", # Разделитель
-            "Win Rate": f"{win_rate:.2f}%",
-            "Max Drawdown": f"{max_drawdown:.2f}%",
-            "Profit Factor": f"{profit_factor:.2f}",
-            "Sharpe Ratio": f"{sharpe_ratio:.2f} (ann. by {sharpe_factor}d)",
-            "Total Trades": len(self.trades)
+            "---": "---",
+            "Total PnL (Strategy)": f"{raw_metrics['pnl']:.2f} ({pnl_percent:.2f}%)",
+            "Total PnL (Buy & Hold)": f"{benchmark_pnl:.2f} ({benchmark_pnl_percent:.2f}%)",
+            "--- ": "--- ",
+            "Win Rate": f"{raw_metrics['win_rate'] * 100:.2f}%",
+            "Max Drawdown": f"{raw_metrics['max_drawdown'] * 100:.2f}%",
+            "Profit Factor": profit_factor_str,
+            "Sharpe Ratio": f"{raw_metrics['sharpe_ratio']:.2f} (ann. by {self.calculator.annualization_factor}d)",
+            "Total Trades": raw_metrics['total_trades']
         }
-
-        # Возвращаем все метрики
         return metrics
 
-    def generate_report(self, report_filename: str):
-        """Создает и сохраняет отчет с графиком и метриками."""
+    def generate_report(self, report_filename: str,
+                        target_metric: Optional[str] = None,
+                        wfo_results: Optional[Dict[str, float]] = None):
+        """
+        Создает и сохраняет отчет с графиком и метриками.
+        Может принимать дополнительный контекст от WFO для отображения.
+        """
+        # Сначала получаем базовые метрики, как и раньше
         metrics = self.calculate_metrics()
+
+        wfo_text_block = ""
+        if target_metric and wfo_results:
+            # Получаем красивое имя целевой метрики
+            target_metric_name = METRIC_CONFIG.get(target_metric, {}).get('name', target_metric)
+
+            # Собираем строки для всех OOS-метрик
+            oos_metrics_lines = []
+            for key, value in wfo_results.items():
+                metric_name = METRIC_CONFIG.get(key, {}).get('name', key)
+                # Выделяем целевую метрику
+                prefix = ">> " if key == target_metric else "   "
+                oos_metrics_lines.append(f"{prefix}{metric_name:<20}: {value:.3f}")
+
+            # Объединяем все в один блок
+            wfo_text_block = (
+                    f"\n--- WFO Final OOS Results ---\n"
+                    f"Target Metric: {target_metric_name}\n"
+                    f"---------------------------------\n"
+                    + "\n".join(oos_metrics_lines)
+            )
 
         plt.style.use('seaborn-v0_8-darkgrid')
         fig, ax = plt.subplots(figsize=(15, 7))
-        
-        # Создание графиков
-        # График нашей стратегии. Важно: используем индекс сделок.
-        self.trades['equity_curve'].plot(ax=ax, label='Strategy Equity Curve', color='blue', lw=2)
 
-        # График "Buy and Hold". Важно: нужно привести его индекс к тому же масштабу,
-        # что и у графика сделок, чтобы они корректно наложились.
-        # Мы "растягиваем" индекс от 0 до N-1 сделок на всю длину исторических данных.
+        equity_curve = self.calculator.trades['equity_curve']
+        equity_curve.plot(ax=ax, label='Strategy Equity Curve', color='blue', lw=2)
+
         benchmark_resampled = self.benchmark_equity.reset_index(drop=True)
-        benchmark_resampled.index = np.linspace(0, len(self.trades) - 1, len(benchmark_resampled))
-        benchmark_resampled.plot(ax=ax, label='Buy & Hold Benchmark', color='gray', linestyle='--', lw=1.5)
+        num_trades = len(self.calculator.trades)
+        if num_trades > 1:
+            benchmark_resampled.index = np.linspace(0, num_trades - 1, len(benchmark_resampled))
+            benchmark_resampled.plot(ax=ax, label='Buy & Hold Benchmark', color='gray', linestyle='--', lw=1.5)
 
         ax.set_title(f"Результаты бэктеста: {report_filename}", fontsize=16)
         ax.set_xlabel("Количество сделок")
         ax.set_ylabel("Капитал")
         ax.legend()
-        
-        # Формируем одну строку из словаря с метриками
+
         report_text = "\n".join([f"{key}: {value}" for key, value in metrics.items()])
-        # Размещаем этот текст в левом верхнем углу графика
-        ax.text(0.02, 0.98, report_text, transform=ax.transAxes, fontsize=10,
+        full_report_text = report_text + wfo_text_block  # Просто конкатенируем строки
+
+        ax.text(0.02, 0.98, full_report_text, transform=ax.transAxes, fontsize=10,
                 verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5),
                 fontfamily='monospace')
 
-        # Сохранение отчета в файл
         full_path = os.path.join(self.report_dir, f"{report_filename}.png")
         plt.savefig(full_path)
-        plt.close(fig) # Очищаем график из памяти
+        plt.close(fig)
 
-        # --- Вывод метрик в консоль ---
+        # Вывод в консоль остается без изменений, так как он показывает
+        # только финальные OOS-метрики, которые уже есть в `metrics`.
         console = Console()
         table = Table(title=f"Отчет о производительности: {report_filename}", show_header=True,
                       header_style="bold magenta")
@@ -155,7 +164,7 @@ class BacktestAnalyzer:
         table.add_column("Значение", justify="right")
 
         for key, value in metrics.items():
-            if key == "---":
+            if "---" in key:
                 table.add_section()
             else:
                 table.add_row(key, str(value))
@@ -165,10 +174,6 @@ class BacktestAnalyzer:
 
 
 class BatchTestAnalyzer:
-    """
-    Анализирует и представляет сводные результаты пакетного тестирования.
-    """
-
     def __init__(self, results_df: pd.DataFrame, strategy_name: str, interval: str, risk_manager_type: str):
         if not isinstance(results_df, pd.DataFrame):
             raise TypeError("results_df должен быть pandas DataFrame.")
@@ -179,9 +184,6 @@ class BatchTestAnalyzer:
         self.risk_manager_type = risk_manager_type
 
     def generate_summary_report(self):
-        """
-        Генерирует и выводит в консоль сводную таблицу и общую статистику.
-        """
         from rich.console import Console
         from rich.table import Table
 
@@ -215,7 +217,7 @@ class BatchTestAnalyzer:
         console.print(table)
 
         avg_pnl = self.results_df['pnl_percent'].mean()
-        avg_bh_pnl = self.results_df['bh_pnl_percent'].mean()  # Средний B&H
+        avg_bh_pnl = self.results_df['bh_pnl_percent'].mean()
         win_instruments_rate = (self.results_df['pnl_percent'] > 0).mean() * 100
         strategy_beats_bh_rate = (self.results_df['pnl_percent'] > self.results_df['bh_pnl_percent']).mean() * 100
         total_trades_sum = self.results_df['total_trades'].sum()
