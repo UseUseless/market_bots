@@ -1,62 +1,27 @@
 import optuna
 import pandas as pd
-import numpy as np
-from copy import deepcopy
 from typing import Type
 
 from core.backtest_engine import run_backtest_session
-from config import BACKTEST_CONFIG
+from config import BACKTEST_CONFIG, EXCHANGE_SPECIFIC_CONFIG
 from strategies.base_strategy import BaseStrategy
-from core.risk_manager import AVAILABLE_RISK_MANAGERS, BaseRiskManager
-
-
-def _calculate_calmar_ratio(trades_df: pd.DataFrame, initial_capital: float) -> float:
-    """Рассчитывает Calmar Ratio."""
-
-    if trades_df.empty or len(trades_df) < 2:
-        # Calmar Ratio не имеет смысла, если сделок меньше двух.
-        return 0.0
-
-        # --- Расчет максимальной просадки (Max Drawdown) ---
-    trades_df['cumulative_pnl'] = trades_df['pnl'].cumsum()
-    trades_df['equity_curve'] = initial_capital + trades_df['cumulative_pnl']
-    high_water_mark = trades_df['equity_curve'].cummax()
-    drawdown = (trades_df['equity_curve'] - high_water_mark) / high_water_mark
-    max_drawdown = abs(drawdown.min())
-
-    if max_drawdown == 0:
-        # Если просадки не было, возвращаем очень большое число (inf), если была прибыль, иначе 0.
-        return np.inf if trades_df['pnl'].sum() > 0 else 0.0
-
-    # --- Расчет годовой доходности (Annualized Return) ---
-    total_pnl = trades_df['cumulative_pnl'].iloc[-1]
-    total_return = total_pnl / initial_capital
-
-    # Рассчитываем продолжительность торгового периода в днях
-    start_date = pd.to_datetime(trades_df['entry_timestamp_utc'].iloc[0])
-    end_date = pd.to_datetime(trades_df['exit_timestamp_utc'].iloc[-1])
-    num_days = (end_date - start_date).days
-
-    # Избегаем деления на ноль и бессмысленных расчетов, если период слишком короткий
-    if num_days < 1:
-        num_days = 1
-
-    # Формула для расчета среднегодовой доходности
-    annualized_return = ((1 + total_return) ** (365.0 / num_days)) - 1
-
-    return annualized_return / max_drawdown
-
+from core.risk_manager import AVAILABLE_RISK_MANAGERS
+from optimization.metrics import MetricsCalculator
 
 class Objective:
     """Класс-обертка для целевой функции, чтобы передавать статичные параметры."""
 
-    def __init__(self, strategy_class: Type[BaseStrategy], exchange: str, instrument: str, interval: str, risk_manager_type: str, data_slice: pd.DataFrame):
+    def __init__(self, strategy_class: Type[BaseStrategy], exchange: str, instrument: str,
+                 interval: str, risk_manager_type: str, data_slice: pd.DataFrame,
+                 metric: str):
         self.strategy_class = strategy_class
         self.exchange = exchange
         self.instrument = instrument
         self.interval = interval
         self.risk_manager_type = risk_manager_type
         self.data_slice = data_slice
+        self.metric = metric
+        self.annualization_factor = EXCHANGE_SPECIFIC_CONFIG[exchange]["SHARPE_ANNUALIZATION_FACTOR"]
 
     def __call__(self, trial: optuna.Trial) -> float:
         """Одна итерация оптимизации."""
@@ -124,12 +89,14 @@ class Objective:
                 # Pruning - механизм Optuna для досрочного отсечения бесперспективных веток.
                 raise optuna.TrialPruned()
 
-            trades_df = backtest_results["trades_df"].copy()
-            trades_df['entry_timestamp_utc'] = pd.to_datetime(trades_df['entry_timestamp_utc'])
-            trades_df['exit_timestamp_utc'] = pd.to_datetime(trades_df['exit_timestamp_utc'])
+            trades_df = backtest_results["trades_df"]
+            initial_capital = backtest_results["initial_capital"]
 
-            calmar_ratio = _calculate_calmar_ratio(trades_df, backtest_results["initial_capital"])
-            return calmar_ratio
+            calculator = MetricsCalculator(trades_df, initial_capital, self.annualization_factor)
+
+            value = calculator.calculate(self.metric)
+
+            return value
 
         except optuna.TrialPruned:
             raise

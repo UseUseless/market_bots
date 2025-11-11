@@ -16,6 +16,7 @@ from strategies import AVAILABLE_STRATEGIES
 from core.risk_manager import AVAILABLE_RISK_MANAGERS
 from core.data_handler import HistoricLocalDataHandler
 from core.backtest_engine import run_backtest_session
+from optimization.metrics import METRIC_CONFIG
 from config import BACKTEST_CONFIG
 
 # Настраиваем логирование, чтобы Optuna не "спамила" в консоль
@@ -130,11 +131,13 @@ def _run_wfo_loop(args: argparse.Namespace, data_periods: List[pd.DataFrame], nu
     for train_df, test_df, step_num in tqdm(wfo_gen, total=num_steps, desc="Общий прогресс WFO"):
         logger.info(f"\n--- Шаг {step_num}/{num_steps}: Обучение на {len(train_df)} свечах, тест на {len(test_df)} свечах ---")
 
-        study = optuna.create_study(direction="maximize")
+        metric_info = METRIC_CONFIG[args.metric]
+        study = optuna.create_study(direction=metric_info["direction"])
+
         strategy_class = AVAILABLE_STRATEGIES[args.strategy]
         objective = Objective(
             strategy_class=strategy_class, exchange=args.exchange, instrument=args.instrument,
-            interval=args.interval, risk_manager_type=args.rm, data_slice=train_df
+            interval=args.interval, risk_manager_type=args.rm, data_slice=train_df, metric=args.metric
         )
 
         study.optimize(objective, n_trials=args.n_trials, n_jobs=-1, show_progress_bar=True)
@@ -144,8 +147,11 @@ def _run_wfo_loop(args: argparse.Namespace, data_periods: List[pd.DataFrame], nu
             logger.warning(f"Шаг {step_num}: Optuna не нашла прибыльного решения. Пропускаем OOS-тест.")
             continue
 
+        metric_name = metric_info.get("name", args.metric)
+
         best_params = study.best_params
-        logger.info(f"Шаг {step_num}: Лучшие параметры найдены. Calmar (In-Sample): {study.best_value:.4f}")
+        # Используем динамическое имя в логе
+        logger.info(f"Шаг {step_num}: Лучшие параметры найдены. {metric_name} (In-Sample): {study.best_value:.4f}")
         for key, value in best_params.items():
             logger.info(f"  - {key}: {value}")
 
@@ -288,6 +294,7 @@ def main():
     parser.add_argument("--total_periods", type=int, required=True, help="На сколько частей делить весь датасет.")
     parser.add_argument("--train_periods", type=int, required=True, help="Сколько частей использовать для обучения.")
     parser.add_argument("--test_periods", type=int, default=1, help="Сколько частей использовать для теста (по умолчанию: 1).")
+    parser.add_argument("--metric", type=str, default="calmar_ratio", choices=list(METRIC_CONFIG.keys()), help="Целевая метрика для оптимизации.")
     args = parser.parse_args()
 
     run_wfo(args)
