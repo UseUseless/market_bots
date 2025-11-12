@@ -3,9 +3,9 @@ import pytest
 from queue import Queue
 from datetime import datetime, timezone
 
-from core.portfolio import Portfolio
-from core.event import FillEvent
-from strategies.base_strategy import BaseStrategy
+from app.core import Portfolio
+from app.core import FillEvent
+from app.strategies.base_strategy import BaseStrategy
 
 
 # --- Вспомогательные классы-заглушки ---

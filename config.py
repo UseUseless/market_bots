@@ -16,10 +16,21 @@ BYBIT_TESTNET_API_SECRET = os.getenv("BYBIT_TESTNET_API_SECRET")
 # --- ОБЩИЕ НАСТРОЙКИ ФРЕЙМВОРКА ---
 
 # Пути к директориям
+BASE_DIR = os.path.dirname(os.path.abspath(__file__)) # Корень проекта
 PATH_CONFIG = {
-    "DATA_DIR": "data",       # Папка для хранения исторических данных в формате .parquet.
-    "LOGS_DIR": "logs",       # Папка для хранения логов выполнения (.log) и сделок (.csv).
-    "REPORTS_DIR": "reports", # Папка для хранения графических отчетов анализа (.png).
+    "DATA_DIR": os.path.join(BASE_DIR, "data"),
+    "DATALISTS_DIR": os.path.join(BASE_DIR, "datalists"),
+
+    "LOGS_DIR": os.path.join(BASE_DIR, "logs"),
+    "LOGS_BACKTEST_DIR": os.path.join(BASE_DIR, "logs", "backtests"),
+    "LOGS_BATCH_TEST_DIR": os.path.join(BASE_DIR, "logs", "batch_tests"),
+    "LOGS_OPTIMIZATION_DIR": os.path.join(BASE_DIR, "logs", "optimizations"),
+    "LOGS_LIVE_DIR": os.path.join(BASE_DIR, "logs", "live"),
+
+    "REPORTS_DIR": os.path.join(BASE_DIR, "reports"),
+    "REPORTS_BACKTEST_DIR": os.path.join(BASE_DIR, "reports", "backtests"),
+    "REPORTS_BATCH_TEST_DIR": os.path.join(BASE_DIR, "reports", "batch_tests"),
+    "REPORTS_OPTIMIZATION_DIR": os.path.join(BASE_DIR, "reports", "optimizations"),
 }
 
 DATA_FILE_EXTENSION = ".parquet"

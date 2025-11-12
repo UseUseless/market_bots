@@ -3,10 +3,10 @@ import pandas as pd
 from queue import Queue
 import pytest
 
-from strategies.base_strategy import BaseStrategy
-from core.event import MarketEvent, SignalEvent
-from run_backtest import run_backtest, setup_logging
-from utils.file_io import load_trades_from_file
+from app.strategies.base_strategy import BaseStrategy
+from app.core import MarketEvent, SignalEvent
+from scripts.run_backtest import run_backtest, setup_logging
+from app.utils import load_trades_from_file
 
 # --- Тестовые стратегии, разработанные специально для E2E тестов ---
 

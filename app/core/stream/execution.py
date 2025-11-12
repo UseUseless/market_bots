@@ -1,0 +1,169 @@
+import asyncio
+import logging
+from asyncio import Queue as AsyncQueue
+from datetime import datetime, timezone
+
+from app.core.event import OrderEvent, FillEvent
+from app.core.execution import ExecutionHandler
+from app.utils.clients.bybit import BybitClient
+from app.utils.clients.tinkoff import TinkoffClient
+from app.utils.clients.abc import BaseTradeClient
+from tinkoff.invest import AsyncClient, OrderExecutionReportStatus
+
+from config import (TOKEN_SANDBOX, TOKEN_READONLY, BYBIT_TESTNET_API_KEY,
+                    BYBIT_TESTNET_API_SECRET, TOKEN_FULL_ACCESS,
+                    LIVE_TRADING_CONFIG, EXCHANGE_SPECIFIC_CONFIG)
+
+
+class LiveExecutionHandler(ExecutionHandler):
+    """
+    Исполняет ордера через API биржи (в режиме "песочницы" или реальном)
+    и слушает стрим для получения информации об исполнении.
+    """
+
+    def __init__(self, events_queue: AsyncQueue, exchange: str, trade_mode: str = "SANDBOX",
+                 loop: asyncio.AbstractEventLoop = None):
+        self.events_queue = events_queue
+        self.client: BaseTradeClient
+        self.exchange = exchange
+        self.loop = loop
+        self.trade_mode = trade_mode
+        self.account_id = None
+        self.figi_cache = {}
+
+        if exchange == 'tinkoff':
+            self.client = TinkoffClient(trade_mode=trade_mode)
+            self.stream_token = TOKEN_SANDBOX if trade_mode == "SANDBOX" else TOKEN_FULL_ACCESS
+        elif exchange == 'bybit':
+            self.client = BybitClient(trade_mode=trade_mode)
+        else:
+            raise ValueError(f"Неподдерживаемая биржа: {exchange}")
+
+        self.fill_listener_task = asyncio.create_task(self._listen_for_fills())
+
+    async def _resolve_figi(self, instrument: str) -> str:
+        """Находит и кэширует FIGI для тикера."""
+        if instrument in self.figi_cache:
+            return self.figi_cache[instrument]
+
+        class_code = EXCHANGE_SPECIFIC_CONFIG['tinkoff']['DEFAULT_CLASS_CODE']
+        logging.info(f"LiveExecutionHandler (Tinkoff): Поиск FIGI для {instrument}...")
+        async with AsyncClient(token=TOKEN_READONLY) as client:
+            response = await client.instruments.find_instrument(query=instrument)
+            instrument_info = next((instr for instr in response.instruments if instr.class_code == class_code), None)
+            if not instrument_info:
+                raise ValueError(f"Инструмент '{instrument}' не найден.")
+
+            self.figi_cache[instrument] = instrument_info.figi
+            logging.info(f"Найден FIGI: {instrument_info.figi}")
+            return instrument_info.figi
+
+    async def execute_order(self, event: OrderEvent):
+        """Асинхронно отправляет рыночный ордер через API."""
+        try:
+            instrument_id = event.instrument
+            if self.exchange == 'tinkoff':
+                instrument_id = await self._resolve_figi(event.instrument)
+
+            logging.info(f"LiveExecutionHandler: Отправка ордера: {event} (ID: {instrument_id})")
+            await asyncio.to_thread(
+                self.client.place_market_order,
+                instrument_id=instrument_id,
+                quantity=event.quantity,
+                direction=event.direction
+            )
+        except Exception as e:
+            logging.error(f"LiveExecutionHandler: Критическая ошибка при исполнении ордера: {e}")
+
+    async def _get_tinkoff_sandbox_account_id(self, client: AsyncClient) -> str:
+        """Получает ID первого доступного счета в песочнице."""
+        accounts_response = await client.sandbox.get_sandbox_accounts()
+        if not accounts_response.accounts:
+            raise ConnectionError("Не найдено счетов в песочнице Tinkoff.")
+        return accounts_response.accounts[0].id
+
+    async def _listen_for_fills(self):
+        """
+        Фоновая задача, которая подписывается на стрим ордеров/сделок,
+        генерирует FillEvent и обеспечивает переподключение в случае сбоя.
+        """
+        logging.info(f"LiveExecutionHandler ({self.exchange}): Запуск прослушивания исполненных ордеров...")
+
+        while True:
+            try:
+                if self.exchange == 'tinkoff':
+                    async with AsyncClient(token=self.stream_token) as client:
+                        if self.trade_mode == "SANDBOX":
+                            self.account_id = await self._get_tinkoff_sandbox_account_id(client)
+                        else:
+                            raise NotImplementedError("Получение ID реального счета не реализовано.")
+
+                        logging.info(f"Tinkoff Stream: Прослушивание сделок на счете {self.account_id}")
+
+                        async for trade in client.orders_stream.trades_stream(accounts=[self.account_id]):
+                            if trade.execution_report_status == OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_FILL:
+                                logging.info(f"LiveExecutionHandler (Tinkoff): Получено исполнение сделки: {trade}")
+
+                                ticker = next(
+                                    (ticker for ticker, figi in self.figi_cache.items() if figi == trade.figi), None)
+                                if not ticker:
+                                    logging.warning(f"Получена сделка по неизвестному FIGI: {trade.figi}. Пропускаем.")
+                                    continue
+
+                                price = trade.price.units + trade.price.nano / 1e9
+                                commission = (
+                                            trade.commission.units + trade.commission.nano / 1e9) if trade.commission else 0.0
+
+                                fill_event = FillEvent(
+                                    timestamp=trade.time.replace(tzinfo=timezone.utc),
+                                    instrument=ticker,
+                                    quantity=trade.quantity,
+                                    direction="BUY" if "BUY" in str(trade.direction) else "SELL",
+                                    price=price,
+                                    commission=commission
+                                )
+                                await self.events_queue.put(fill_event)
+
+                elif self.exchange == 'bybit':
+                    from pybit.unified_trading import WebSocket
+                    ws = WebSocket(
+                        testnet=(self.trade_mode == "SANDBOX"),
+                        channel_type="private",
+                        api_key=BYBIT_TESTNET_API_KEY,
+                        api_secret=BYBIT_TESTNET_API_SECRET,
+                    )
+
+                    def handle_execution(message):
+                        try:
+                            for trade in message.get("data", []):
+                                if trade.get("execType") == "Trade":
+                                    logging.info(f"LiveExecutionHandler (Bybit): Получено исполнение сделки: {trade}")
+                                    fill_event = FillEvent(
+                                        timestamp=datetime.fromtimestamp(int(trade['execTime']) / 1000,
+                                                                         tz=timezone.utc),
+                                        instrument=trade['symbol'],
+                                        quantity=int(float(trade['execQty'])),
+                                        direction="BUY" if trade['side'] == "Buy" else "SELL",
+                                        price=float(trade['execPrice']),
+                                        commission=float(trade.get('execFee', 0.0))
+                                    )
+                                    asyncio.run_coroutine_threadsafe(self.events_queue.put(fill_event), self.loop)
+                        except Exception as e:
+                            logging.error(f"LiveExecutionHandler (Bybit): Ошибка обработки сообщения: {e}")
+
+                    ws.execution_stream(callback=handle_execution)
+
+                    while ws.is_connected():
+                        await asyncio.sleep(60)
+                    logging.warning("Bybit: WebSocket поток сделок отключился.")
+
+            except Exception as e:
+                logging.error(
+                    f"LiveExecutionHandler: Критическая ошибка в потоке сделок: {e}. Переподключение через {LIVE_TRADING_CONFIG['LIVE_RECONNECT_DELAY_SECONDS']} секунд...")
+                await asyncio.sleep(LIVE_TRADING_CONFIG['LIVE_RECONNECT_DELAY_SECONDS'])
+
+    def stop(self):
+        """Останавливает фоновую задачу."""
+        if self.fill_listener_task:
+            self.fill_listener_task.cancel()
+            logging.info("LiveExecutionHandler: Прослушивание исполненных ордеров остановлено.")

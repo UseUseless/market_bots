@@ -1,0 +1,32 @@
+from abc import ABC, abstractmethod
+from typing import Literal, List
+import pandas as pd
+
+TradeModeType = Literal["REAL", "SANDBOX"]
+
+
+class BaseDataClient(ABC):
+    """Абстрактный 'контракт' для всех клиентов, поставляющих рыночные данные."""
+
+    @abstractmethod
+    def get_historical_data(self, instrument: str, interval: str, days: int, **kwargs) -> pd.DataFrame:
+        """Загружает исторические свечи."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_instrument_info(self, instrument: str, **kwargs) -> dict:
+        """Загружает метаданные об инструменте (лот, шаг цены и т.д.)."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_top_liquid_by_turnover(self, count: int) -> List[str]:
+        """Возвращает список самых ликвидных инструментов."""
+        raise NotImplementedError
+
+class BaseTradeClient(ABC):
+    """Абстрактный 'контракт' для всех клиентов, исполняющих ордера."""
+
+    @abstractmethod
+    def place_market_order(self, instrument_id: str, quantity: int, direction: str):
+        """Размещает рыночный ордер."""
+        raise NotImplementedError

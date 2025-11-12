@@ -2,9 +2,9 @@ import pandas as pd
 import pytest
 from types import SimpleNamespace
 
-from core.risk_manager import FixedRiskManager, AtrRiskManager
-from core.sizer import FixedRiskSizer
-from analyzer import BacktestAnalyzer
+from app.core import FixedRiskManager, AtrRiskManager
+from app.core import FixedRiskSizer
+from app.analyzers import SingleRunAnalyzer
 
 # --- Тесты для RiskManager ---
 
@@ -163,7 +163,7 @@ def portfolio_fixture(monkeypatch) -> "Portfolio":
         "INITIAL_CAPITAL": 100000.0, "COMMISSION_RATE": 0.0,
         "SLIPPAGE_CONFIG": {"ENABLED": True, "IMPACT_COEFFICIENT": 0.1}
     })
-    from core.portfolio import Portfolio
+    from app.core import Portfolio
     return Portfolio(
         events_queue=MockQueue(), trade_log_file="", strategy=MockStrategy(),
         exchange="tinkoff", initial_capital=100000, commission_rate=0,
@@ -281,7 +281,7 @@ class TestBacktestAnalyzer:
     def test_calculate_metrics_happy_path(self, sample_trades):
         """Проверяет корректность расчета основных метрик."""
         trades_df, hist_data = sample_trades
-        analyzer = BacktestAnalyzer(trades_df, hist_data, 100000.0, "5min", "FIXED")
+        analyzer = SingleRunAnalyzer(trades_df, hist_data, 100000.0, "5min", "FIXED")
         metrics = analyzer.calculate_metrics()
 
         assert float(metrics["Total PnL (Strategy)"].split(' ')[0]) == pytest.approx(1800.0)
@@ -299,11 +299,11 @@ class TestBacktestAnalyzer:
         """Проверяет, что Profit Factor равен 'inf' при отсутствии убытков."""
         trades_df, hist_data = sample_trades
         trades_df = trades_df[trades_df['pnl'] > 0] # Оставляем только прибыльные
-        analyzer = BacktestAnalyzer(trades_df, hist_data, 100000.0, "5min", "FIXED")
+        analyzer = SingleRunAnalyzer(trades_df, hist_data, 100000.0, "5min", "FIXED")
         metrics = analyzer.calculate_metrics()
         assert metrics["Profit Factor"] == "inf"
 
     def test_analyzer_raises_on_empty_df(self):
         """Проверяет, что анализатор падает, если ему передать пустой DataFrame."""
         with pytest.raises(ValueError, match="DataFrame со сделками не может быть пустым."):
-            BacktestAnalyzer(pd.DataFrame(), pd.DataFrame(), 100000.0, "5min", "FIXED")
+            SingleRunAnalyzer(pd.DataFrame(), pd.DataFrame(), 100000.0, "5min", "FIXED")

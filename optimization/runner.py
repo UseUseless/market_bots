@@ -13,11 +13,11 @@ from rich.table import Table
 
 from optimization.objective import Objective
 from optimization.splitter import split_data_by_periods
-from strategies import AVAILABLE_STRATEGIES
-from core.risk_manager import AVAILABLE_RISK_MANAGERS
-from core.data_handler import HistoricLocalDataHandler
-from core.backtest_engine import run_backtest_session
-from optimization.metrics import MetricsCalculator, METRIC_CONFIG
+from app.strategies import AVAILABLE_STRATEGIES
+from app.core.risk_manager import AVAILABLE_RISK_MANAGERS
+from app.core.data_handler import HistoricLocalDataHandler
+from app.core.backtest_engine import run_backtest_session
+from app.analyzers.metrics import MetricsCalculator, METRIC_CONFIG
 from config import BACKTEST_CONFIG, EXCHANGE_SPECIFIC_CONFIG, PATH_CONFIG
 
 logger = logging.getLogger(__name__)
@@ -345,7 +345,7 @@ def _generate_final_reports(args: argparse.Namespace, all_oos_trades: List[pd.Da
         return
 
     logger.info("\n--- WFO Завершена. Генерация итоговых отчетов ---")
-    from analyzer import BacktestAnalyzer
+    from app.analyzers.single_run_analyzer import SingleRunAnalyzer
 
     final_trades_df = pd.concat(all_oos_trades, ignore_index=True)
 
@@ -373,10 +373,10 @@ def _generate_final_reports(args: argparse.Namespace, all_oos_trades: List[pd.Da
                                                    PATH_CONFIG["DATA_DIR"])
         full_bh_dataset = data_handler_bh.load_raw_data()
 
-    analyzer = BacktestAnalyzer(
+    analyzer = SingleRunAnalyzer(
         trades_df=final_trades_df, historical_data=full_bh_dataset,
         initial_capital=BACKTEST_CONFIG["INITIAL_CAPITAL"], interval=args.interval,
-        risk_manager_type=args.rm, report_dir=os.path.dirname(base_filename), exchange=args.exchange
+        risk_manager_type=args.rm, report_dir=PATH_CONFIG["REPORTS_OPTIMIZATION_DIR"], exchange=args.exchange
     )
 
     analyzer.generate_report(
@@ -394,7 +394,7 @@ def run_wfo(args):
     """
     Главная функция-оркестратор, управляющая процессом Walk-Forward Optimization.
     """
-    from utils.logger_config import setup_global_logging
+    from app.utils.logging_setup import setup_global_logging
     setup_global_logging(mode='tqdm', log_level=logging.WARNING)
 
     try:
@@ -414,11 +414,11 @@ def run_wfo(args):
 
         _estimate_execution_time(args, num_steps, len(instrument_list))
 
-        report_dir = os.path.join("optimization", "reports")
+        report_dir = PATH_CONFIG["REPORTS_OPTIMIZATION_DIR"]
         os.makedirs(report_dir, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         instrument_name = args.instrument if args.instrument else f"Portfolio_{len(instrument_list)}"
-        base_filename = f"{report_dir}/{timestamp}_WFO_{args.strategy}_{instrument_name}"
+        base_filename = os.path.join(report_dir, f"{timestamp}_WFO_{args.strategy}_{instrument_name}")
 
         all_oos_trades, step_results, last_study = _run_wfo_loop(args, all_instrument_periods, num_steps, base_filename)
 
@@ -431,7 +431,7 @@ def run_wfo(args):
     except Exception:
         logger.critical("Произошла непредвиденная ошибка в процессе WFO!", exc_info=True)
     finally:
-        from utils.logger_config import setup_global_logging
+        from app.utils import setup_global_logging
         setup_global_logging(mode='default', log_level=logging.INFO)
         print("\nНастройки логирования восстановлены.")
 

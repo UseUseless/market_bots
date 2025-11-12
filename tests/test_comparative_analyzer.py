@@ -1,6 +1,6 @@
 import pandas as pd
 import pytest
-from comparative_analyzer import ComparativeAnalyzer
+from app.analyzers import ComparativeAnalyzer
 
 
 # Используем pytest.fixture для создания тестовых данных.

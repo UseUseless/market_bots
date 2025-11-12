@@ -2,7 +2,6 @@ import pandas as pd
 from typing import List, Tuple, Generator
 import numpy as np
 
-
 def split_data_by_periods(data: pd.DataFrame, total_periods: int) -> List[pd.DataFrame]:
     """
     Делит DataFrame на указанное количество равных по времени частей.
@@ -13,7 +12,6 @@ def split_data_by_periods(data: pd.DataFrame, total_periods: int) -> List[pd.Dat
     # Используем np.array_split, который делит массив на N почти равных частей.
     # Это надежнее, чем делить по индексам, особенно если в данных есть пропуски.
     return np.array_split(data, total_periods)
-
 
 def walk_forward_generator(
         data_periods: List[pd.DataFrame],

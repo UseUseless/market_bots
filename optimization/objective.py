@@ -2,11 +2,11 @@ import optuna
 import pandas as pd
 from typing import Type, List, Dict
 
-from core.backtest_engine import run_backtest_session
+from app.core.backtest_engine import run_backtest_session
 from config import BACKTEST_CONFIG, EXCHANGE_SPECIFIC_CONFIG, PATH_CONFIG
-from strategies.base_strategy import BaseStrategy
-from core.risk_manager import AVAILABLE_RISK_MANAGERS
-from optimization.metrics import MetricsCalculator, METRIC_CONFIG
+from app.strategies.base_strategy import BaseStrategy
+from app.core.risk_manager import AVAILABLE_RISK_MANAGERS
+from app.analyzers.metrics import MetricsCalculator, METRIC_CONFIG
 import logging
 
 logger = logging.getLogger(__name__)

@@ -44,7 +44,7 @@ def test_run_smoke(rm_type, fixture_name, request, tmp_path):
     test_workdir = tmp_path / "workdir"
     shutil.copytree(fixture_data["data_root"], test_workdir / "data")
 
-    required_files = ["run_backtest.py", "search_space.py", "analyzer.py"]
+    required_files = ["run_backtest.py", "search_space.py", "single_run_analyzer.py"]
     for f in required_files: shutil.copy(f, test_workdir)
     for d in ["core", "utils", "strategies"]: shutil.copytree(d, test_workdir / d)
 
@@ -120,7 +120,7 @@ def test_batch_tester_smoke(tmp_path):  # <-- УБИРАЕМ ФИКСТУРУ И
     (data_dir / "EMPTY_DATA.parquet").touch()
 
     # Копируем зависимости
-    required_files = ["batch_tester.py", "run_backtest.py", "search_space.py", "analyzer.py"]
+    required_files = ["batch_tester.py", "run_backtest.py", "search_space.py", "single_run_analyzer.py"]
     for f in required_files: shutil.copy(f, test_workdir)
     for d in ["core", "utils", "strategies"]: shutil.copytree(d, test_workdir / d)
 
@@ -175,7 +175,7 @@ def test_dashboard_smoke(tmp_path):
         {'time': [pd.Timestamp('2023-01-02 10:05:00')], 'open': [100], 'high': [100], 'low': [100], 'close': [100]})
     fake_data_df.to_parquet(data_dir / "tinkoff" / "5min" / "FAKE.parquet")
 
-    required_files = ["dashboard.py", "search_space.py", "analyzer.py", "comparative_analyzer.py"]
+    required_files = ["dashboard.py", "search_space.py", "single_run_analyzer.py", "comparative_analyzer.py"]
     for f in required_files:
         if os.path.exists(f):
             shutil.copy(f, test_workdir)
