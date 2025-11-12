@@ -14,9 +14,11 @@ def _update_top_liquid_by_turnover(exchange: str, count: int) -> List[str]:
     """Получает список топ-N ликвидных инструментов для указанной биржи."""
     client: TinkoffClient | BybitClient
     if exchange == 'tinkoff':
+        # Для Tinkoff нет разделения на sandbox/real для этого запроса
         client = TinkoffClient()
     elif exchange == 'bybit':
-        client = BybitClient()
+        # Это безопасно, так как мы только читаем публичные данные.
+        client = BybitClient(trade_mode="REAL")
     else:
         raise ValueError(f"Неизвестная биржа: {exchange}")
 

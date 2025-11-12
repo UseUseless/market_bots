@@ -40,7 +40,7 @@ DATA_LOADER_CONFIG = {
     # Количество дней истории, которое будет загружено по умолчанию,
     # если не указать флаг --days при запуске download_data.py.
     "DAYS_TO_LOAD": 365,
-    "LIQUID_INSTRUMENTS_COUNT": 30
+    "LIQUID_INSTRUMENTS_COUNT": 10
 }
 
 LIVE_TRADING_CONFIG = {

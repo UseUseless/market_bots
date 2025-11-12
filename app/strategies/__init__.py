@@ -3,7 +3,7 @@ import importlib
 import inspect
 from typing import Dict, Type
 
-from base_strategy import BaseStrategy
+from app.strategies.base_strategy import BaseStrategy
 
 def _discover_strategies() -> Dict[str, Type[BaseStrategy]]:
     """
@@ -12,13 +12,14 @@ def _discover_strategies() -> Dict[str, Type[BaseStrategy]]:
     """
     strategies_dict = {}
     current_dir = os.path.dirname(__file__)
+    current_package = __package__
 
     for filename in os.listdir(current_dir):
         # Пропускаем служебные файлы и базовый класс
         if filename.endswith(".py") and not filename.startswith("_") and "base_strategy" not in filename:
 
             # 1. Формируем имя модуля для импорта (например, 'strategies.triple_filter')
-            module_name = f"strategies.{filename[:-3]}"
+            module_name = f"{current_package}.{filename[:-3]}"
 
             try:
                 # 2. Динамически импортируем модуль

@@ -40,8 +40,9 @@ class Portfolio:
         if not rm_class:
             raise ValueError(f"Unknown risk manager type: {risk_manager_type}")
         # Получаем параметры по умолчанию из класса РМ
-        final_rm_params = risk_manager_params if risk_manager_params is not None else rm_class.get_default_params()
-        self.risk_manager: BaseRiskManager = rm_class(params=final_rm_params)
+        if risk_manager_params is None:
+            risk_manager_params = rm_class.get_default_params()
+        self.risk_manager: BaseRiskManager = rm_class(params=risk_manager_params)
 
         # Настройки проскальзывания
         self.slippage_config: dict[str, Any] = BACKTEST_CONFIG.get("SLIPPAGE_CONFIG", {"ENABLED": False})
@@ -99,74 +100,70 @@ class Portfolio:
         candle_high = event.data['high']
         candle_low = event.data['low']
 
-        # Инициализируем переменные, которые мы определим, если найдем причину для выхода.
-        exit_reason = None
-        exit_direction = None
-
         # --- ЭТАП 1: ПРИОРИТЕТНАЯ ПРОВЕРКА СТОП-ЛОССА ---
         # Это первая и самая важная проверка. Мы исходим из консервативного предположения,
         # что если цена коснулась стоп-лосса, сделка закрывается с убытком,
         # даже если позже внутри той же свечи она достигла тейк-профита.
 
-        # Для длинной позиции (BUY) стоп-лосс срабатывает, если минимальная цена свечи (low) опустилась до нашего уровня SL.
-        if position['direction'] == 'BUY' and candle_low <= position['stop_loss']:
-            exit_reason, exit_direction = "Stop Loss", "SELL"  # Направление выхода - продажа
+        # --- Проверка для ДЛИННОЙ позиции (BUY) ---
+        if position['direction'] == 'BUY':
+            # Приоритетная проверка Stop Loss
+            if candle_low <= position['stop_loss']:
+                logger.info(f"!!! СРАБОТАЛ STOP LOSS для {event.instrument}. Генерирую ордер на закрытие.")
+                order = OrderEvent(
+                    timestamp=event.timestamp,
+                    instrument=event.instrument,
+                    quantity=position['quantity'],
+                    direction="SELL",
+                    trigger_reason="SL"
+                )
+                self.events_queue.put(order)
+                self.pending_orders.add(event.instrument)
+                return
 
-        # Для короткой позиции (SELL) стоп-лосс срабатывает, если максимальная цена свечи (high) поднялась до нашего уровня SL.
-        elif position['direction'] == 'SELL' and candle_high >= position['stop_loss']:
-            exit_reason, exit_direction = "Stop Loss", "BUY"  # Направление выхода - покупка
+            # Проверка Take Profit (только если SL не сработал)
+            if candle_high >= position['take_profit']:
+                logger.info(f"!!! СРАБОТАЛ TAKE PROFIT для {event.instrument}. Генерирую ордер на закрытие.")
+                order = OrderEvent(
+                    timestamp=event.timestamp,
+                    instrument=event.instrument,
+                    quantity=position['quantity'],
+                    direction="SELL",
+                    trigger_reason="TP"
+                )
+                self.events_queue.put(order)
+                self.pending_orders.add(event.instrument)
+                return
 
-        # --- Блок немедленного реагирования на Стоп-Лосс ---
-        # Если на предыдущем шаге мы определили, что стоп-лосс сработал...
-        if exit_reason == "Stop Loss":
-            # Логируем это важное событие.
-            logger.info(f"!!! СРАБОТАЛ STOP LOSS для {event.instrument}. Генерирую ордер на закрытие.")
+        # --- Проверка для КОРОТКОЙ позиции (SELL) ---
+        elif position['direction'] == 'SELL':
+            # Приоритетная проверка Stop Loss
+            if candle_high >= position['stop_loss']:
+                logger.info(f"!!! СРАБОТАЛ STOP LOSS для {event.instrument}. Генерирую ордер на закрытие.")
+                order = OrderEvent(
+                    timestamp=event.timestamp,
+                    instrument=event.instrument,
+                    quantity=position['quantity'],
+                    direction="BUY",
+                    trigger_reason="SL"
+                )
+                self.events_queue.put(order)
+                self.pending_orders.add(event.instrument)
+                return
 
-            # ...создаем событие-приказ (OrderEvent) на закрытие позиции.
-            order = OrderEvent(
-                timestamp=event.timestamp,
-                instrument=event.instrument,
-                quantity=position['quantity'],
-                direction=exit_direction
-            )
-            # Отправляем приказ в общую очередь событий на исполнение.
-            self.events_queue.put(order)
-
-            # Обновляем внутреннее состояние:
-            # 1. Помечаем, что по этому инструменту есть ордер в обработке, чтобы избежать дублирования.
-            self.pending_orders.add(event.instrument)
-            # 2. Записываем причину выхода в саму позицию. Это понадобится в on_fill для корректного лога.
-            self.current_positions[event.instrument]['exit_reason'] = exit_reason
-
-            # КЛЮЧЕВОЙ МОМЕНТ: Немедленно выходим из метода.
-            # Это гарантирует, что проверка на тейк-профит ниже НЕ будет выполнена.
-            return
-
-        # --- ЭТАП 2: ПРОВЕРКА ТЕЙК-ПРОФИТА ---
-        # Этот код выполнится только в том случае, если стоп-лосс на Этапе 1 НЕ сработал.
-
-        # Для длинной позиции (BUY) тейк-профит срабатывает, если максимальная цена свечи (high) достигла нашего уровня TP.
-        if position['direction'] == 'BUY' and candle_high >= position['take_profit']:
-            exit_reason, exit_direction = "Take Profit", "SELL"
-
-        # Для короткой позиции (SELL) тейк-профит срабатывает, если минимальная цена свечи (low) достигла нашего уровня TP.
-        elif position['direction'] == 'SELL' and candle_low <= position['take_profit']:
-            exit_reason, exit_direction = "Take Profit", "BUY"
-
-        # --- Блок реагирования на Тейк-Профит ---
-        # Если на предыдущем шаге мы определили, что сработал тейк-профит...
-        if exit_reason == "Take Profit":
-            # ...выполняем те же действия, что и для стоп-лосса: логируем, создаем ордер и обновляем состояние.
-            logger.info(f"!!! СРАБОТАЛ TAKE PROFIT для {event.instrument}. Генерирую ордер на закрытие.")
-            order = OrderEvent(
-                timestamp=event.timestamp,
-                instrument=event.instrument,
-                quantity=position['quantity'],
-                direction=exit_direction
-            )
-            self.events_queue.put(order)
-            self.pending_orders.add(event.instrument)
-            self.current_positions[event.instrument]['exit_reason'] = exit_reason
+            # Проверка Take Profit (только если SL не сработал)
+            if candle_low <= position['take_profit']:
+                logger.info(f"!!! СРАБОТАЛ TAKE PROFIT для {event.instrument}. Генерирую ордер на закрытие.")
+                order = OrderEvent(
+                    timestamp=event.timestamp,
+                    instrument=event.instrument,
+                    quantity=position['quantity'],
+                    direction="BUY",
+                    trigger_reason="TP"
+                )
+                self.events_queue.put(order)
+                self.pending_orders.add(event.instrument)
+                return
 
     def _handle_new_position_signal(self, event: SignalEvent) -> None:
         """Обрабатывает сигнал на открытие новой позиции."""
@@ -200,14 +197,19 @@ class Portfolio:
 
             # Передаем этот профиль в sizer для расчета количества лотов.
             quantity_float = self.position_sizer.calculate_size(risk_profile)
-
             quantity = self._adjust_quantity_for_rules(quantity_float)
 
             # Если расчет показал, что мы можем купить хотя бы 1  возможный лот (например 0.001 btc), генерируем ордер.
             if quantity > 0:
                 logger.info(
                     f"Расчетное кол-во: {quantity_float:.4f}, скорректировано до {quantity} с учетом правил биржи.")
-                order = OrderEvent(timestamp=event.timestamp, instrument=event.instrument, quantity=quantity, direction=event.direction)
+                order = OrderEvent(
+                    timestamp=event.timestamp,
+                    instrument=event.instrument,
+                    quantity=quantity,
+                    direction=event.direction,
+                    trigger_reason="SIGNAL"
+                )
                 self.events_queue.put(order)
                 self.pending_orders.add(event.instrument)
                 logger.info(f"Портфель генерирует ордер на {event.direction} {quantity} лот(ов) {event.instrument}")
@@ -273,7 +275,13 @@ class Portfolio:
                 # И оба в очередь-конвейер
                 # Портфель бы их последовательно обработал.
 
-                order = OrderEvent(timestamp=event.timestamp, instrument=event.instrument, quantity=position['quantity'], direction=event.direction)
+                order = OrderEvent(
+                    timestamp=event.timestamp,
+                    instrument=event.instrument,
+                    quantity=position['quantity'],
+                    direction=event.direction,
+                    trigger_reason="SIGNAL"
+                )
                 # Кладем приказ в очередь
                 self.events_queue.put(order)
                 # Также помечаем ордер на закрытие как ожидающий
@@ -303,8 +311,7 @@ class Portfolio:
             'entry_timestamp': last_candle['time'],
             'direction': event.direction,
             'stop_loss': final_risk_profile.stop_loss_price,
-            'take_profit': final_risk_profile.take_profit_price,
-            'exit_reason': None
+            'take_profit': final_risk_profile.take_profit_price
         }
 
         # Логируем открытие позиции
@@ -316,20 +323,14 @@ class Portfolio:
         """Обрабатывает исполнение ордера на закрытие позиции."""
 
         entry_price = position['entry_price']
-        exit_reason = position.get('exit_reason')
 
-        # ИБолее надежная логика определения цены выхода
-        if exit_reason == "Stop Loss":
-            # Цена выхода при стоп-лоссе - это сам уровень стоп-лосса.
+        # Определяем идеальную цену выхода на основе причины, переданной в событии
+        if event.trigger_reason == "SL":
             ideal_exit_price = position['stop_loss']
-        elif exit_reason == "Take Profit":
-            # Цена выхода при тейк-профите - это сам уровень тейк-профита.
+        elif event.trigger_reason == "TP":
             ideal_exit_price = position['take_profit']
-        else:
-            # Если причина не SL/TP, значит, это закрытие по сигналу.
-            # Цена выхода - цена открытия текущей свечи.
+        else:  # "SIGNAL"
             ideal_exit_price = last_candle['open']
-            exit_reason = "Signal" # Устанавливаем причину, если она была None
 
         # Рассчитываем РЕАЛЬНУЮ цену выхода с учетом проскальзывания.
         exit_price = self._simulate_slippage(
@@ -342,16 +343,27 @@ class Portfolio:
         # Рассчитываем комиссию за вход и выход
         commission = (entry_price * event.quantity + exit_price * event.quantity) * self.commission_rate
 
-        # Рассчитываем PnL
-        if position['direction'] == 'BUY':  # Для лонга
+        # Рассчитываем финальный PnL
+        if position['direction'] == 'BUY':
             pnl = (exit_price - entry_price) * event.quantity - commission
         else:  # Для шорта
             pnl = (entry_price - exit_price) * event.quantity - commission
 
+        # --- ФИНАЛЬНАЯ ЛОГИКА ОПРЕДЕЛЕНИЯ EXIT_REASON ---
+        final_exit_reason = event.trigger_reason
+
+        # Корректируем причину, если TP привел к убытку
+        if event.trigger_reason == "TP" and pnl < 0:
+            final_exit_reason = "Signal"  # Или "TP Slippage", если хотим больше деталей
+
+        # Корректируем причину, если SL вдруг привел к прибыли (очень редкий случай с сильным гэпом/проскальзыванием в нашу пользу)
+        elif event.trigger_reason == "SL" and pnl > 0:
+            final_exit_reason = "Signal"
+
         # Обновляем текущий капитал
         self.current_capital += pnl
 
-        # Логируем сделку
+        # Логируем сделку с правильной причиной
         log_trade(
             trade_log_file=self.trade_log_file,
             strategy_name=self.strategy.name,
@@ -363,7 +375,7 @@ class Portfolio:
             entry_price=position['entry_price'],
             exit_price=exit_price,
             pnl=pnl,
-            exit_reason=exit_reason,
+            exit_reason=final_exit_reason,
             interval=self.interval,
             risk_manager=self.risk_manager_type
         )
@@ -375,7 +387,7 @@ class Portfolio:
 
         del self.current_positions[event.instrument]
         logger.info(
-            f"Позиция ЗАКРЫТА по причине '{exit_reason}': {event.instrument}. PnL: {pnl:.2f}. Капитал: {self.current_capital:.2f}")
+            f"Позиция ЗАКРЫТА по причине '{final_exit_reason}': {event.instrument}. PnL: {pnl:.2f}. Капитал: {self.current_capital:.2f}")
 
     def update_market_price(self, event: MarketEvent) -> None:
         """

@@ -94,23 +94,22 @@ class SingleRunAnalyzer:
 
         # Расчет кривой капитала
         if not self.trades_df.empty:
-            equity_curve = self.initial_capital + self.trades_df['pnl'].cumsum()
+            # Привязываем кривую капитала к датам закрытия сделок
+            equity_curve = pd.Series(self.initial_capital + self.trades_df['pnl'].cumsum())
+            equity_curve.index = pd.to_datetime(self.trades_df['exit_timestamp_utc'])
             equity_curve.plot(ax=ax, label='Strategy Equity Curve', color='blue', lw=2)
 
-        # Расчет Buy & Hold кривой
         if not self.historical_data.empty:
+            # Кривая B&H привязывается к датам из исторических данных
             entry_price = self.historical_data['open'].iloc[0]
             quantity = self.initial_capital / entry_price
             benchmark_equity = self.historical_data['close'] * quantity
-
-            benchmark_resampled = benchmark_equity.reset_index(drop=True)
-            num_trades = len(self.trades_df)
-            if num_trades > 1:
-                benchmark_resampled.index = np.linspace(0, num_trades - 1, len(benchmark_resampled))
-                benchmark_resampled.plot(ax=ax, label='Buy & Hold Benchmark', color='gray', linestyle='--', lw=1.5)
+            benchmark_equity.index = pd.to_datetime(self.historical_data['time'])
+            benchmark_equity.plot(ax=ax, label='Buy & Hold Benchmark', color='gray', linestyle='--', lw=1.5)
 
         ax.set_title(f"Результаты бэктеста: {report_filename}", fontsize=16)
-        ax.set_xlabel("Количество сделок")
+        ax.set_xlabel("Дата")  # Меняем подпись оси X
+        fig.autofmt_xdate()  # Автоматически форматируем даты для лучшей читаемости
         ax.set_ylabel("Капитал")
         ax.legend()
 

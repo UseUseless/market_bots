@@ -2,25 +2,20 @@ import questionary
 import subprocess
 import sys
 import os
-import json
 from typing import List, Dict, Type, Any
 
 from app.strategies.base_strategy import BaseStrategy
-from app.core.risk_manager import AVAILABLE_RISK_MANAGERS
 from config import PATH_CONFIG, EXCHANGE_INTERVAL_MAPS
 from app.analyzers.metrics import METRIC_CONFIG
 from app.ui import dialogs as ui_helpers
-
 
 # Кастомное исключение для выхода из цепочки вопросов.
 class UserCancelledError(Exception):
     """Используется, когда пользователь отменяет ввод (нажимает Ctrl+C или 'Назад')."""
     pass
 
-
 # Константа для опции "Назад".
 GO_BACK_OPTION = "Назад"
-
 
 # Helper-функция (обертка) для всех вызовов questionary.
 def ask(question_func, *args, **kwargs):
@@ -33,12 +28,10 @@ def ask(question_func, *args, **kwargs):
         raise UserCancelledError()
     return answer
 
-
 def get_available_strategies() -> Dict[str, Type[BaseStrategy]]:
     """Динамически находит и импортирует все доступные стратегии."""
     from app.strategies import AVAILABLE_STRATEGIES
     return AVAILABLE_STRATEGIES
-
 
 def _select_metrics_for_optimization() -> List[str]:
     """
@@ -87,12 +80,11 @@ def run_update_lists():
             choices=["tinkoff", "bybit", GO_BACK_OPTION],
             use_indicator=True
         )
-        command = [sys.executable, os.path.join("scripts", "update_lists.py"), "--exchange", exchange]
+        command = [sys.executable, "-m", "scripts.update_lists", "--exchange", exchange]
         print(f"\nЗапускаю обновление для {exchange.upper()}...\n")
         subprocess.run(command)
     except UserCancelledError:
         print("\nОперация отменена.")
-
 
 def run_download_data():
     """Интерактивный запуск скачивания данных."""
@@ -129,52 +121,11 @@ def run_download_data():
                        use_indicator=True)
         days = ask(questionary.text, "Введите количество дней для загрузки:", default="365",
                    validate=lambda text: text.isdigit() and int(text) > 0)
-        command = [sys.executable, os.path.join("scripts", "download_data.py"), "--exchange", exchange, *command_args, "--interval", interval, "--days", days]
+        command = [sys.executable, "-m", "scripts.download_data", "--exchange", exchange, *command_args, "--interval", interval, "--days", days]
         print("\nЗапускаю скачивание...\n")
         subprocess.run(command)
     except UserCancelledError:
         print("\nОперация отменена.")
-
-
-def _prompt_for_params(config: Dict[str, Any], prefix: str = "") -> Dict[str, Any]:
-    """
-    Интерактивно запрашивает у пользователя значения для оптимизируемых параметров.
-    """
-    custom_params = {}
-    for name, p_config in config.items():
-        if not p_config.get("optimizable", False):
-            continue
-
-        default_val = p_config["default"]
-        description = p_config.get("description", "")
-        param_type = p_config.get("type", "str")
-
-        prompt_text = f"Параметр '{name}' ({description})"
-        if "low" in p_config and "high" in p_config:
-            prompt_text += f" [диапазон: {p_config['low']}-{p_config['high']}]"
-        prompt_text += ". Нажмите Enter для значения по умолчанию:"
-
-        while True:
-            try:
-                answer = ask(
-                    questionary.text,
-                    prompt_text,
-                    default=str(default_val)
-                )
-
-                if param_type == "int":
-                    custom_params[prefix + name] = int(answer)
-                elif param_type == "float":
-                    custom_params[prefix + name] = float(answer)
-                else:
-                    custom_params[prefix + name] = answer
-                break
-            except ValueError:
-                print(f"Ошибка: Неверный тип данных. Ожидается {param_type}. Попробуйте снова.")
-            except UserCancelledError:
-                raise
-
-    return custom_params
 
 def run_backtest_flow():
     """Интерактивный воркфлоу для запуска бэктеста."""
@@ -193,33 +144,15 @@ def run_backtest_flow():
         command = []
         if "Один инструмент" in test_mode:
             data_params = ui_helpers.select_single_instrument()
-            if data_params: command = [sys.executable, os.path.join("scripts", "run_backtest.py")]
+            if data_params: command = [sys.executable, "-m", "scripts.run_backtest"]
         else:
             data_params = ui_helpers.select_instrument_folder()
-            if data_params: command = [sys.executable, os.path.join("scripts", "batch_tester.py")]
+            if data_params: command = [sys.executable, "-m", "scripts.batch_tester"]
         if not data_params: return
 
         strategy_name = ask(questionary.select, "Выберите стратегию:", choices=[*strategies.keys(), GO_BACK_OPTION])
         rm_type = ask(questionary.select, "Выберите риск-менеджер:", choices=["FIXED", "ATR", GO_BACK_OPTION],
                       default="FIXED")
-
-        final_params = {}
-        change_params = ask(
-            questionary.confirm,
-            "Хотите изменить параметры по умолчанию для этого запуска?",
-            default=False
-        )
-        if change_params:
-            strategy_class = strategies[strategy_name]
-            rm_class = AVAILABLE_RISK_MANAGERS[rm_type]
-
-            print("\n--- Настройка параметров стратегии ---")
-            strat_params = _prompt_for_params(strategy_class.params_config)
-            final_params.update(strat_params)
-
-            print("\n--- Настройка параметров риск-менеджера ---")
-            rm_params = _prompt_for_params(rm_class.params_config, prefix="rm_")
-            final_params.update(rm_params)
 
         command.extend([
             "--strategy", strategy_name,
@@ -231,15 +164,11 @@ def run_backtest_flow():
         if "instrument" in data_params:
             command.append(f"--instrument={data_params['instrument']}")
 
-        if final_params:
-            command.append(f"--params={json.dumps(final_params)}")
-
-        print("\nЗапускаю бэктест...")
+        print("\nЗапускаю бэктест... Параметры будут взяты по умолчанию из файла стратегии.")
         subprocess.run(command)
 
     except UserCancelledError:
         print("\nОперация отменена.")
-
 
 def run_optimizer():
     """Интерактивный запуск Walk-Forward Optimizer."""
@@ -320,35 +249,16 @@ def run_sandbox_trading():
         rm_type = ask(questionary.select, "Выберите риск-менеджер:", choices=["FIXED", "ATR", GO_BACK_OPTION],
                       default="FIXED")
 
-        final_params = {}
-        change_params = ask(
-            questionary.confirm,
-            "Хотите изменить параметры по умолчанию для live-запуска?",
-            default=False
-        )
-        if change_params:
-            strategy_class = strategies[strategy_name]
-            rm_class = AVAILABLE_RISK_MANAGERS[rm_type]
-            print("\n--- Настройка параметров стратегии ---")
-            strat_params = _prompt_for_params(strategy_class.params_config)
-            final_params.update(strat_params)
-            print("\n--- Настройка параметров риск-менеджера ---")
-            rm_params = _prompt_for_params(rm_class.params_config, prefix="rm_")
-            final_params.update(rm_params)
-
-        # Пути к скриптам остаются прежними
-        command = [sys.executable, os.path.join("scripts", "run_live.py"), "--exchange", exchange, "--instrument",
+        command = [sys.executable, "-m", "scripts.run_live", "--exchange", exchange, "--instrument",
                    instrument, "--interval", interval, "--strategy", strategy_name, "--rm", rm_type]
-
-        if final_params:
-            command.append(f"--params={json.dumps(final_params)}")
 
         if exchange == 'bybit':
             category = ask(questionary.select, "Выберите категорию рынка Bybit:",
                            choices=["linear", "spot", "inverse", GO_BACK_OPTION], default="linear")
             command.extend(["--category", category])
 
-        print("\nЗапускаю live-бота... Нажмите Ctrl+C в этом окне, чтобы остановить.")
+        print(
+            "\nЗапускаю live-бота... Параметры будут взяты по умолчанию из файла стратегии. Нажмите Ctrl+C, чтобы остановить.")
         subprocess.run(command)
     except UserCancelledError:
         print("\nОперация отменена.")

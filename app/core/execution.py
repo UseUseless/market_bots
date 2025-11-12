@@ -38,7 +38,8 @@ class SimulatedExecutionHandler(ExecutionHandler):
             quantity=event.quantity,
             direction=event.direction,
             price=0,                        # Цена будет определена в Portfolio. Для бэктеста не используется. Будет в Live
-            commission=0.0                  # Комиссия будет рассчитана в Portfolio. Для бэктеста не используется. Будет в Live
+            commission=0.0,                 # Комиссия будет рассчитана в Portfolio. Для бэктеста не используется. Будет в Live
+            trigger_reason=event.trigger_reason
         )
         self.events_queue.put(fill_event)
 

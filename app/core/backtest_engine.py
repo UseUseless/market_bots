@@ -27,7 +27,9 @@ def _initialize_components(settings: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     strategy_class = settings["strategy_class"]
-    strategy_params = settings.get("strategy_params", strategy_class.get_default_params())
+    strategy_params = settings.get("strategy_params")
+    if strategy_params is None:
+        strategy_params = strategy_class.get_default_params()
 
     strategy = strategy_class(
         events_queue,

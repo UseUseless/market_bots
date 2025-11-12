@@ -45,6 +45,7 @@ class OrderEvent(Event):
     instrument: str
     quantity: int
     direction: str
+    trigger_reason: str  # 'SIGNAL', 'SL', 'TP'
 
 @dataclass
 class FillEvent(Event):
@@ -58,3 +59,4 @@ class FillEvent(Event):
     direction: str  # 'BUY' или 'SELL'
     price: float    # Фактическая цена исполнения
     commission: float # Комиссия за сделку
+    trigger_reason: str

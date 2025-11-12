@@ -92,102 +92,53 @@ def process_and_analyze_results(backtest_results: Dict[str, Any], settings: Dict
     else:
         logger.info("Открытые позиции на конец бэктеста отсутствуют.")
 
-
 def main():
-    """
-    Главная "точка входа" в программу.
-    Отвечает за парсинг аргументов командной строки и подготовку параметров для запуска.
-    """
-    # Создаем парсер аргументов командной строки и сами аргументы для запуска программы
     parser = argparse.ArgumentParser(description="Фреймворк для запуска торговых ботов.")
-
-    # Возможные варианты для командной строки
     valid_rms = get_args(RiskManagerType)
 
-    parser.add_argument(
-        "--strategy",
-        type=str,
-        required=True,
-        help=f"Имя стратегии. Доступно: {list(AVAILABLE_STRATEGIES.keys())}")
-    parser.add_argument(
-        "--exchange",
-        type=str,
-        required=True,
-        choices=['tinkoff', 'bybit'],
-        help="Биржа, на данных которой проводится бэктест.")
-    parser.add_argument(
-        "--instrument",
-        type=str,
-        required=True,
-        help="Тикер/символ инструмента для тестирования (например: SBER, BTCUSDT).")
-    parser.add_argument(
-        "--rm", # Добавляем короткое имя --rm
-        "--risk_manager",
-        dest="risk_manager_type",
-        type=str,
-        default="FIXED",
-        choices=valid_rms,
-        help="Модель управления риском (расчета SL/TP)."
-    )
-    parser.add_argument(
-        "--interval",
-        type=str,
-        default=None,
-        help="Переопределяет таймфрейм для бэктеста. Если не указан, используется рекомендуемый из стратегии."
-    )
+    parser.add_argument("--strategy", type=str, required=True, help=f"Имя стратегии. Доступно: {list(AVAILABLE_STRATEGIES.keys())}")
+    parser.add_argument("--exchange", type=str, required=True, choices=['tinkoff', 'bybit'], help="Биржа, на данных которой проводится бэктест.")
+    parser.add_argument("--instrument", type=str, required=True, help="Тикер/символ инструмента для тестирования (например: SBER, BTCUSDT).")
+    parser.add_argument("--rm", dest="risk_manager_type", type=str, default="FIXED", choices=valid_rms, help="Модель управления риском (расчета SL/TP).")
+    parser.add_argument("--interval", type=str, required=True, help="Таймфрейм для бэктеста.")
 
     args = parser.parse_args()
 
-    # Проверка на существование стратегии
     if args.strategy not in AVAILABLE_STRATEGIES:
         print(f"Ошибка: Стратегия '{args.strategy}' не найдена.")
         return
 
-    # Берем на будущее на каком интервале используется стратегия (для логов и поиска файлов)
-    # Из стратегии или из командной строки
     strategy_class = AVAILABLE_STRATEGIES[args.strategy]
-    default_params = strategy_class.get_default_params()
-    default_interval = default_params.get("candle_interval")
-    current_interval = args.interval or default_interval
-
-    if not current_interval:
-        raise ValueError(
-            f"Интервал для стратегии {args.strategy} не определен ни в аргументах, ни в параметрах стратегии.")
-
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    # Имена логов для текущего запуска бэктеста
-    base_filename = f"{timestamp}_{strategy_class.__name__}_{args.instrument}_{current_interval}_RM-{args.risk_manager_type}_backtest"
+    base_filename = f"{timestamp}_{strategy_class.__name__}_{args.instrument}_{args.interval}_RM-{args.risk_manager_type}_backtest"
 
-    # Генерация уникальных имен файлов для логов
     LOGS_DIR = PATH_CONFIG["LOGS_BACKTEST_DIR"]
     os.makedirs(LOGS_DIR, exist_ok=True)
-    # Создаем полные пути для файла с логами выполнения и файла с логами сделок
     log_file_path = os.path.join(LOGS_DIR, f"{base_filename}_run.log")
     trade_log_path = os.path.join(LOGS_DIR, f"{base_filename}_trades.jsonl")
 
-    # Запускаем настройку логгера
     setup_logging(log_file_path)
 
-    logger.info(
-        f"Запуск бэктеста: Стратегия='{strategy_class.__name__}', Инструмент='{args.instrument}', Интервал='{current_interval}'")
-    logger.info(f"Риск-менеджер: {args.risk_manager_type}. Используются параметры по умолчанию.")
+    logger.info(f"Запуск бэктеста: Стратегия='{strategy_class.__name__}', Инструмент='{args.instrument}', Интервал='{args.interval}'")
+    logger.info(f"Риск-менеджер: {args.risk_manager_type}. Используются параметры по умолчанию из файла стратегии.")
 
     backtest_settings = {
         "strategy_class": strategy_class,
         "exchange": args.exchange,
         "instrument": args.instrument,
-        "interval": current_interval,
+        "interval": args.interval,
         "risk_manager_type": args.risk_manager_type,
         "initial_capital": BACKTEST_CONFIG["INITIAL_CAPITAL"],
         "commission_rate": BACKTEST_CONFIG["COMMISSION_RATE"],
         "data_dir": PATH_CONFIG["DATA_DIR"],
         "trade_log_path": trade_log_path,
+        "strategy_params": None,
+        "risk_manager_params": None
     }
 
     try:
         backtest_results = run_backtest_session(backtest_settings)
         process_and_analyze_results(backtest_results, backtest_settings)
-
     except Exception as e:
         logger.critical("Неперехваченное исключение на верхнем уровне!", exc_info=True)
 
