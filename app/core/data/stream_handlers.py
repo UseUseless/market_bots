@@ -1,22 +1,17 @@
 import asyncio
 import logging
-import pandas as pd
-from datetime import datetime, timezone
 from abc import ABC, abstractmethod
 from asyncio import Queue as AsyncQueue
+from datetime import timezone, datetime
 
-from app.core.event import MarketEvent
+import pandas as pd
+from pybit.unified_trading import WebSocket
+from tinkoff.invest import AsyncClient
+from tinkoff.invest.market_data_stream.async_market_data_stream_manager import AsyncMarketDataStreamManager
+
+from app.core.models.event import MarketEvent
 from config import TOKEN_READONLY
 
-# --- Библиотеки для Tinkoff ---
-from tinkoff.invest import AsyncClient
-from tinkoff.invest.async_services import AsyncMarketDataStreamManager
-
-# --- Библиотеки для Bybit ---
-from pybit.unified_trading import WebSocket
-
-
-# --- Абстрактный базовый класс ---
 
 class BaseStreamDataHandler(ABC):
     """Абстрактный 'контракт' для всех поставщиков live-данных."""
@@ -31,8 +26,6 @@ class BaseStreamDataHandler(ABC):
         """Основная асинхронная задача, которая слушает данные и кладет их в очередь."""
         raise NotImplementedError
 
-
-# --- Реализация для Tinkoff ---
 
 class TinkoffStreamDataHandler(BaseStreamDataHandler):
     """Получает live-свечи через gRPC-стрим Tinkoff, используя Stream Manager."""
@@ -100,8 +93,6 @@ class TinkoffStreamDataHandler(BaseStreamDataHandler):
     def _cast_money(quotation) -> float:
         return quotation.units + quotation.nano / 1e9
 
-
-# --- Реализация для Bybit ---
 
 class BybitStreamDataHandler(BaseStreamDataHandler):
     """Получает live-свечи через WebSocket Bybit."""

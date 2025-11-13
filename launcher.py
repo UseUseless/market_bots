@@ -2,7 +2,7 @@ import questionary
 import subprocess
 import sys
 import os
-from typing import List, Dict, Type, Any
+from typing import List, Dict, Type
 
 from app.strategies.base_strategy import BaseStrategy
 from config import PATH_CONFIG, EXCHANGE_INTERVAL_MAPS

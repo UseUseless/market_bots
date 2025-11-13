@@ -1,23 +1,22 @@
 import asyncio
 import logging
 import argparse
-from typing import Type, Any, get_args
+from typing import Type, Any
 import os
 
 from asyncio import Queue as AsyncQueue
 
 from app.utils.logging_setup import setup_global_logging
-from app.utils.clients.tinkoff import TinkoffClient
-from app.utils.clients.bybit import BybitClient
-from app.core.stream.data_handler import TinkoffStreamDataHandler, BybitStreamDataHandler
-from app.core.stream.execution import LiveExecutionHandler
-from app.core.event import Event, MarketEvent, SignalEvent, OrderEvent, FillEvent
+from app.utils.clients.tinkoff import TinkoffHandler
+from app.utils.clients.bybit import BybitHandler
+from app.core.data.stream_handlers import TinkoffStreamDataHandler, BybitStreamDataHandler
+from app.core.execution.live import LiveExecutionHandler
+from app.core.models.event import Event, MarketEvent, SignalEvent, OrderEvent, FillEvent
 from app.core.portfolio import Portfolio
 from app.strategies.base_strategy import BaseStrategy
-from app.core.risk_manager import RiskManagerType
 
 from app.strategies import AVAILABLE_STRATEGIES
-from app.core.risk_manager import AVAILABLE_RISK_MANAGERS
+from app.core.risk.risk_manager import AVAILABLE_RISK_MANAGERS
 
 async def main_event_loop(events_queue: AsyncQueue, portfolio: Portfolio, strategy: BaseStrategy, execution_handler: Any):
     logging.info("Основной цикл обработки событий запущен...")
@@ -58,9 +57,9 @@ async def run_sandbox(
     sync_compatible_queue = AsyncQueuePutter(events_queue)
 
     if exchange == 'tinkoff':
-        data_client = TinkoffClient()
+        data_client = TinkoffHandler()
     elif exchange == 'bybit':
-        data_client = BybitClient()
+        data_client = BybitHandler()
     else:
         logging.error(f"Неизвестная биржа: {exchange}")
         return
@@ -85,16 +84,35 @@ async def run_sandbox(
                               params=strategy_params,
                               risk_manager_type=risk_manager_type,
                               risk_manager_params=rm_params)
-    portfolio = Portfolio(events_queue=sync_compatible_queue,
-                          trade_log_file=os.path.join("logs", "live", f"sandbox_{instrument}.jsonl"),
-                          strategy=strategy,
-                          exchange=exchange,
-                          initial_capital=100000.0,
-                          commission_rate=0.0005,
-                          interval=interval,
-                          risk_manager_type=risk_manager_type,
-                          instrument_info=instrument_info,
-                          risk_manager_params=rm_params)
+    from app.core.risk.sizer import FixedRiskSizer
+    from app.core.services.risk_monitor import RiskMonitor
+    from app.core.services.order_manager import OrderManager
+    from app.core.services.fill_processor import FillProcessor
+
+    # 1. Инициализация компонентов ядра
+    rm_class = AVAILABLE_RISK_MANAGERS[risk_manager_type]
+    risk_manager = rm_class(params=rm_params)
+    position_sizer = FixedRiskSizer()
+
+    # 2. Инициализация сервисов
+    risk_monitor = RiskMonitor(sync_compatible_queue)
+    order_manager = OrderManager(sync_compatible_queue, risk_manager, position_sizer, instrument_info)
+    fill_processor = FillProcessor(
+        trade_log_file=os.path.join("logs", "live", f"sandbox_{instrument}.jsonl"),
+        strategy=strategy,
+        risk_manager=risk_manager,
+        exchange=exchange,
+        interval=interval
+    )
+
+    # 3. Сборка "Легкого" Portfolio
+    portfolio = Portfolio(
+        events_queue=sync_compatible_queue,
+        initial_capital=100000.0,  # Хрень написана
+        risk_monitor=risk_monitor,
+        order_manager=order_manager,
+        fill_processor=fill_processor
+    )
 
     logging.info(f"Запуск песочницы для стратегии '{strategy.name}' на инструменте '{instrument}' ({exchange.upper()})")
 
@@ -115,7 +133,7 @@ def main():
     parser.add_argument("--interval", type=str, default="1min")
     parser.add_argument("--category", type=str, default="linear", help="Категория рынка для Bybit (spot, linear, inverse). По умолчанию: linear")
     parser.add_argument("--strategy", type=str, required=True, help=f"Имя стратегии. Доступно: {list(AVAILABLE_STRATEGIES.keys())}")
-    valid_rms = get_args(RiskManagerType)
+    valid_rms = list(AVAILABLE_RISK_MANAGERS.keys())
     parser.add_argument("--rm", dest="risk_manager_type", type=str, default="FIXED", choices=valid_rms, help="Модель управления риском. По умолчанию: FIXED")
     args = parser.parse_args()
 

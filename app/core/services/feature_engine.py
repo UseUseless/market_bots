@@ -3,7 +3,7 @@ import pandas_ta as ta
 import logging
 from typing import List, Dict, Any
 
-logger = logging.getLogger('backtester')
+logger = logging.getLogger(__name__)
 
 class FeatureEngine:
     """

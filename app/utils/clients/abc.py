@@ -4,9 +4,8 @@ import pandas as pd
 
 TradeModeType = Literal["REAL", "SANDBOX"]
 
-
 class BaseDataClient(ABC):
-    """Абстрактный 'контракт' для всех клиентов, поставляющих рыночные данные."""
+    """Абстрактный 'контракт' для всех клиентов, поставляющих рыночные данные ИЗВНЕ (через API)."""
 
     @abstractmethod
     def get_historical_data(self, instrument: str, interval: str, days: int, **kwargs) -> pd.DataFrame:
@@ -24,7 +23,7 @@ class BaseDataClient(ABC):
         raise NotImplementedError
 
 class BaseTradeClient(ABC):
-    """Абстрактный 'контракт' для всех клиентов, исполняющих ордера."""
+    """Абстрактный 'контракт' для всех клиентов, исполняющих ордера (через API)."""
 
     @abstractmethod
     def place_market_order(self, instrument_id: str, quantity: int, direction: str):

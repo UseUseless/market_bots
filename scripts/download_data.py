@@ -6,8 +6,8 @@ import time
 
 from app.utils.logging_setup import setup_global_logging
 from app.utils.clients.abc import BaseDataClient
-from app.utils.clients.tinkoff import TinkoffClient
-from app.utils.clients.bybit import BybitClient
+from app.utils.clients.tinkoff import TinkoffHandler
+from app.utils.clients.bybit import BybitHandler
 from config import DATA_LOADER_CONFIG, PATH_CONFIG
 
 # --- Конфигурация ---
@@ -53,9 +53,9 @@ def download_data(exchange: str, instrument_list: list[str], interval: str, days
         f"--- Загрузка данных с биржи '{exchange.upper()}' за {days_to_load} дней для интервала: {interval} ---")
     client: BaseDataClient
     if exchange == 'tinkoff':
-        client = TinkoffClient()
+        client = TinkoffHandler()
     elif exchange == 'bybit':
-        client = BybitClient()
+        client = BybitHandler()
     else:
         logging.error(f"Неизвестная биржа: {exchange}")
         return

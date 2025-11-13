@@ -3,7 +3,7 @@ import pandas as pd
 from typing import Dict, Any, Optional
 
 from app.strategies.base_strategy import BaseStrategy
-from app.core.event import SignalEvent
+from app.core.models.event import SignalEvent
 
 
 class SimpleSMACrossStrategy(BaseStrategy):

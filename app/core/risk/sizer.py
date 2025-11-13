@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from app.core.risk_manager import TradeRiskProfile
+from app.core.risk.risk_manager import TradeRiskProfile
 
 class BasePositionSizer(ABC):
     """

@@ -4,21 +4,21 @@ import logging
 from typing import List
 
 from app.utils.logging_setup import setup_global_logging
-from app.utils.clients.tinkoff import TinkoffClient
-from app.utils.clients.bybit import BybitClient
+from app.utils.clients.tinkoff import TinkoffHandler
+from app.utils.clients.bybit import BybitHandler
 from config import DATA_LOADER_CONFIG
 
 LISTS_DIR = "datalists"
 
 def _update_top_liquid_by_turnover(exchange: str, count: int) -> List[str]:
     """Получает список топ-N ликвидных инструментов для указанной биржи."""
-    client: TinkoffClient | BybitClient
+    client: TinkoffHandler | BybitHandler
     if exchange == 'tinkoff':
         # Для Tinkoff нет разделения на sandbox/real для этого запроса
-        client = TinkoffClient()
+        client = TinkoffHandler()
     elif exchange == 'bybit':
         # Это безопасно, так как мы только читаем публичные данные.
-        client = BybitClient(trade_mode="REAL")
+        client = BybitHandler(trade_mode="REAL")
     else:
         raise ValueError(f"Неизвестная биржа: {exchange}")
 

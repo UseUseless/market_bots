@@ -14,9 +14,9 @@ from rich.table import Table
 from optimization.objective import Objective
 from optimization.splitter import split_data_by_periods
 from app.strategies import AVAILABLE_STRATEGIES
-from app.core.risk_manager import AVAILABLE_RISK_MANAGERS
-from app.core.data_handler import HistoricLocalDataHandler
-from app.core.backtest_engine import run_backtest_session
+from app.core.risk.risk_manager import AVAILABLE_RISK_MANAGERS
+from app.core.data.local_handler import HistoricLocalDataHandler
+from app.engines.backtest_engine import run_backtest_session
 from app.analyzers.metrics import MetricsCalculator, METRIC_CONFIG
 from config import BACKTEST_CONFIG, EXCHANGE_SPECIFIC_CONFIG, PATH_CONFIG
 
@@ -51,8 +51,10 @@ def _prepare_all_wfo_data(args: argparse.Namespace, instrument_list: List[str]) 
 
     for instrument in tqdm(instrument_list, desc="Подготовка данных"):
         data_handler = HistoricLocalDataHandler(
-            events_queue=None, exchange=args.exchange, instrument_id=instrument,
-            interval_str=args.interval, data_path=PATH_CONFIG["DATA_DIR"]
+            exchange=args.exchange,
+            instrument_id=instrument,
+            interval_str=args.interval,
+            data_path=PATH_CONFIG["DATA_DIR"]
         )
         full_dataset = data_handler.load_raw_data()
         if full_dataset.empty:
@@ -94,8 +96,12 @@ def _estimate_execution_time(args: argparse.Namespace, num_steps: int, num_instr
         instrument_to_test = args.instrument
 
     # Загружаем данные для одного инструмента, чтобы получить срез для теста
-    data_handler = HistoricLocalDataHandler(None, args.exchange, instrument_to_test, args.interval,
-                                            PATH_CONFIG["DATA_DIR"])
+    data_handler = HistoricLocalDataHandler(
+        exchange=args.exchange,
+        instrument_id=instrument_to_test,
+        interval_str=args.interval,
+        data_path=PATH_CONFIG["DATA_DIR"]
+    )
     test_data = data_handler.load_raw_data()
     if test_data.empty:
         logger.warning("Не удалось загрузить данные для оценки времени, расчет пропущен.")
@@ -369,9 +375,14 @@ def _generate_final_reports(args: argparse.Namespace, all_oos_trades: List[pd.Da
 
     full_bh_dataset = pd.DataFrame()  # Создаем пустой DataFrame на случай ошибки
     if instrument_for_bh:
-        data_handler_bh = HistoricLocalDataHandler(None, args.exchange, instrument_for_bh, args.interval,
-                                                   PATH_CONFIG["DATA_DIR"])
-        full_bh_dataset = data_handler_bh.load_raw_data()
+        if instrument_for_bh:
+            data_handler_bh = HistoricLocalDataHandler(
+                exchange=args.exchange,
+                instrument_id=instrument_for_bh,
+                interval_str=args.interval,
+                data_path=PATH_CONFIG["DATA_DIR"]
+            )
+            full_bh_dataset = data_handler_bh.load_raw_data()
 
     analyzer = SingleRunAnalyzer(
         trades_df=final_trades_df, historical_data=full_bh_dataset,

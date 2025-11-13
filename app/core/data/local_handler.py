@@ -1,42 +1,28 @@
-from abc import ABC
-from queue import Queue
-import pandas as pd
 import logging
 import os
 from datetime import time
 
-from app.core.event import Event
+import pandas as pd
+
 from config import EXCHANGE_SPECIFIC_CONFIG
 
 logger = logging.getLogger('backtester')
 
-class DataHandler(ABC):
-    """
-    Абстрактный базовый класс для всех поставщиков рыночных данных.
-    Будет использоваться для создания других хэндлеров (например в Live режиме для Tinkoff, Binance)
-    Может будет дополняться
-    """
-
-    def __init__(self, events_queue: Queue['Event'], instrument_id: str):
-        self.events_queue = events_queue
-        self.instrument_id = instrument_id
-
-
-class HistoricLocalDataHandler(DataHandler):
+class HistoricLocalDataHandler:
     """
     Читает локальные Parquet-файлы из структурированной папки (data/exchange/interval),
     выравнивает временную сетку для устранения гэпов,
     фильтрует их для основной торговой сессии (если нужно) и создаёт pandas df.
     """
 
-    def __init__(self, events_queue: Queue['Event'], exchange: str, instrument_id: str, interval_str: str,
+    def __init__(self, exchange: str, instrument_id: str, interval_str: str,
                  data_path: str):
-        super().__init__(events_queue, instrument_id)
         self.exchange = exchange
+        self.instrument_id = instrument_id
         self.interval = interval_str
         self.data_path = data_path
         self.file_path = os.path.join(self.data_path, self.exchange, self.interval,
-                                      f"{self.instrument_id.upper()}.parquet")
+                                      f"{instrument_id.upper()}.parquet")
 
     def _resample_and_fill_gaps(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -60,8 +46,6 @@ class HistoricLocalDataHandler(DataHandler):
             return df.reset_index()
 
         resampled_df = df.resample(freq).first()
-
-        # --- ИЗМЕНЕНО: Двухпроходное заполнение для максимальной надежности ---
 
         # 1. Заполняем 'volume' нулями. Это простая и независимая операция.
         resampled_df['volume'] = resampled_df['volume'].fillna(0)

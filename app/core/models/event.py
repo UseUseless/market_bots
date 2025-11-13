@@ -43,7 +43,7 @@ class OrderEvent(Event):
     """
     timestamp: datetime
     instrument: str
-    quantity: int
+    quantity: float
     direction: str
     trigger_reason: str  # 'SIGNAL', 'SL', 'TP'
 
@@ -55,7 +55,7 @@ class FillEvent(Event):
     """
     timestamp: datetime
     instrument: str
-    quantity: int
+    quantity: float
     direction: str  # 'BUY' или 'SELL'
     price: float    # Фактическая цена исполнения
     commission: float # Комиссия за сделку

@@ -13,7 +13,7 @@ from tinkoff.invest import (
 )
 from tinkoff.invest.utils import now, quotation_to_decimal
 
-from app.utils.clients.abc import BaseDataClient, BaseTradeClient, TradeModeType
+from app.utils.clients.abc import TradeModeType, BaseTradeClient, BaseDataClient
 from config import (
     TOKEN_READONLY, TOKEN_FULL_ACCESS,
     TOKEN_SANDBOX, ACCOUNT_ID,
@@ -22,7 +22,7 @@ from config import (
 
 logger = logging.getLogger(__name__)
 
-class TinkoffClient(BaseDataClient, BaseTradeClient):
+class TinkoffHandler(BaseDataClient, BaseTradeClient):
     """
     Единый клиент для работы с Tinkoff Invest API.
     Реализует интерфейсы для получения данных и для торговли.

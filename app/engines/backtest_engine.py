@@ -1,24 +1,42 @@
+# app/engines/backtest_engine.py
+
 import queue
 import logging
 import pandas as pd
 from typing import Dict, Any
 
-from app.core.event import MarketEvent, SignalEvent, OrderEvent, FillEvent
-from app.core.data_handler import HistoricLocalDataHandler
+# --- Модели данных ---
+from app.core.models.event import MarketEvent, SignalEvent, OrderEvent, FillEvent
+
+# --- Компоненты ядра ---
 from app.core.portfolio import Portfolio
-from app.core.execution import SimulatedExecutionHandler
+from app.core.data.local_handler import HistoricLocalDataHandler
+from app.core.execution.simulated import SimulatedExecutionHandler
+from app.core.risk.sizer import FixedRiskSizer
+from app.core.risk.risk_manager import AVAILABLE_RISK_MANAGERS
+from app.core.services.risk_monitor import RiskMonitor
+from app.core.services.order_manager import OrderManager
+from app.core.services.fill_processor import FillProcessor
+
+# --- Вспомогательные модули ---
 from app.strategies.base_strategy import BaseStrategy
 from app.utils.logging_setup import backtest_time_filter
 from app.utils.file_io import load_instrument_info
-from config import PATH_CONFIG
+from config import PATH_CONFIG, BACKTEST_CONFIG
 
 logger = logging.getLogger('backtester')
 
+
 def _initialize_components(settings: Dict[str, Any]) -> Dict[str, Any]:
-    """Инициализирует и возвращает все ключевые компоненты системы на основе конфига."""
+    """
+    Инициализирует и возвращает все ключевые компоненты системы на основе конфига.
+    Эта функция выступает в роли "Сборщика" (Assembler), реализуя принцип
+    инверсии зависимостей (Dependency Injection).
+    """
     logger.info("Инициализация компонентов бэктеста...")
     events_queue = queue.Queue()
 
+    # --- 1. Загрузка метаданных об инструменте ---
     instrument_info = load_instrument_info(
         exchange=settings["exchange"],
         instrument=settings["instrument"],
@@ -26,11 +44,9 @@ def _initialize_components(settings: Dict[str, Any]) -> Dict[str, Any]:
         data_dir=settings["data_dir"]
     )
 
+    # --- 2. Инициализация Стратегии ---
     strategy_class = settings["strategy_class"]
-    strategy_params = settings.get("strategy_params")
-    if strategy_params is None:
-        strategy_params = strategy_class.get_default_params()
-
+    strategy_params = settings.get("strategy_params") or strategy_class.get_default_params()
     strategy = strategy_class(
         events_queue,
         settings["instrument"],
@@ -38,32 +54,54 @@ def _initialize_components(settings: Dict[str, Any]) -> Dict[str, Any]:
         risk_manager_type=settings["risk_manager_type"]
     )
 
-    data_handler = HistoricLocalDataHandler(
+    # --- 3. Инициализация Компонентов Ядра (Core) ---
+    # 3.1. Риск-менеджер и Сайзер
+    rm_class = AVAILABLE_RISK_MANAGERS[settings["risk_manager_type"]]
+    rm_params = settings.get("risk_manager_params") or rm_class.get_default_params()
+    risk_manager = rm_class(params=rm_params)
+    position_sizer = FixedRiskSizer()  # Пока у нас только один сайзер
+
+    # 3.2. Сервисы
+    risk_monitor = RiskMonitor(events_queue)
+    order_manager = OrderManager(events_queue, risk_manager, position_sizer, instrument_info)
+    fill_processor = FillProcessor(
+        trade_log_file=settings.get("trade_log_path"),
+        strategy=strategy,
+        risk_manager=risk_manager,
+        exchange=settings["exchange"],
+        interval=settings["interval"]
+    )
+
+    # 3.3. Исполнитель
+    execution_handler = SimulatedExecutionHandler(
         events_queue,
-        settings["exchange"],
-        settings["instrument"],
-        settings["interval"],
+        commission_rate=settings["commission_rate"],
+        slippage_config=BACKTEST_CONFIG.get("SLIPPAGE_CONFIG", {})
+    )
+
+    # 3.4. Поставщик данных
+    data_handler = HistoricLocalDataHandler(
+        exchange=settings["exchange"],
+        instrument_id=settings["instrument"],
+        interval_str=settings["interval"],
         data_path=settings["data_dir"]
     )
 
-    execution_handler = SimulatedExecutionHandler(events_queue)
-
+    # --- 4. Сборка "Легкого" Portfolio ---
     portfolio = Portfolio(
         events_queue=events_queue,
-        trade_log_file=settings.get("trade_log_path"),  # Может быть None
-        strategy=strategy,
-        exchange=settings["exchange"],
         initial_capital=settings["initial_capital"],
-        commission_rate=settings["commission_rate"],
-        interval=settings["interval"],
-        risk_manager_type=settings["risk_manager_type"],
-        instrument_info=instrument_info,
-        risk_manager_params=settings.get("risk_manager_params")
+        risk_monitor=risk_monitor,
+        order_manager=order_manager,
+        fill_processor=fill_processor
     )
 
     return {
-        "events_queue": events_queue, "strategy": strategy, "data_handler": data_handler,
-        "portfolio": portfolio, "execution_handler": execution_handler
+        "events_queue": events_queue,
+        "strategy": strategy,
+        "data_handler": data_handler,
+        "portfolio": portfolio,
+        "execution_handler": execution_handler
     }
 
 
@@ -79,13 +117,12 @@ def _prepare_data(
     if data_slice is not None:
         raw_data = data_slice
     else:
-        data_dir = settings.get("data_dir", PATH_CONFIG["DATA_DIR"])
+        # Если срез данных не передан, загружаем их
         data_handler = HistoricLocalDataHandler(
-            events_queue=None,
             exchange=settings["exchange"],
             instrument_id=settings["instrument"],
             interval_str=settings["interval"],
-            data_path=data_dir
+            data_path=settings.get("data_dir", PATH_CONFIG["DATA_DIR"])
         )
         raw_data = data_handler.load_raw_data()
 
@@ -96,17 +133,13 @@ def _prepare_data(
     enriched_data = strategy.process_data(raw_data.copy())
 
     if len(enriched_data) < strategy.min_history_needed:
-        logger.error(f"Ошибка: Недостаточно данных для запуска стратегии '{strategy.name}'.")
-        logger.error(
-            f"Требуется как минимум {strategy.min_history_needed} свечей, но после полной обработки доступно только {len(enriched_data)}.")
-        return None
-
-    if enriched_data.empty:
-        logger.warning("Нет данных для запуска бэктеста после полной подготовки стратегии.")
+        logger.error(f"Ошибка: Недостаточно данных для запуска стратегии '{strategy.name}'. "
+                     f"Требуется {strategy.min_history_needed}, доступно {len(enriched_data)}.")
         return None
 
     logger.info("Этап подготовки данных завершен.")
     return enriched_data
+
 
 def _run_event_loop(
         enriched_data: pd.DataFrame,
@@ -118,19 +151,23 @@ def _run_event_loop(
 ) -> None:
     """Запускает главный цикл обработки событий."""
     logger.info("Запуск основного цикла обработки событий...")
-    data_generator = (MarketEvent(timestamp=row['time'], instrument=instrument, data=row) for i, row in
-                      enriched_data.iterrows())
+    data_generator = (row for _, row in enriched_data.iterrows())
 
     while True:
         try:
             event = events_queue.get(block=False)
         except queue.Empty:
             try:
-                market_event = next(data_generator)
+                current_candle = next(data_generator)
+                market_event = MarketEvent(
+                    timestamp=current_candle['time'],
+                    instrument=instrument,
+                    data=current_candle
+                )
                 events_queue.put(market_event)
                 continue
             except StopIteration:
-                break
+                break  # Данные закончились, выходим из цикла
         else:
             try:
                 if isinstance(event, MarketEvent):
@@ -140,7 +177,8 @@ def _run_event_loop(
                 elif isinstance(event, SignalEvent):
                     portfolio.on_signal(event)
                 elif isinstance(event, OrderEvent):
-                    execution_handler.execute_order(event)
+                    # Передаем последнюю свечу в симулятор для расчета цены
+                    execution_handler.execute_order(event, current_candle)
                 elif isinstance(event, FillEvent):
                     portfolio.on_fill(event)
             except Exception as e:
@@ -171,19 +209,16 @@ def run_backtest_session(settings: Dict[str, Any]) -> Dict[str, Any]:
         components["portfolio"], components["strategy"], components["execution_handler"]
     )
 
-    # Собираем результаты
+    # Собираем результаты из PortfolioState
     portfolio = components["portfolio"]
-    trades_df = pd.DataFrame(portfolio.closed_trades) if portfolio.closed_trades else pd.DataFrame()
-
-    final_capital = portfolio.current_capital
-    total_pnl = final_capital - settings["initial_capital"]
+    trades_df = pd.DataFrame(portfolio.state.closed_trades) if portfolio.state.closed_trades else pd.DataFrame()
 
     return {
         "status": "success",
         "trades_df": trades_df,
-        "final_capital": final_capital,
-        "total_pnl": total_pnl,
+        "final_capital": portfolio.state.current_capital,
+        "total_pnl": portfolio.state.current_capital - settings["initial_capital"],
         "initial_capital": settings["initial_capital"],
         "enriched_data": enriched_data,
-        "open_positions": portfolio.current_positions
+        "open_positions": portfolio.state.positions
     }

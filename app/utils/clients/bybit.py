@@ -7,7 +7,7 @@ from tqdm import tqdm
 
 from pybit.unified_trading import HTTP
 
-from app.utils.clients.abc import BaseDataClient, BaseTradeClient, TradeModeType
+from app.utils.clients.abc import TradeModeType, BaseTradeClient, BaseDataClient
 from config import (EXCHANGE_INTERVAL_MAPS,
                     BYBIT_TESTNET_API_KEY,
                     BYBIT_TESTNET_API_SECRET
@@ -16,7 +16,7 @@ from config import (EXCHANGE_INTERVAL_MAPS,
 logger = logging.getLogger(__name__)
 
 
-class BybitClient(BaseDataClient, BaseTradeClient):
+class BybitHandler(BaseDataClient, BaseTradeClient):
     def __init__(self, trade_mode: TradeModeType = "SANDBOX"):
         use_testnet = (trade_mode == "SANDBOX")
 

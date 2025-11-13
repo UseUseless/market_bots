@@ -2,7 +2,7 @@ import pandas as pd
 from queue import Queue
 from typing import Dict, Any, Optional
 
-from app.core.event import SignalEvent
+from app.core.models.event import SignalEvent
 from app.strategies.base_strategy import BaseStrategy
 
 class TripleFilterStrategy(BaseStrategy):

@@ -4,8 +4,8 @@ from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional
 from collections import deque
 
-from app.core.event import MarketEvent
-from app.core.feature_engine import FeatureEngine
+from app.core.models.event import MarketEvent
+from app.core.services.feature_engine import FeatureEngine
 
 
 class BaseStrategy(ABC):

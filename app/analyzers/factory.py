@@ -7,7 +7,6 @@ from app.analyzers.metrics import MetricsCalculator, METRIC_CONFIG
 
 logger = logging.getLogger(__name__)
 
-
 def analyze_run_results(
         trades_df: pd.DataFrame,
         historical_data: pd.DataFrame,

@@ -2,13 +2,13 @@ import argparse
 import os
 from datetime import datetime
 import logging
-from typing import get_args, Dict, Any
+from typing import Dict, Any
 
-from app.core.backtest_engine import run_backtest_session
+from app.engines.backtest_engine import run_backtest_session
 from app.analyzers.single_run_analyzer import SingleRunAnalyzer
 from app.analyzers.factory import analyze_run_results
 from app.utils.logging_setup import backtest_time_filter
-from app.core.risk_manager import RiskManagerType
+from app.core.risk.risk_manager import AVAILABLE_RISK_MANAGERS
 from config import BACKTEST_CONFIG, PATH_CONFIG
 from app.strategies import AVAILABLE_STRATEGIES
 
@@ -94,7 +94,7 @@ def process_and_analyze_results(backtest_results: Dict[str, Any], settings: Dict
 
 def main():
     parser = argparse.ArgumentParser(description="Фреймворк для запуска торговых ботов.")
-    valid_rms = get_args(RiskManagerType)
+    valid_rms = list(AVAILABLE_RISK_MANAGERS.keys())
 
     parser.add_argument("--strategy", type=str, required=True, help=f"Имя стратегии. Доступно: {list(AVAILABLE_STRATEGIES.keys())}")
     parser.add_argument("--exchange", type=str, required=True, choices=['tinkoff', 'bybit'], help="Биржа, на данных которой проводится бэктест.")

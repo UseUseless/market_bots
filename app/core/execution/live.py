@@ -2,11 +2,12 @@ import asyncio
 import logging
 from asyncio import Queue as AsyncQueue
 from datetime import datetime, timezone
+import pandas as pd
 
-from app.core.event import OrderEvent, FillEvent
-from app.core.execution import ExecutionHandler
-from app.utils.clients.bybit import BybitClient
-from app.utils.clients.tinkoff import TinkoffClient
+from app.core.models.event import OrderEvent, FillEvent
+from app.core.execution.abc import BaseExecutionHandler
+from app.utils.clients.bybit import BybitHandler
+from app.utils.clients.tinkoff import TinkoffHandler
 from app.utils.clients.abc import BaseTradeClient
 from tinkoff.invest import AsyncClient, OrderExecutionReportStatus
 
@@ -15,7 +16,7 @@ from config import (TOKEN_SANDBOX, TOKEN_READONLY, BYBIT_TESTNET_API_KEY,
                     LIVE_TRADING_CONFIG, EXCHANGE_SPECIFIC_CONFIG)
 
 
-class LiveExecutionHandler(ExecutionHandler):
+class LiveExecutionHandler(BaseExecutionHandler):
     """
     Исполняет ордера через API биржи (в режиме "песочницы" или реальном)
     и слушает стрим для получения информации об исполнении.
@@ -23,7 +24,7 @@ class LiveExecutionHandler(ExecutionHandler):
 
     def __init__(self, events_queue: AsyncQueue, exchange: str, trade_mode: str = "SANDBOX",
                  loop: asyncio.AbstractEventLoop = None):
-        self.events_queue = events_queue
+        super().__init__(events_queue)
         self.client: BaseTradeClient
         self.exchange = exchange
         self.loop = loop
@@ -32,10 +33,10 @@ class LiveExecutionHandler(ExecutionHandler):
         self.figi_cache = {}
 
         if exchange == 'tinkoff':
-            self.client = TinkoffClient(trade_mode=trade_mode)
+            self.client = TinkoffHandler(trade_mode=trade_mode)
             self.stream_token = TOKEN_SANDBOX if trade_mode == "SANDBOX" else TOKEN_FULL_ACCESS
         elif exchange == 'bybit':
-            self.client = BybitClient(trade_mode=trade_mode)
+            self.client = BybitHandler(trade_mode=trade_mode)
         else:
             raise ValueError(f"Неподдерживаемая биржа: {exchange}")
 
@@ -58,8 +59,9 @@ class LiveExecutionHandler(ExecutionHandler):
             logging.info(f"Найден FIGI: {instrument_info.figi}")
             return instrument_info.figi
 
-    async def execute_order(self, event: OrderEvent):
+    async def execute_order(self, event: OrderEvent, last_candle: pd.Series = None):
         """Асинхронно отправляет рыночный ордер через API."""
+        # last_candle здесь не используется, так как цена приходит от биржи.
         try:
             instrument_id = event.instrument
             if self.exchange == 'tinkoff':

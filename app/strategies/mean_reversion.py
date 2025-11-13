@@ -3,7 +3,7 @@ from queue import Queue
 import logging
 from typing import Dict, Any, Optional
 
-from app.core.event import SignalEvent
+from app.core.models.event import SignalEvent
 from app.strategies.base_strategy import BaseStrategy
 
 logger = logging.getLogger('backtester')

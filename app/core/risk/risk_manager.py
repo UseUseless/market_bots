@@ -1,10 +1,7 @@
 from abc import ABC, abstractmethod
-from typing import Literal, Dict, Any
+from typing import Literal, Dict, Any, Optional
 from dataclasses import dataclass
 import pandas as pd
-
-# Тип для выбора модели риск-менеджера
-RiskManagerType = Literal["FIXED", "ATR"]
 
 @dataclass
 class TradeRiskProfile:
@@ -58,7 +55,9 @@ class BaseRiskManager(ABC):
         return {name: p_config['default'] for name, p_config in config.items()}
 
     @abstractmethod
-    def calculate_risk_profile(self, entry_price: float, direction: str, capital: float, last_candle: pd.Series) -> TradeRiskProfile:
+    @abstractmethod
+    def calculate_risk_profile(self, entry_price: float, direction: str, capital: float,
+                               last_candle: Optional[pd.Series]) -> TradeRiskProfile:
         """
         Рассчитывает и возвращает полный объект TradeRiskProfile.
 
@@ -89,7 +88,7 @@ class FixedRiskManager(BaseRiskManager):
         # Параметры теперь берутся из переданного словаря
         self.tp_ratio = self.params["tp_ratio"]
 
-    def calculate_risk_profile(self, entry_price: float, direction: str, capital: float, last_candle: pd.Series) -> TradeRiskProfile:
+    def calculate_risk_profile(self, entry_price: float, direction: str, capital: float, last_candle: Optional[pd.Series]) -> TradeRiskProfile:
         risk_percent = self.risk_percent_long if direction == 'BUY' else self.risk_percent_short
         sl_percent = risk_percent / 100.0
 
@@ -141,35 +140,26 @@ class AtrRiskManager(BaseRiskManager):
         self.tp_multiplier = self.params["atr_multiplier_tp"]
         self.atr_period = self.params["atr_period"]
 
-    def calculate_risk_profile(self, entry_price: float, direction: str, capital: float, last_candle: pd.Series) -> TradeRiskProfile:
+    def calculate_risk_profile(self, entry_price: float, direction: str, capital: float,
+                               last_candle: Optional[pd.Series]) -> TradeRiskProfile:
         risk_percent = self.risk_percent_long if direction == 'BUY' else self.risk_percent_short
-        sl_percent = risk_percent / 100.0
-        # Извлекаем значение ATR из данных последней свечи.
-        # Имя колонки (f'ATR_{self.atr_period}') должно совпадать с тем, что генерирует FeatureEngine.
+
+        if last_candle is None:
+            raise ValueError("Для AtrRiskManager необходимы данные последней свечи (last_candle).")
+
         atr_value = last_candle.get(f'ATR_{self.atr_period}')
         if not atr_value or atr_value <= 0:
-            # Валидация: если ATR не рассчитан (например, в начале истории) или равен нулю,
-            # мы не можем рассчитать риск, поэтому выбрасываем исключение, чтобы сигнал был проигнорирован.
             raise ValueError("ATR value is invalid, cannot calculate risk profile.")
 
-        # Рассчитываем "расстояние до стопа" в денежном выражении.
         sl_distance = atr_value * self.sl_multiplier
-        # Применяем это расстояние для расчета абсолютного уровня стоп-лосса.
         stop_loss_price = entry_price - sl_distance if direction == 'BUY' else entry_price + sl_distance
 
-        # Рассчитываем "расстояние до тейка" в денежном выражении.
-        # (По сути если в config соотношение ATR_MULTIPLIER sl и tp сделать как 1:2,
-        # то будет то же самое tp_ratio = 2)
         tp_distance = atr_value * self.tp_multiplier
-        # Применяем это расстояние для расчета абсолютного уровня стоп-лосса.
         take_profit_price = entry_price + tp_distance if direction == 'BUY' else entry_price - tp_distance
 
-        # Риск на одну акцию здесь - это расстояние до стопа, основанное на ATR.
         risk_per_share = abs(entry_price - stop_loss_price)
-        # Важный момент: общий денежный риск (risk_amount) мы по-прежнему считаем
-        # как процент от капитала. Это позволяет контролировать общий риск портфеля,
-        # даже если стопы ставятся на основе волатильности.
-        risk_percent = self.risk_percent_long if direction == 'BUY' else self.risk_percent_short
+
+        # Используем risk_percent, рассчитанный в самом начале
         risk_amount = capital * (risk_percent / 100.0)
 
         return TradeRiskProfile(
