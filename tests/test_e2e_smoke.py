@@ -101,7 +101,7 @@ class SmokeTestStrategy(BaseStrategy):
 
 
 def test_batch_tester_smoke(tmp_path):  # <-- УБИРАЕМ ФИКСТУРУ ИЗ АРГУМЕНТОВ
-    """Улучшенный дымовой тест для batch_tester.py."""
+    """Улучшенный дымовой тест для run_batch_backtest.py."""
     test_workdir = tmp_path / "workdir"
     test_workdir.mkdir()
 
@@ -120,7 +120,7 @@ def test_batch_tester_smoke(tmp_path):  # <-- УБИРАЕМ ФИКСТУРУ И
     (data_dir / "EMPTY_DATA.parquet").touch()
 
     # Копируем зависимости
-    required_files = ["batch_tester.py", "run_backtest.py", "search_space.py", "single_run_analyzer.py"]
+    required_files = ["run_batch_backtest.py", "run_backtest.py", "search_space.py", "single_run_analyzer.py"]
     for f in required_files: shutil.copy(f, test_workdir)
     for d in ["core", "utils", "strategies"]: shutil.copytree(d, test_workdir / d)
 
@@ -144,7 +144,7 @@ class SmokeBatchStrategy(BaseStrategy):
     (test_workdir / "strategies" / "smoke_batch_strategy.py").write_text(test_strategy_code, encoding='utf-8')
 
     command = [
-        sys.executable, "batch_tester.py",
+        sys.executable, "run_batch_backtest.py",
         "--strategy", "smoke_batch_strategy",
         "--exchange", "tinkoff",  # Указываем явно
         "--interval", "5min"
@@ -161,7 +161,7 @@ class SmokeBatchStrategy(BaseStrategy):
 
 
 def test_dashboard_smoke(tmp_path):
-    """Дымовой тест для dashboard.py: проверяет, что он запускается без ошибок."""
+    """Дымовой тест для main.py: проверяет, что он запускается без ошибок."""
     test_workdir = tmp_path / "workdir"
     logs_dir = test_workdir / "logs"
     data_dir = test_workdir / "data"
@@ -175,7 +175,7 @@ def test_dashboard_smoke(tmp_path):
         {'time': [pd.Timestamp('2023-01-02 10:05:00')], 'open': [100], 'high': [100], 'low': [100], 'close': [100]})
     fake_data_df.to_parquet(data_dir / "tinkoff" / "5min" / "FAKE.parquet")
 
-    required_files = ["dashboard.py", "search_space.py", "single_run_analyzer.py", "comparative_analyzer.py"]
+    required_files = ["main.py", "search_space.py", "single_run_analyzer.py", "comparative_analyzer.py"]
     for f in required_files:
         if os.path.exists(f):
             shutil.copy(f, test_workdir)
@@ -184,7 +184,7 @@ def test_dashboard_smoke(tmp_path):
         shutil.copytree("utils", test_workdir / "utils")
 
     command = [
-        "streamlit", "run", "dashboard.py",
+        "streamlit", "run", "main.py",
         "--server.runOnSave=false",
         "--server.headless=true"
     ]

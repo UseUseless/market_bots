@@ -4,7 +4,6 @@ from typing import Any, Dict
 
 from app.core.models.event import OrderEvent, FillEvent
 from app.core.execution.abc import BaseExecutionHandler
-from config import BACKTEST_CONFIG
 
 
 class SimulatedExecutionHandler(BaseExecutionHandler):
@@ -92,6 +91,8 @@ class SimulatedExecutionHandler(BaseExecutionHandler):
             direction=event.direction,
             price=execution_price,
             commission=commission,
-            trigger_reason=event.trigger_reason
+            trigger_reason=event.trigger_reason,
+            stop_loss=event.stop_loss,
+            take_profit=event.take_profit
         )
         self.events_queue.put(fill_event)

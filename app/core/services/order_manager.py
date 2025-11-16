@@ -80,10 +80,12 @@ class OrderManager:
                     instrument=event.instrument,
                     quantity=final_quantity,
                     direction=event.direction,
-                    trigger_reason="SIGNAL"
+                    trigger_reason="SIGNAL",
+                    stop_loss=risk_profile.stop_loss_price,
+                    take_profit=risk_profile.take_profit_price
                 )
                 self.events_queue.put(order)
-                state.pending_orders.add(event.instrument)  # Сразу помечаем ордер как ожидающий
+                state.pending_orders.add(event.instrument)
                 logger.info(f"OrderManager генерирует ордер на {event.direction} {final_quantity} "
                             f"лот(ов) {event.instrument}")
             else:

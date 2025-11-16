@@ -2,11 +2,11 @@ import optuna
 import pandas as pd
 from typing import Type, List, Dict
 
-from app.engines.backtest_engine import run_backtest_session
+from app.engines.backtest_engine import BacktestEngine
 from config import BACKTEST_CONFIG, EXCHANGE_SPECIFIC_CONFIG, PATH_CONFIG
 from app.strategies.base_strategy import BaseStrategy
 from app.core.risk.risk_manager import AVAILABLE_RISK_MANAGERS
-from app.analyzers.metrics import MetricsCalculator, METRIC_CONFIG
+from app.analyzers.metrics.portfolio_metrics import PortfolioMetricsCalculator, METRIC_CONFIG
 import logging
 
 logger = logging.getLogger(__name__)
@@ -88,7 +88,8 @@ class Objective:
                     "data_dir": PATH_CONFIG["DATA_DIR"]
                 }
 
-                backtest_results = run_backtest_session(backtest_settings)
+                engine = BacktestEngine(backtest_settings)
+                backtest_results = engine.run()
 
                 if backtest_results["status"] == "success" and not backtest_results["trades_df"].empty:
                     all_instrument_trades.append(backtest_results["trades_df"])
@@ -99,13 +100,13 @@ class Objective:
             portfolio_trades_df = pd.concat(all_instrument_trades, ignore_index=True)
             portfolio_trades_df.sort_values(by='exit_timestamp_utc', inplace=True)
 
-            calculator = MetricsCalculator(portfolio_trades_df, self.total_initial_capital, self.annualization_factor)
+            calculator = PortfolioMetricsCalculator(portfolio_trades_df, self.total_initial_capital, self.annualization_factor)
 
             if not calculator.is_valid:
                 raise optuna.TrialPruned("Недостаточно сделок для расчета метрик.")
 
-            for metric_key in METRIC_CONFIG.keys():
-                value = calculator.calculate(metric_key)
+            all_calculated_metrics = calculator.calculate_all()
+            for metric_key, value in all_calculated_metrics.items():
                 trial.set_user_attr(metric_key, value)
 
             if len(self.target_metrics) == 1:

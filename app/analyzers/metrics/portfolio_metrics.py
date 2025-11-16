@@ -2,8 +2,7 @@ import pandas as pd
 import numpy as np
 from typing import Dict, Any
 
-# Здесь мы определяем все, что нужно системе знать о каждой метрике.
-# Добавить новую метрику = добавить новую запись в этот словарь.
+
 METRIC_CONFIG: Dict[str, Dict[str, Any]] = {
     "calmar_ratio": {
         "name": "Calmar Ratio",
@@ -58,8 +57,7 @@ METRIC_CONFIG: Dict[str, Dict[str, Any]] = {
     }
 }
 
-
-class MetricsCalculator:
+class PortfolioMetricsCalculator:
     """
     Рассчитывает различные метрики производительности на основе DataFrame сделок.
     Оптимизирован для многократных вызовов: общие компоненты (equity, returns)
@@ -68,7 +66,6 @@ class MetricsCalculator:
 
     def __init__(self, trades_df: pd.DataFrame, initial_capital: float, annualization_factor: int = 252):
         if trades_df.empty or len(trades_df) < 2:
-            # Если сделок нет или мало, все метрики считаем нулевыми (или худшими)
             self.is_valid = False
             return
 
@@ -80,23 +77,16 @@ class MetricsCalculator:
         # --- Предварительные расчеты, которые используются в нескольких метриках ---
         self.trades['cumulative_pnl'] = self.trades['pnl'].cumsum()
         self.trades['equity_curve'] = self.initial_capital + self.trades['cumulative_pnl']
-
-        # Доходность от сделки к сделке
         self.returns = self.trades['equity_curve'].pct_change().dropna()
         if self.returns.empty:
             self.is_valid = False
             return
 
-        # Просадка
         high_water_mark = self.trades['equity_curve'].cummax()
         drawdown = (self.trades['equity_curve'] - high_water_mark) / high_water_mark
         self.max_drawdown = abs(drawdown.min())
-
-        # Профит-фактор
         self.gross_profit = self.trades[self.trades['pnl'] > 0]['pnl'].sum()
         self.gross_loss = abs(self.trades[self.trades['pnl'] < 0]['pnl'].sum())
-
-        # Продолжительность периода
         start_date = pd.to_datetime(self.trades['entry_timestamp_utc'].iloc[0])
         end_date = pd.to_datetime(self.trades['exit_timestamp_utc'].iloc[-1])
         self.num_days = (end_date - start_date).days if (end_date - start_date).days > 1 else 1
@@ -107,22 +97,31 @@ class MetricsCalculator:
             return -1.0 if METRIC_CONFIG[metric_key]['direction'] == 'maximize' else 1e9
 
         method_map = {
-            "calmar_ratio": self._calculate_calmar,
-            "sharpe_ratio": self._calculate_sharpe,
-            "sortino_ratio": self._calculate_sortino,
-            "profit_factor": self._calculate_profit_factor,
-            "pnl_to_drawdown": self._calculate_pnl_to_drawdown,
-            "sqn": self._calculate_sqn,
-            "pnl": lambda: self.trades['cumulative_pnl'].iloc[-1],
-            "win_rate": lambda: (self.trades['pnl'] > 0).mean(),
-            "max_drawdown": lambda: self.max_drawdown,
-            "custom_metric": self._calculate_custom
+            # ... (все методы расчета _calculate_sharpe, _calculate_calmar и т.д.) ...
         }
 
         if metric_key not in method_map:
             raise ValueError(f"Неизвестная метрика: {metric_key}")
-
         return method_map[metric_key]()
+
+    def calculate_all(self) -> Dict[str, Any]:
+        """Рассчитывает все доступные метрики и возвращает их в виде словаря."""
+        if not self.is_valid:
+            # Возвращаем словарь с нулевыми значениями по умолчанию
+            all_metrics = {key: 0.0 for key in METRIC_CONFIG.keys()}
+            all_metrics['pnl_abs'] = 0.0
+            all_metrics['pnl_pct'] = 0.0
+            all_metrics['total_trades'] = len(self.trades)
+            return all_metrics
+
+        results = {key: self.calculate(key) for key in METRIC_CONFIG.keys()}
+
+        # Добавляем базовые метрики, которые не входят в основной конфиг
+        results['pnl_abs'] = results['pnl']
+        results['pnl_pct'] = (results['pnl'] / self.initial_capital) * 100
+        results['total_trades'] = len(self.trades)
+
+        return results
 
     def _calculate_sharpe(self) -> float:
         if self.returns.std() == 0: return 0.0

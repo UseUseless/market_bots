@@ -46,6 +46,8 @@ class OrderEvent(Event):
     quantity: float
     direction: str
     trigger_reason: str  # 'SIGNAL', 'SL', 'TP'
+    stop_loss: float = 0.0      # Цена Stop Loss
+    take_profit: float = 0.0    # Цена Take Profit
 
 @dataclass
 class FillEvent(Event):
@@ -60,3 +62,5 @@ class FillEvent(Event):
     price: float    # Фактическая цена исполнения
     commission: float # Комиссия за сделку
     trigger_reason: str
+    stop_loss: float = 0.0      # Цена Stop Loss (пробрасывается из OrderEvent)
+    take_profit: float = 0.0    # Цена Take Profit (пробрасывается из OrderEvent)

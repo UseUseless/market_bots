@@ -4,9 +4,7 @@ from typing import Dict, Any
 from app.core.models.event import FillEvent
 from app.core.models.portfolio_state import PortfolioState
 from app.core.models.position import Position
-from app.utils.trade_recorder import log_trade
-from app.strategies.base_strategy import BaseStrategy  # Нужен для доступа к имени
-from app.core.risk.risk_manager import BaseRiskManager
+from app.utils.file_io import save_trade_log
 
 logger = logging.getLogger(__name__)
 
@@ -20,18 +18,29 @@ class FillProcessor:
     - Расчет PnL по закрытым сделкам.
     - Логирование завершенных сделок.
     """
-
     def __init__(self,
                  trade_log_file: str | None,
-                 strategy: BaseStrategy,
-                 risk_manager: BaseRiskManager,
                  exchange: str,
-                 interval: str):
+                 interval: str,
+                 strategy_name: str,
+                 risk_manager_name: str,
+                 risk_manager_params: Dict[str, Any]):
+        """
+        Инициализируется только необходимыми для логирования метаданными.
+
+        :param trade_log_file: Путь к файлу для записи сделок.
+        :param exchange: Название биржи.
+        :param interval: Таймфрейм.
+        :param strategy_name: Имя используемой стратегии.
+        :param risk_manager_name: Имя класса используемого риск-менеджера.
+        :param risk_manager_params: Параметры риск-менеджера.
+        """
         self.trade_log_file = trade_log_file
-        self.strategy = strategy
-        self.risk_manager = risk_manager  # Нужен для доступа к параметрам для логирования
         self.exchange = exchange
         self.interval = interval
+        self.strategy_name = strategy_name
+        self.risk_manager_name = risk_manager_name
+        self.risk_manager_params = risk_manager_params
 
     def process_fill(self, event: FillEvent, state: PortfolioState):
         """
@@ -39,42 +48,26 @@ class FillProcessor:
         """
         instrument = event.instrument
 
-        # Убираем ордер из списка ожидающих, так как он исполнился
         if instrument in state.pending_orders:
             state.pending_orders.remove(instrument)
 
         position = state.positions.get(instrument)
 
-        # --- Сценарий 1: Открытие НОВОЙ позиции ---
         if not position:
             self._handle_fill_open(event, state)
-        # --- Сценарий 2: Закрытие СУЩЕСТВУЮЩЕЙ позиции ---
         else:
             self._handle_fill_close(event, state, position)
 
     def _handle_fill_open(self, event: FillEvent, state: PortfolioState):
         """Обрабатывает исполнение ордера на открытие позиции."""
-
-        # Рассчитываем риск-профиль на основе ФАКТИЧЕСКОЙ цены входа
-        risk_profile = self.risk_manager.calculate_risk_profile(
-            entry_price=event.price,
-            direction=event.direction,
-            capital=state.current_capital,
-            # ВАЖНО: last_candle здесь не нужен, т.к. SL/TP уже не зависят от ATR на момент входа,
-            # а рассчитываются от фактической цены. Для ATR Risk Manager'а это допущение,
-            # что ATR на момент расчета ордера и на момент исполнения почти не изменился.
-            last_candle=None
-        )
-
-        # Создаем новый объект Position
         new_position = Position(
             instrument=event.instrument,
             quantity=event.quantity,
             entry_price=event.price,
             entry_timestamp=event.timestamp,
             direction=event.direction,
-            stop_loss=risk_profile.stop_loss_price,
-            take_profit=risk_profile.take_profit_price
+            stop_loss=event.stop_loss,
+            take_profit=event.take_profit
         )
 
         state.positions[event.instrument] = new_position
@@ -86,20 +79,16 @@ class FillProcessor:
 
     def _handle_fill_close(self, event: FillEvent, state: PortfolioState, position: Position):
         """Обрабатывает исполнение ордера на закрытие позиции."""
-
-        # Рассчитываем финальный PnL
         if position.direction == 'BUY':
             pnl = (event.price - position.entry_price) * event.quantity - event.commission
-        else:  # Для шорта
+        else:
             pnl = (position.entry_price - event.price) * event.quantity - event.commission
 
-        # Обновляем текущий капитал
         state.current_capital += pnl
 
-        # Логируем сделку
-        log_trade(
+        save_trade_log(
             trade_log_file=self.trade_log_file,
-            strategy_name=self.strategy.name,
+            strategy_name=self.strategy_name,
             exchange=self.exchange,
             instrument=event.instrument,
             direction=position.direction,
@@ -110,17 +99,15 @@ class FillProcessor:
             pnl=pnl,
             exit_reason=event.trigger_reason,
             interval=self.interval,
-            risk_manager=self.risk_manager.__class__.__name__  # Логируем имя класса РМ
+            risk_manager=self.risk_manager_name
         )
 
-        # Добавляем данные в историю для финального анализа
         state.closed_trades.append({
             'pnl': pnl,
             'entry_timestamp_utc': position.entry_timestamp,
             'exit_timestamp_utc': event.timestamp
         })
 
-        # Удаляем позицию из словаря активных
         del state.positions[event.instrument]
 
         logger.info(

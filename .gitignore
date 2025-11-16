@@ -23,7 +23,7 @@ __pycache__/
 logs/
 
 # Папка с отчетами
-reports/
+/reports/
 
 # Папка со списками для скачки
 datalists/

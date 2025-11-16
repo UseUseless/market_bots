@@ -3,11 +3,9 @@ import pandas as pd
 from typing import Dict
 import logging
 
-# --- Модели данных ---
 from app.core.models.event import MarketEvent, SignalEvent, FillEvent, Event
 from app.core.models.portfolio_state import PortfolioState
 
-# --- Сервисы ---
 from app.core.services.risk_monitor import RiskMonitor
 from app.core.services.order_manager import OrderManager
 from app.core.services.fill_processor import FillProcessor
