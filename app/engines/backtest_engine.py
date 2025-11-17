@@ -4,7 +4,8 @@ import pandas as pd
 from typing import Dict, Any
 
 from app.core.models.event import MarketEvent, SignalEvent, OrderEvent, FillEvent
-
+from app.core.models.portfolio_state import PortfolioState
+from app.core.services.feature_engine import FeatureEngine
 from app.core.portfolio import Portfolio
 from app.core.data.local_handler import HistoricLocalDataHandler
 from app.core.execution.simulated import SimulatedExecutionHandler
@@ -28,14 +29,16 @@ class BacktestEngine:
     и запуска основного цикла обработки событий.
     """
 
-    def __init__(self, settings: Dict[str, Any]):
+    def __init__(self, settings: Dict[str, Any], events_queue: queue.Queue):
         """
         Инициализирует движок с заданной конфигурацией.
 
         :param settings: Словарь с полной конфигурацией для одного бэктеста.
+        :param events_queue: Внешне созданная очередь событий.
         """
         self.settings = settings
         self.components: Dict[str, Any] = {}
+        self.events_queue = events_queue
 
     def _initialize_components(self) -> None:
         """
@@ -43,7 +46,7 @@ class BacktestEngine:
         Реализует принцип Dependency Injection.
         """
         logger.info("Инициализация компонентов бэктеста...")
-        events_queue = queue.Queue()
+        events_queue = self.events_queue
         self.components['events_queue'] = events_queue
 
         instrument_info = load_instrument_info(
@@ -53,12 +56,15 @@ class BacktestEngine:
             data_dir=self.settings.get("data_dir", PATH_CONFIG["DATA_DIR"])
         )
 
+        feature_engine = FeatureEngine()
+
         strategy_class = self.settings["strategy_class"]
         strategy_params = self.settings.get("strategy_params") or strategy_class.get_default_params()
         strategy = strategy_class(
             events_queue,
             self.settings["instrument"],
             params=strategy_params,
+            feature_engine=feature_engine,
             risk_manager_type=self.settings["risk_manager_type"]
         )
         self.components['strategy'] = strategy
@@ -87,9 +93,11 @@ class BacktestEngine:
         )
         self.components['execution_handler'] = execution_handler
 
+        portfolio_state = PortfolioState(initial_capital=self.settings["initial_capital"])
+
         portfolio = Portfolio(
             events_queue=events_queue,
-            initial_capital=self.settings["initial_capital"],
+            portfolio_state=portfolio_state,
             risk_monitor=risk_monitor,
             order_manager=order_manager,
             fill_processor=fill_processor
@@ -128,7 +136,9 @@ class BacktestEngine:
         return enriched_data
 
     def _run_event_loop(self, enriched_data: pd.DataFrame) -> None:
-        """Запускает главный цикл обработки событий."""
+        """
+        Запускает главный цикл обработки событий с интрабар-логикой.
+        """
         logger.info("Запуск основного цикла обработки событий...")
 
         events_queue = self.components['events_queue']
@@ -137,39 +147,47 @@ class BacktestEngine:
         execution_handler = self.components['execution_handler']
         instrument = self.settings['instrument']
 
-        # Проходим по каждой свече в данных
         for _, current_candle in enriched_data.iterrows():
-            # 1. Всегда сначала кладем в очередь событие о новой свече
+            # Создаем MarketEvent для текущей свечи
             market_event = MarketEvent(
                 timestamp=current_candle['time'],
                 instrument=instrument,
                 data=current_candle
             )
-            events_queue.put(market_event)
 
-            # 2. Обрабатываем все события, которые есть в очереди НА ДАННЫЙ МОМЕНТ
+            # Устанавливаем время симуляции для логгера
+            backtest_time_filter.set_sim_time(market_event.timestamp)
+
+            # 1. ПРИОРИТЕТНАЯ ОБРАБОТКА РИСКОВ (SL/TP)
+            portfolio.update_market_price(market_event)
+
+            # 2. ГЕНЕРАЦИЯ СИГНАЛОВ СТРАТЕГИЕЙ
+            strategy.on_market_event(market_event)
+
+            # 3. ОБРАБОТКА ВСЕХ НАКОПЛЕННЫХ СОБЫТИЙ
             while not events_queue.empty():
                 try:
                     event = events_queue.get(block=False)
                 except queue.Empty:
-                    break # На всякий случай, если очередь опустеет между проверкой и get()
+                    break
 
                 try:
+                    # MarketEvent уже обработан, так что его можно пропустить, если он вдруг попадется
                     if isinstance(event, MarketEvent):
-                        backtest_time_filter.set_sim_time(event.timestamp)
-                        portfolio.update_market_price(event)
-                        strategy.on_market_event(event)
+                        continue
                     elif isinstance(event, SignalEvent):
                         portfolio.on_signal(event)
                     elif isinstance(event, OrderEvent):
-                        # Теперь current_candle всегда определен и актуален для этой итерации
+                        # Исполняем ордер, используя данные ТЕКУЩЕЙ свечи.
+                        # SimulatedExecutionHandler сам разберется, какую цену взять (open или price_hint).
                         execution_handler.execute_order(event, current_candle)
                     elif isinstance(event, FillEvent):
                         portfolio.on_fill(event)
                 except Exception as e:
-                    logger.error(f"Критическая ошибка при обработке события {type(event).__name__}: {e}", exc_info=True)
-                    # Прерываем внутренний цикл и, возможно, внешний
-                    return # Выходим из всего метода при критической ошибке
+                    logger.error(
+                        f"Критическая ошибка при обработке события {type(event).__name__} для {instrument}: {e}",
+                        exc_info=True
+                    )
 
         backtest_time_filter.reset_sim_time()
         logger.info("Основной цикл завершен.")
@@ -200,7 +218,7 @@ class BacktestEngine:
                 "open_positions": portfolio.state.positions
             }
         except Exception as e:
-            logger.error(f"BacktestEngine столкнулся с ошибкой: {e}", exc_info=True)
+            logger.error(f"BacktestEngine столкнулся с ошибкой на верхнем уровне для {self.settings['instrument']}: {e}", exc_info=True)
             return {
                 "status": "error",
                 "message": str(e),

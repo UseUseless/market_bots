@@ -89,6 +89,9 @@ class FixedRiskManager(BaseRiskManager):
         self.tp_ratio = self.params["tp_ratio"]
 
     def calculate_risk_profile(self, entry_price: float, direction: str, capital: float, last_candle: Optional[pd.Series]) -> TradeRiskProfile:
+        if entry_price <= 0:
+            raise ValueError(f"Цена входа должна быть положительной, получено: {entry_price}")
+
         risk_percent = self.risk_percent_long if direction == 'BUY' else self.risk_percent_short
         sl_percent = risk_percent / 100.0
 
@@ -99,11 +102,11 @@ class FixedRiskManager(BaseRiskManager):
             stop_loss_price = entry_price * (1 + sl_percent)
             take_profit_price = entry_price * (1 - (sl_percent * self.tp_ratio))
 
+        if take_profit_price <= 0:
+            take_profit_price = 0.0001
+
         risk_per_share = abs(entry_price - stop_loss_price)
         risk_amount = capital * sl_percent
-
-        if take_profit_price < 0:
-            take_profit_price = 0.0001
 
         return TradeRiskProfile(
             stop_loss_price=stop_loss_price,
@@ -142,20 +145,29 @@ class AtrRiskManager(BaseRiskManager):
 
     def calculate_risk_profile(self, entry_price: float, direction: str, capital: float,
                                last_candle: Optional[pd.Series]) -> TradeRiskProfile:
+        if entry_price <= 0:
+            raise ValueError(f"Цена входа должна быть положительной, получено: {entry_price}")
+
         risk_percent = self.risk_percent_long if direction == 'BUY' else self.risk_percent_short
 
         if last_candle is None:
             raise ValueError("Для AtrRiskManager необходимы данные последней свечи (last_candle).")
 
         atr_value = last_candle.get(f'ATR_{self.atr_period}')
-        if not atr_value or atr_value <= 0:
-            raise ValueError("ATR value is invalid, cannot calculate risk profile.")
+
+        if atr_value is None or atr_value <= 1e-9:
+            raise ValueError(f"ATR value is invalid (None or <=0). Skipping signal. Last candle: {last_candle}")
 
         sl_distance = atr_value * self.sl_multiplier
         stop_loss_price = entry_price - sl_distance if direction == 'BUY' else entry_price + sl_distance
 
         tp_distance = atr_value * self.tp_multiplier
         take_profit_price = entry_price + tp_distance if direction == 'BUY' else entry_price - tp_distance
+
+        if take_profit_price <= 0:
+            # Для шортов при низкой цене входа TP может уйти в минус.
+            # Устанавливаем минимальное положительное значение, чтобы избежать ошибок API.
+            take_profit_price = 0.0001  # Можно сделать динамичным на основе instrument_info.min_price_increment
 
         risk_per_share = abs(entry_price - stop_loss_price)
 

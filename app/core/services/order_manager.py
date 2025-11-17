@@ -75,6 +75,20 @@ class OrderManager:
                     f"Расчетное кол-во: {quantity_float:.4f}, скорректировано до {final_quantity} "
                     f"с учетом правил биржи."
                 )
+
+                # Рассчитываем примерную стоимость ордера.
+                # Для шорт-позиций в будущем здесь потребуется логика маржинальных требований,
+                # но для спотовой торговли (лонг) это прямая стоимость покупки.
+                order_cost = final_quantity * ideal_entry_price
+
+                if order_cost > state.available_capital:
+                    logger.warning(
+                        f"Недостаточно капитала для открытия позиции по {event.instrument}. "
+                        f"Требуется: {order_cost:.2f}, доступно: {state.available_capital:.2f}. "
+                        f"Сигнал проигнорирован."
+                    )
+                    return  # Прерываем выполнение, ордер не будет создан
+
                 order = OrderEvent(
                     timestamp=event.timestamp,
                     instrument=event.instrument,

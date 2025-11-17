@@ -18,11 +18,14 @@ class BaseStrategy(ABC):
     min_history_needed: int = 1
 
     def __init__(self, events_queue: Queue, instrument: str, params: Dict[str, Any],
+                 feature_engine: FeatureEngine,
                  risk_manager_type: str = "FIXED", risk_manager_params: Optional[Dict[str, Any]] = None):
+
         self.events_queue = events_queue
         self.instrument: str = instrument
         self.name: str = self.__class__.__name__
         self.params = params
+        self.feature_engine = feature_engine
 
         self._add_risk_manager_requirements(risk_manager_type, risk_manager_params)
 
@@ -68,8 +71,7 @@ class BaseStrategy(ABC):
         """
         ЕДИНАЯ ТОЧКА ВХОДА для полной обработки данных.
         """
-        feature_engine = FeatureEngine()
-        enriched_data = feature_engine.add_required_features(data, self.required_indicators)
+        enriched_data = self.feature_engine.add_required_features(data, self.required_indicators)
         final_data = self._prepare_custom_features(enriched_data)
         self._required_cols = self._get_required_columns()
         final_data.dropna(inplace=True)

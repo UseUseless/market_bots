@@ -13,7 +13,7 @@ import os
 import logging
 import json
 import time
-from typing import Dict, Any
+from typing import Dict, Any, Tuple
 
 from app.utils.clients.abc import BaseDataClient
 from app.utils.clients.tinkoff import TinkoffHandler
@@ -62,29 +62,29 @@ def _fetch_and_save_instrument_info(client: BaseDataClient, instrument: str, cat
     else:
         logger.warning(f"Не получено метаданных для {instrument.upper()}. Файл не создан.")
 
-
-# --- Публичные функции-оркестраторы (flows) ---
-
-def update_lists_flow(settings: Dict[str, Any]):
+def update_lists_flow(settings: Dict[str, Any]) -> Tuple[bool, str]:
     """
     Основная функция для команды 'update'.
-    Обновляет список топ-N ликвидных инструментов и сохраняет в файл.
+    Обновляет список топ-N ликвидных инструментов и возвращает результат.
 
     :param settings: Словарь настроек. Ожидаемый ключ: 'exchange'.
+    :return: Кортеж (успех: bool, сообщение: str).
     """
     exchange = settings["exchange"]
     logger.info(f"--- Запуск потока обновления списка ликвидных инструментов для биржи: {exchange.upper()} ---")
 
     datalists_dir = PATH_CONFIG["DATALISTS_DIR"]
     os.makedirs(datalists_dir, exist_ok=True)
+    expected_count = DATA_LOADER_CONFIG["LIQUID_INSTRUMENTS_COUNT"]
 
     try:
         client = _get_client(exchange)
-        tickers = client.get_top_liquid_by_turnover(count=DATA_LOADER_CONFIG["LIQUID_INSTRUMENTS_COUNT"])
+        tickers = client.get_top_liquid_by_turnover(count=expected_count)
 
         if not tickers:
-            logger.warning("Получен пустой список тикеров. Файл не будет обновлен.")
-            return
+            message = f"API биржи {exchange.upper()} не вернул список ликвидных инструментов. Файл не был создан."
+            logger.warning(message)
+            return False, message
 
         filename = f"{exchange}_top_liquid_by_turnover.txt"
         file_path = os.path.join(datalists_dir, filename)
@@ -93,10 +93,19 @@ def update_lists_flow(settings: Dict[str, Any]):
             for ticker in tickers:
                 f.write(f"{ticker}\n")
 
-        logger.info(f"Список успешно сохранен в файл: {file_path}. Всего {len(tickers)} тикеров.")
+        actual_count = len(tickers)
+        message = (
+            f"Список ликвидных инструментов для {exchange.upper()} успешно обновлен.\n"
+            f"Файл сохранен в: {file_path}\n"
+            f"Найдено {actual_count} из {expected_count} запрошенных инструментов."
+        )
+        logger.info(f"Список успешно сохранен. Найдено {actual_count} тикеров.")
+        return True, message
 
     except Exception as e:
-        logger.error(f"Произошла ошибка при обновлении списка: {e}", exc_info=True)
+        message = f"Произошла ошибка при обновлении списка для {exchange.upper()}: {e}"
+        logger.error(message, exc_info=True)
+        return False, message
 
 
 def download_data_flow(settings: Dict[str, Any]):

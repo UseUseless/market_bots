@@ -2,6 +2,7 @@ import os
 from datetime import datetime
 import logging
 from typing import Dict, Any, Optional
+import queue
 
 from app.engines.backtest_engine import BacktestEngine
 from app.analyzers.analysis_session import AnalysisSession
@@ -24,7 +25,8 @@ def _run_and_analyze_single_instrument(settings: Dict[str, Any]) -> Optional[Dic
     :return: Словарь с рассчитанными метриками или None в случае ошибки/отсутствия сделок.
     """
     try:
-        engine = BacktestEngine(settings)
+        events_queue = queue.Queue()
+        engine = BacktestEngine(settings, events_queue)
         results = engine.run()
 
         if results["status"] == "success" and not results["trades_df"].empty:

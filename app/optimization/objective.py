@@ -1,6 +1,7 @@
 import optuna
 import pandas as pd
 from typing import Type, List, Dict
+import queue
 
 from app.engines.backtest_engine import BacktestEngine
 from config import BACKTEST_CONFIG, EXCHANGE_SPECIFIC_CONFIG, PATH_CONFIG
@@ -88,7 +89,8 @@ class Objective:
                     "data_dir": PATH_CONFIG["DATA_DIR"]
                 }
 
-                engine = BacktestEngine(backtest_settings)
+                events_queue = queue.Queue()
+                engine = BacktestEngine(backtest_settings, events_queue)
                 backtest_results = engine.run()
 
                 if backtest_results["status"] == "success" and not backtest_results["trades_df"].empty:

@@ -2,6 +2,8 @@ import asyncio
 import logging
 from typing import Dict, Any
 
+from asyncio import Queue as AsyncQueue
+
 from app.engines.live_engine import LiveEngine
 from app.utils.logging_setup import setup_global_logging
 
@@ -32,7 +34,8 @@ def run_live_flow(settings: Dict[str, Any]):
 
     try:
         # Создаем экземпляр движка, передавая ему все настройки
-        engine = LiveEngine(settings)
+        events_queue: AsyncQueue = AsyncQueue()
+        engine = LiveEngine(settings, events_queue)
 
         # Запускаем главный асинхронный метод движка.
         # asyncio.run() автоматически создает и управляет event loop'ом.

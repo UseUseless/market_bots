@@ -97,7 +97,16 @@ class PortfolioMetricsCalculator:
             return -1.0 if METRIC_CONFIG[metric_key]['direction'] == 'maximize' else 1e9
 
         method_map = {
-            # ... (все методы расчета _calculate_sharpe, _calculate_calmar и т.д.) ...
+            "sharpe_ratio": self._calculate_sharpe,
+            "sortino_ratio": self._calculate_sortino,
+            "calmar_ratio": self._calculate_calmar,
+            "profit_factor": self._calculate_profit_factor,
+            "pnl_to_drawdown": self._calculate_pnl_to_drawdown,
+            "sqn": self._calculate_sqn,
+            "custom_metric": self._calculate_custom,
+            "pnl": lambda: self.trades['pnl'].sum(),
+            "win_rate": lambda: (self.trades['pnl'] > 0).mean(),
+            "max_drawdown": lambda: self.max_drawdown,
         }
 
         if metric_key not in method_map:
@@ -118,7 +127,7 @@ class PortfolioMetricsCalculator:
 
         # Добавляем базовые метрики, которые не входят в основной конфиг
         results['pnl_abs'] = results['pnl']
-        results['pnl_pct'] = (results['pnl'] / self.initial_capital) * 100
+        results['pnl_pct'] = (results['pnl'] / self.initial_capital) * 100 if self.initial_capital > 0 else 0.0
         results['total_trades'] = len(self.trades)
 
         return results
@@ -129,22 +138,35 @@ class PortfolioMetricsCalculator:
 
     def _calculate_sortino(self) -> float:
         downside_returns = self.returns[self.returns < 0]
+        if downside_returns.empty:
+            # Если нет убыточных сделок, волатильность убытков равна 0.
+            # Возвращаем большое число, если доходность положительная, иначе 0.
+            return 9999.0 if self.returns.mean() > 0 else 0.0
         downside_std = downside_returns.std()
-        if downside_std == 0: return np.inf if self.returns.mean() > 0 else 0.0
+        if downside_std == 0:
+             return 9999.0 if self.returns.mean() > 0 else 0.0
         return (self.returns.mean() / downside_std) * np.sqrt(self.annualization_factor)
 
     def _calculate_calmar(self) -> float:
-        if self.max_drawdown == 0: return np.inf if self.trades['pnl'].sum() > 0 else 0.0
         total_return = self.trades['cumulative_pnl'].iloc[-1] / self.initial_capital
-        annualized_return = ((1 + total_return) ** (365.0 / self.num_days)) - 1
+        annualized_return = ((1 + total_return) ** (365.0 / self.num_days)) - 1 if self.num_days > 0 else 0.0
+        if self.max_drawdown == 0:
+            # Если просадки не было, это идеальный результат.
+            # Возвращаем большое число, если была прибыль, иначе 0.
+            return 9999.0 if annualized_return > 0 else 0.0
         return annualized_return / self.max_drawdown
 
     def _calculate_profit_factor(self) -> float:
-        if self.gross_loss == 0: return np.inf if self.gross_profit > 0 else 1.0
+        if self.gross_loss == 0:
+            # Если убытков не было, это идеальный результат.
+            # Возвращаем большое число, если была прибыль, иначе 1 (нейтрально).
+            return 9999.0 if self.gross_profit > 0 else 1.0
         return self.gross_profit / self.gross_loss
 
     def _calculate_pnl_to_drawdown(self) -> float:
-        if self.max_drawdown == 0: return np.inf if self.trades['pnl'].sum() > 0 else 0.0
+        if self.max_drawdown == 0:
+            # Если просадки не было, это идеальный результат.
+            return 9999.0 if self.trades['pnl'].sum() > 0 else 0.0
         total_pnl = self.trades['cumulative_pnl'].iloc[-1]
         return total_pnl / (self.max_drawdown * self.initial_capital)
 
@@ -155,7 +177,8 @@ class PortfolioMetricsCalculator:
     def _calculate_custom(self) -> float:
         pf = self._calculate_profit_factor()
         wr = (self.trades['pnl'] > 0).mean()
-        if self.max_drawdown == 0: return np.inf
+        if self.max_drawdown == 0:
+            return 9999.0 if pf > 1 and wr > 0 else 0.0
         # Нормализуем PF, чтобы он не доминировал слишком сильно
         # (например, ограничиваем сверху значением 10)
         normalized_pf = min(pf, 10.0)

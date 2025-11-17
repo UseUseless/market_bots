@@ -6,6 +6,8 @@ import pandas as pd
 from asyncio import Queue as AsyncQueue
 
 from app.core.models.event import Event, MarketEvent, SignalEvent, OrderEvent, FillEvent
+from app.core.models.portfolio_state import PortfolioState
+from app.core.services.feature_engine import FeatureEngine
 from app.core.portfolio import Portfolio
 from app.core.risk.sizer import FixedRiskSizer
 from app.core.services.risk_monitor import RiskMonitor
@@ -33,10 +35,10 @@ class LiveEngine:
     и корректное завершение работы.
     """
 
-    def __init__(self, settings: Dict[str, Any]):
+    def __init__(self, settings: Dict[str, Any], events_queue: AsyncQueue[Event]):
         self.settings = settings
         self.loop = asyncio.get_running_loop()
-        self.events_queue: AsyncQueue[Event] = AsyncQueue()
+        self.events_queue = events_queue
 
         # Атрибуты, которые будут инициализированы
         self.data_client: BaseDataClient | None = None
@@ -89,7 +91,10 @@ class LiveEngine:
 
         # --- 2. Получение информации об инструменте и начального капитала ---
         instrument_info = await self.loop.run_in_executor(
-            None, self.data_client.get_instrument_info, instrument
+            None,
+            self.data_client.get_instrument_info,
+            instrument,
+            category=self.settings.get("category", "linear")
         )
         if not instrument_info:
             raise ConnectionError(f"Не удалось получить информацию об инструменте {instrument}.")
@@ -124,11 +129,17 @@ class LiveEngine:
 
         sync_compatible_queue = AsyncQueuePutter(self.events_queue, self.loop)
 
+        feature_engine = FeatureEngine()
+
         strategy_params = strategy_class.get_default_params()
         rm_params = rm_class.get_default_params()
         self.strategy = strategy_class(
-            sync_compatible_queue, instrument, strategy_params,
-            self.settings['risk_manager_type'], rm_params
+            sync_compatible_queue,
+            instrument,
+            strategy_params,
+            feature_engine,  # Внедряем зависимость
+            self.settings['risk_manager_type'],
+            rm_params
         )
 
         risk_manager = rm_class(params=rm_params)
@@ -147,8 +158,13 @@ class LiveEngine:
             risk_manager_params=rm_params
         )
 
+        portfolio_state = PortfolioState(initial_capital)
         self.portfolio = Portfolio(
-            sync_compatible_queue, initial_capital, risk_monitor, order_manager, fill_processor
+            sync_compatible_queue,
+            portfolio_state,
+            risk_monitor,
+            order_manager,
+            fill_processor
         )
         logger.info("Все компоненты успешно инициализированы.")
 

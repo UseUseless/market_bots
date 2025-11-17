@@ -26,7 +26,7 @@ class Portfolio:
 
     def __init__(self,
                  events_queue: Queue[Event],
-                 initial_capital: float,
+                 portfolio_state: PortfolioState,
                  risk_monitor: RiskMonitor,
                  order_manager: OrderManager,
                  fill_processor: FillProcessor):
@@ -34,7 +34,7 @@ class Portfolio:
         Инициализирует Portfolio, получая все зависимости извне (Dependency Injection).
 
         :param events_queue: Общая очередь событий.
-        :param initial_capital: Начальный капитал.
+        :param portfolio_state: Объект, хранящий состояние портфеля.
         :param risk_monitor: Сервис для проверки SL/TP.
         :param order_manager: Сервис для создания ордеров из сигналов.
         :param fill_processor: Сервис для обработки исполненных ордеров.
@@ -42,7 +42,7 @@ class Portfolio:
         self.events_queue = events_queue
 
         # 1. Инициализация состояния
-        self.state = PortfolioState(initial_capital)
+        self.state = portfolio_state
 
         # 2. Сохранение ссылок на сервисы-обработчики
         self.risk_monitor = risk_monitor

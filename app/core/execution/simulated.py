@@ -55,6 +55,7 @@ class SimulatedExecutionHandler(BaseExecutionHandler):
         # 1. Определяем "идеальную" цену исполнения.
         #    - Если в OrderEvent есть price_hint (от SL/TP), используем его.
         #    - Иначе (ордер по сигналу), используем цену открытия следующей свечи.
+        #   Это устранение Look-Ahead Bias.
         if event.price_hint is not None:
             ideal_price = event.price_hint
         else:

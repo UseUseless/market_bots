@@ -111,6 +111,13 @@ class HistoricLocalDataHandler:
 
             logger.info(f"DataHandler (Local): Успешно загружено {len(df)} свечей из файла.")
 
+            if df['time'].dt.tz is None:
+                logger.warning("Время в локальном файле не имеет таймзоны. Принудительно локализуется в UTC.")
+                df['time'] = df['time'].dt.tz_localize('UTC')
+            else:
+                # Если таймзона уже есть, просто конвертируем ее в UTC на всякий случай
+                df['time'] = df['time'].dt.tz_convert('UTC')
+
             df_filled = self._resample_and_fill_gaps(df)
             df_final = self._filter_main_session(df_filled)
 

@@ -92,7 +92,7 @@ class BybitHandler(BaseDataClient, BaseTradeClient):
 
         if not all_candles: return pd.DataFrame()
         df = pd.DataFrame(all_candles, columns=["time", "open", "high", "low", "close", "volume", "turnover"])
-        df['time'] = pd.to_datetime(df['time'].astype(float), unit='ms')
+        df['time'] = pd.to_datetime(df['time'].astype(float), unit='ms', utc=True)
         df = df[["time", "open", "high", "low", "close", "volume"]]
         for col in ["open", "high", "low", "close", "volume"]:
             df[col] = pd.to_numeric(df[col])

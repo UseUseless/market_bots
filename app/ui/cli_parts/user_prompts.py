@@ -90,15 +90,23 @@ def prompt_for_data_management() -> Optional[Dict[str, Any]]:
 
             if "Отдельные тикеры" in download_mode:
                 instruments_str = ask(questionary.text, f"Введите тикеры для {exchange.upper()} через пробел:")
-                settings["instrument"] = instruments_str.split()
+                # Добавил .strip().upper() для очистки и стандартизации тикеров
+                settings["instrument"] = [ticker.strip().upper() for ticker in instruments_str.split() if
+                                          ticker.strip()]
             else:
                 lists_dir = PATH_CONFIG["DATALISTS_DIR"]
                 available_lists = [f for f in os.listdir(lists_dir) if
                                    f.startswith(exchange) and f.endswith('.txt')] if os.path.isdir(lists_dir) else []
+
+                # --- ИЗМЕНЕНИЕ №1: Используем questionary.print для вывода ---
                 if not available_lists:
-                    print(
-                        f"Не найдено готовых списков для {exchange.upper()}. Создайте их через соответствующий пункт меню.")
-                    return None
+                    questionary.print(
+                        f"\n[!] Не найдено готовых списков для биржи {exchange.upper()} в папке '{lists_dir}'.",
+                        style="bold yellow")
+                    questionary.print("Сначала создайте их, выбрав 'Обновить списки ликвидных инструментов'.",
+                                      style="yellow")
+                    return None  # Возвращаем None, чтобы главный цикл просто вернулся в меню
+
                 selected_list = ask(questionary.select, "Выберите список для скачивания:",
                                     choices=[*available_lists, GO_BACK_OPTION])
                 settings["list"] = selected_list
@@ -112,9 +120,8 @@ def prompt_for_data_management() -> Optional[Dict[str, Any]]:
             return settings
 
     except UserCancelledError:
-        return None
-    return None
-
+        # Эта ошибка будет поймана в main() и там будет выведено сообщение
+        raise
 
 def prompt_for_backtest_settings() -> Optional[Dict[str, Any]]:
     """Проводит диалог для сбора настроек бэктеста и возвращает их."""

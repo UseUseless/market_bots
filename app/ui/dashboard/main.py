@@ -1,10 +1,10 @@
 import streamlit as st
 import pandas as pd
 
-from .components.data_loader import load_all_backtests
-from .components.sidebar import render_sidebar
-from .components.detailed_view import render_detailed_view
-from .components.comparison_view import render_comparison_view
+from app.ui.dashboard.components.data_loader import load_all_backtests
+from app.ui.dashboard.components.sidebar import render_sidebar
+from app.ui.dashboard.components.detailed_view import render_detailed_view
+from app.ui.dashboard.components.comparison_view import render_comparison_view
 from config import PATH_CONFIG
 
 def style_summary_table(df: pd.DataFrame) -> "pd.io.formats.style.Styler":

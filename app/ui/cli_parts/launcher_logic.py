@@ -10,7 +10,6 @@ from app.flows.optimization_flow import run_optimization_flow
 from app.flows.live_flow import run_live_flow
 from app.flows.data_management_flow import update_lists_flow, download_data_flow
 
-# --- Импорты логики UI ---
 from . import user_prompts
 
 
@@ -18,11 +17,16 @@ def dispatch_data_management(settings: Dict[str, Any]):
     """Вызывает нужный flow для управления данными."""
     action = settings.pop("action")
     if action == "update":
-        print(f"\nЗапускаю обновление для {settings['exchange'].upper()}...\n")
-        update_lists_flow(settings)
+        print(f"\nЗапускаю обновление для {settings['exchange'].upper()}...")
+        success, message = update_lists_flow(settings)
+        style = "bold green" if success else "bold red"
+        questionary.print(f"\n{message}", style=style)
+
     elif action == "download":
         print("\nЗапускаю скачивание...\n")
         download_data_flow(settings)
+        questionary.print("\nПроцесс скачивания завершен. Проверьте логи и папку /data.", style="bold blue")
+
 
 def dispatch_backtest(settings: Dict[str, Any]):
     """Вызывает нужный flow для бэктеста (одиночный или пакетный)."""
@@ -33,16 +37,22 @@ def dispatch_backtest(settings: Dict[str, Any]):
     elif mode == "batch":
         print("\nЗапускаю массовый бэктест...")
         run_batch_backtest_flow(settings)
+    questionary.print("\nОперация завершена. Смотрите отчеты в папках /reports и /logs.", style="bold blue")
+
 
 def dispatch_optimization(settings: Dict[str, Any]):
     """Вызывает flow для оптимизации."""
     print("\nЗапускаю Walk-Forward Optimizer... Это может занять много времени.")
     run_optimization_flow(settings)
+    print("\nОптимизация завершена.")
+
 
 def dispatch_live_trading(settings: Dict[str, Any]):
     """Вызывает flow для live-торговли."""
     print("\nЗапускаю live-бота... Нажмите Ctrl+C, чтобы остановить.")
     run_live_flow(settings)
+    print("\nLive-сессия завершена.")
+
 
 def run_dashboard():
     """Запускает Streamlit дашборд как внешний процесс."""
@@ -53,13 +63,11 @@ def run_dashboard():
     try:
         subprocess.run(command)
     except FileNotFoundError:
-        print("\n[Ошибка] Команда 'streamlit' не найдена.")
-        print("Убедитесь, что Streamlit установлен и доступен в вашем окружении (pip install streamlit).")
+        questionary.print("\n[Ошибка] Команда 'streamlit' не найдена.", style="bold red")
+        questionary.print("Убедитесь, что Streamlit установлен и доступен в вашем окружении (pip install streamlit).")
     except Exception as e:
-        print(f"\nНе удалось запустить дашборд: {e}")
+        questionary.print(f"\nНе удалось запустить дашборд: {e}", style="bold red")
 
-# Конфигурация меню связывает название пункта с функцией-промптером и функцией-диспетчером.
-# 'None' используется для разделителей или пунктов без логики.
 MENU_CONFIG: Dict[str, Optional[Tuple[Optional[Callable], Optional[Callable]]]] = {
     "1. Управление данными (скачать/обновить)": (user_prompts.prompt_for_data_management, dispatch_data_management),
     "-----------------------------------------": None,
@@ -78,38 +86,39 @@ def main():
 
         try:
             choice_str = questionary.select("Главное меню:", choices=choices, use_indicator=True).ask()
-            if choice_str is None: # Обработка Ctrl+C на самом меню
-                print("Завершение работы.")
+            if choice_str is None:
+                print("\nЗавершение работы.")
                 break
 
             action_config = MENU_CONFIG.get(choice_str)
             if not action_config or action_config[0] == "EXIT":
-                print("Завершение работы.")
+                print("\nЗавершение работы.")
                 break
 
             prompt_func, dispatch_func = action_config
 
             settings = None
             if prompt_func:
-                # Запускаем диалог для сбора настроек
                 print(f"\n--- {choice_str.split('. ')[1]} ---")
                 settings = prompt_func()
 
-            if settings is not None:
-                # Если диалог прошел успешно, запускаем соответствующий диспетчер
+            # Если settings - это словарь, значит, пользователь успешно прошел диалог.
+            if isinstance(settings, dict):
                 dispatch_func(settings)
-                input("\nНажмите Enter, чтобы вернуться в главное меню...")
+                # Используем questionary.text для паузы, чтобы избежать конфликтов с консолью
+                questionary.text("Нажмите Enter, чтобы вернуться в главное меню...").ask()
+
+            # Если это действие без диалога (например, дашборд)
             elif prompt_func is None and dispatch_func:
-                # Для пунктов без диалога, как Dashboard
                 dispatch_func()
-            else:
-                # Если пользователь отменил диалог (settings is None)
-                print("\nОперация отменена. Возврат в главное меню.")
+                questionary.text("Нажмите Enter, чтобы вернуться в главное меню...").ask()
 
         except (user_prompts.UserCancelledError, KeyboardInterrupt):
-            print("\nОперация отменена. Возврат в главное меню.")
+            # Обработка явной отмены пользователем (Ctrl+C)
+            questionary.print("\n\nОперация отменена пользователем.", style="bold yellow")
+            questionary.text("Нажмите Enter, чтобы вернуться в главное меню...").ask()
         except Exception as e:
-            print(f"\nПроизошла критическая ошибка в главном цикле: {e}\n")
+            questionary.print(f"\nПроизошла критическая ошибка в главном цикле: {e}\n", style="bold red")
             import traceback
             traceback.print_exc()
-            input("\nНажмите Enter, чтобы вернуться в главное меню...")
+            questionary.text("Нажмите Enter, чтобы вернуться в главное меню...").ask()

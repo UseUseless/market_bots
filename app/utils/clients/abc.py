@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Literal, List
+from typing import Literal, List, Dict, Any
 import pandas as pd
 
 TradeModeType = Literal["REAL", "SANDBOX"]
@@ -13,7 +13,7 @@ class BaseDataClient(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def get_instrument_info(self, instrument: str, **kwargs) -> dict:
+    def get_instrument_info(self, instrument: str, **kwargs) -> Dict[str, Any]:
         """Загружает метаданные об инструменте (лот, шаг цены и т.д.)."""
         raise NotImplementedError
 
@@ -26,6 +26,6 @@ class BaseTradeClient(ABC):
     """Абстрактный 'контракт' для всех клиентов, исполняющих ордера (через API)."""
 
     @abstractmethod
-    def place_market_order(self, instrument_id: str, quantity: int, direction: str):
+    def place_market_order(self, instrument_id: str, quantity: float, direction: str, **kwargs):
         """Размещает рыночный ордер."""
         raise NotImplementedError

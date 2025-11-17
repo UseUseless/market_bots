@@ -167,10 +167,13 @@ class TinkoffHandler(BaseDataClient, BaseTradeClient):
             logging.error(f"Ошибка API при получении данных для {figi}: {e.details}")
             return pd.DataFrame()
         df = pd.DataFrame(all_candles)
-        if not df.empty: df['time'] = pd.to_datetime(df['time'])
+        if not df.empty:
+            # API Tinkoff возвращает UTC-aware datetime, но для консистентности
+            # явно приводим столбец к типу datetime64[ns, UTC].
+            df['time'] = pd.to_datetime(df['time'], utc=True)
         return df
 
-    def get_instrument_info(self, instrument: str, category: str = None) -> dict:
+    def get_instrument_info(self, instrument: str, **kwargs) -> dict:
         logging.info(f"Tinkoff Client: Запрос информации об инструменте {instrument}...")
         try:
             figi = self._resolve_figi(instrument)
@@ -211,7 +214,6 @@ class TinkoffHandler(BaseDataClient, BaseTradeClient):
                 # Шаг 2: Для каждой акции рассчитываем суммарный оборот за месяц
                 for share_info in tqdm(tqbr_shares, desc="Получение месячных оборотов по акциям"):
                     try:
-                        # ИЗМЕНЕНИЕ: Запрашиваем дневные свечи за последний 31 день
                         candles_response = client.market_data.get_candles(
                             figi=share_info.figi,
                             from_=now() - timedelta(days=31),
