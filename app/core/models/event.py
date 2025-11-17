@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 import pandas as pd
+from typing import Optional
 
 @dataclass
 class Event:
@@ -48,6 +49,7 @@ class OrderEvent(Event):
     trigger_reason: str  # 'SIGNAL', 'SL', 'TP'
     stop_loss: float = 0.0      # Цена Stop Loss
     take_profit: float = 0.0    # Цена Take Profit
+    price_hint: Optional[float] = None
 
 @dataclass
 class FillEvent(Event):

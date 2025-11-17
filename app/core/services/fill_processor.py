@@ -67,7 +67,8 @@ class FillProcessor:
             entry_timestamp=event.timestamp,
             direction=event.direction,
             stop_loss=event.stop_loss,
-            take_profit=event.take_profit
+            take_profit=event.take_profit,
+            entry_commission=event.commission
         )
 
         state.positions[event.instrument] = new_position
@@ -79,10 +80,15 @@ class FillProcessor:
 
     def _handle_fill_close(self, event: FillEvent, state: PortfolioState, position: Position):
         """Обрабатывает исполнение ордера на закрытие позиции."""
+        gross_pnl = 0.0
         if position.direction == 'BUY':
-            pnl = (event.price - position.entry_price) * event.quantity - event.commission
-        else:
-            pnl = (position.entry_price - event.price) * event.quantity - event.commission
+            gross_pnl = (event.price - position.entry_price) * event.quantity
+        else:  # 'SELL'
+            gross_pnl = (position.entry_price - event.price) * event.quantity
+
+        commission_exit = event.commission
+        commission_entry = position.entry_commission
+        pnl = gross_pnl - commission_entry - commission_exit
 
         state.current_capital += pnl
 
@@ -112,5 +118,6 @@ class FillProcessor:
 
         logger.info(
             f"Позиция ЗАКРЫТА по причине '{event.trigger_reason}': {event.instrument}. "
-            f"PnL: {pnl:.2f}. Капитал: {state.current_capital:.2f}"
+            f"PnL: {pnl:.2f} (Gross: {gross_pnl:.2f}, Comm: {commission_entry + commission_exit:.2f}). "
+            f"Капитал: {state.current_capital:.2f}"
         )

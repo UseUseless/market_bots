@@ -52,20 +52,13 @@ class SimulatedExecutionHandler(BaseExecutionHandler):
         if last_candle is None:
             raise ValueError("Для симуляции исполнения необходимы данные последней свечи.")
 
-        # 1. Определяем "идеальную" цену исполнения
-        # Для ордеров по сигналу - цена открытия следующей свечи.
-        # Для SL/TP - сам уровень SL/TP, так как мы предполагаем их срабатывание.
-        if event.trigger_reason == "SIGNAL":
+        # 1. Определяем "идеальную" цену исполнения.
+        #    - Если в OrderEvent есть price_hint (от SL/TP), используем его.
+        #    - Иначе (ордер по сигналу), используем цену открытия следующей свечи.
+        if event.price_hint is not None:
+            ideal_price = event.price_hint
+        else:
             ideal_price = last_candle['open']
-        elif event.trigger_reason == "SL":
-            # Здесь нужна логика получения цены SL из позиции, но ExecutionHandler
-            # не знает о позициях. Поэтому мы делаем допущение, что цена SL/TP
-            # передается в OrderEvent или мы используем цену open/close свечи.
-            # Пока для простоты используем 'open'.
-            # TODO: Улучшить логику определения цены для SL/TP.
-            ideal_price = last_candle['open']  # Упрощение
-        elif event.trigger_reason == "TP":
-            ideal_price = last_candle['open']  # Упрощение
 
         # 2. Рассчитываем РЕАЛЬНУЮ цену исполнения с учетом проскальзывания
         execution_price = self._simulate_slippage(

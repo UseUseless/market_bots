@@ -53,31 +53,31 @@ class RiskMonitor:
         if position.direction == 'BUY':
             # Приоритетная проверка Stop Loss
             if candle_low <= position.stop_loss:
-                logger.info(f"!!! СРАБОТАЛ STOP LOSS для {position.instrument}. Генерирую ордер на закрытие.")
-                self._generate_exit_order(event.timestamp, position, "SL")
+                logger.info(f"!!! СРАБОТАЛ STOP LOSS для {position.instrument} по цене {position.stop_loss:.4f}. Генерирую ордер на закрытие.")
+                self._generate_exit_order(event.timestamp, position, "SL", position.stop_loss)
                 return  # Выходим, чтобы не проверять TP на этой же свече
 
             # Проверка Take Profit (только если SL не сработал)
             if candle_high >= position.take_profit:
-                logger.info(f"!!! СРАБОТАЛ TAKE PROFIT для {position.instrument}. Генерирую ордер на закрытие.")
-                self._generate_exit_order(event.timestamp, position, "TP")
+                logger.info(f"!!! СРАБОТАЛ TAKE PROFIT для {position.instrument} по цене {position.take_profit:.4f}. Генерирую ордер на закрытие.")
+                self._generate_exit_order(event.timestamp, position, "TP", position.take_profit)
                 return
 
         # --- Проверка для КОРОТКОЙ позиции (SELL) ---
         elif position.direction == 'SELL':
             # Приоритетная проверка Stop Loss
             if candle_high >= position.stop_loss:
-                logger.info(f"!!! СРАБОТАЛ STOP LOSS для {position.instrument}. Генерирую ордер на закрытие.")
-                self._generate_exit_order(event.timestamp, position, "SL")
+                logger.info(f"!!! СРАБОТАЛ STOP LOSS для {position.instrument} по цене {position.stop_loss:.4f}. Генерирую ордер на закрытие.")
+                self._generate_exit_order(event.timestamp, position, "SL", position.stop_loss)
                 return
 
             # Проверка Take Profit (только если SL не сработал)
             if candle_low <= position.take_profit:
-                logger.info(f"!!! СРАБОТАЛ TAKE PROFIT для {position.instrument}. Генерирую ордер на закрытие.")
-                self._generate_exit_order(event.timestamp, position, "TP")
+                logger.info(f"!!! СРАБОТАЛ TAKE PROFIT для {position.instrument} по цене {position.take_profit:.4f}. Генерирую ордер на закрытие.")
+                self._generate_exit_order(event.timestamp, position, "TP", position.take_profit)
                 return
 
-    def _generate_exit_order(self, timestamp: datetime, position: Position, reason: str):
+    def _generate_exit_order(self, timestamp: datetime, position: Position, reason: str, execution_price: float):
         """
         Создает и отправляет в очередь событие OrderEvent на закрытие позиции.
         """
@@ -87,9 +87,7 @@ class RiskMonitor:
             instrument=position.instrument,
             quantity=position.quantity,
             direction=exit_direction,
-            trigger_reason=reason
+            trigger_reason=reason,
+            price_hint=execution_price
         )
         self.events_queue.put(order)
-        # ПРИМЕЧАНИЕ: добавление в pending_orders будет происходить в FillProcessor
-        # при обработке этого ордера, чтобы логика была в одном месте.
-        # Здесь мы только генерируем событие.
