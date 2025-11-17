@@ -3,7 +3,6 @@ import os
 import subprocess
 from typing import Dict, Any, Callable, Tuple, Optional
 
-# --- Импорты бизнес-логики из app/flows ---
 from app.flows.backtest_flow import run_single_backtest_flow
 from app.flows.batch_backtest_flow import run_batch_backtest_flow
 from app.flows.optimization_flow import run_optimization_flow
@@ -12,10 +11,10 @@ from app.flows.data_management_flow import update_lists_flow, download_data_flow
 
 from . import user_prompts
 
-
 def dispatch_data_management(settings: Dict[str, Any]):
     """Вызывает нужный flow для управления данными."""
     action = settings.pop("action")
+
     if action == "update":
         print(f"\nЗапускаю обновление для {settings['exchange'].upper()}...")
         success, message = update_lists_flow(settings)

@@ -1,6 +1,7 @@
 import questionary
 import os
 from typing import Dict, Optional, List, Type, Any
+import logging
 
 from . import dialogs as ui_helpers
 from app.strategies.base_strategy import BaseStrategy
@@ -15,6 +16,7 @@ class UserCancelledError(Exception):
 
 GO_BACK_OPTION = "Назад"
 
+logger = logging.getLogger(__name__)
 
 def ask(question_func, *args, **kwargs):
     """
@@ -70,16 +72,21 @@ def _select_metrics_for_optimization() -> List[str]:
 
 def prompt_for_data_management() -> Optional[Dict[str, Any]]:
     """Проводит диалог для управления данными и возвращает словарь с настройками."""
+
+    UPDATE_LISTS = "Обновить списки ликвидных инструментов"
+    DOWNLOAD_DATA = "Скачать исторические данные"
+
     try:
         action = ask(
             questionary.select, "Выберите действие:",
-            choices=["Обновить списки ликвидных инструментов", "Скачать исторические данные", GO_BACK_OPTION]
+            choices=[UPDATE_LISTS, DOWNLOAD_DATA, GO_BACK_OPTION]
         )
-        if "Обновить списки" in action:
+
+        if action == UPDATE_LISTS:
             exchange = ask(questionary.select, "Выберите биржу:", choices=["tinkoff", "bybit", GO_BACK_OPTION])
             return {"action": "update", "exchange": exchange}
 
-        elif "Скачать данные" in action:
+        elif action == DOWNLOAD_DATA:
             download_mode = ask(
                 questionary.select, "Что вы хотите скачать?",
                 choices=["Отдельные тикеры (ручной ввод)", "Готовый список инструментов", GO_BACK_OPTION]
@@ -90,23 +97,15 @@ def prompt_for_data_management() -> Optional[Dict[str, Any]]:
 
             if "Отдельные тикеры" in download_mode:
                 instruments_str = ask(questionary.text, f"Введите тикеры для {exchange.upper()} через пробел:")
-                # Добавил .strip().upper() для очистки и стандартизации тикеров
-                settings["instrument"] = [ticker.strip().upper() for ticker in instruments_str.split() if
-                                          ticker.strip()]
+                settings["instrument"] = instruments_str.split()
             else:
                 lists_dir = PATH_CONFIG["DATALISTS_DIR"]
                 available_lists = [f for f in os.listdir(lists_dir) if
                                    f.startswith(exchange) and f.endswith('.txt')] if os.path.isdir(lists_dir) else []
-
-                # --- ИЗМЕНЕНИЕ №1: Используем questionary.print для вывода ---
                 if not available_lists:
-                    questionary.print(
-                        f"\n[!] Не найдено готовых списков для биржи {exchange.upper()} в папке '{lists_dir}'.",
-                        style="bold yellow")
-                    questionary.print("Сначала создайте их, выбрав 'Обновить списки ликвидных инструментов'.",
-                                      style="yellow")
-                    return None  # Возвращаем None, чтобы главный цикл просто вернулся в меню
-
+                    print(
+                        f"Не найдено готовых списков для {exchange.upper()}. Создайте их через соответствующий пункт меню.")
+                    return None
                 selected_list = ask(questionary.select, "Выберите список для скачивания:",
                                     choices=[*available_lists, GO_BACK_OPTION])
                 settings["list"] = selected_list
@@ -117,11 +116,18 @@ def prompt_for_data_management() -> Optional[Dict[str, Any]]:
                        validate=lambda text: text.isdigit() and int(text) > 0)
 
             settings.update({"interval": interval, "days": int(days)})
+
+            if exchange == 'bybit':
+                category = ask(questionary.select, "Выберите категорию рынка Bybit:",
+                               choices=["linear", "spot", "inverse", GO_BACK_OPTION], default="linear")
+                settings["category"] = category
+
             return settings
 
     except UserCancelledError:
-        # Эта ошибка будет поймана в main() и там будет выведено сообщение
-        raise
+        logger.warning("Caught UserCancelledError, returning None.")
+        return None
+    return None
 
 def prompt_for_backtest_settings() -> Optional[Dict[str, Any]]:
     """Проводит диалог для сбора настроек бэктеста и возвращает их."""
