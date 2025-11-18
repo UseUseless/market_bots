@@ -4,6 +4,7 @@ from typing import Dict, Any, Optional
 
 from app.strategies.base_strategy import BaseStrategy
 from app.core.models.event import SignalEvent
+from app.core.services.feature_engine import FeatureEngine
 
 
 class SimpleSMACrossStrategy(BaseStrategy):
@@ -31,14 +32,15 @@ class SimpleSMACrossStrategy(BaseStrategy):
     }
 
     def __init__(self, events_queue: Queue, instrument: str, params: Dict[str, Any],
-                 risk_manager_type: str, risk_manager_params: Optional[Dict[str, Any]] = None):
+                 feature_engine: FeatureEngine, risk_manager_type: str, risk_manager_params: Optional[Dict[str, Any]] = None):
         self.sma_period = params["sma_period"]
 
         self.min_history_needed = self.sma_period + 1
         self.required_indicators = [{"name": "sma", "params": {"period": self.sma_period}}]
         self.sma_name = f"SMA_{self.sma_period}"
 
-        super().__init__(events_queue, instrument, params, risk_manager_type, risk_manager_params)
+        super().__init__(events_queue, instrument, params, feature_engine,
+                         risk_manager_type, risk_manager_params)
 
     def _calculate_signals(self, prev_candle: pd.Series, last_candle: pd.Series, timestamp: pd.Timestamp):
         """

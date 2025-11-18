@@ -78,7 +78,7 @@ class FixedRiskManager(BaseRiskManager):
         **BaseRiskManager.params_config,
         "tp_ratio": {
             "type": "float", "default": 2.0, "optimizable": True,
-            "low": 1.0, "high": 7.0, "step": 0.25,
+            "low": 1.0, "high": 4.0, "step": 0.25,
             "description": "Соотношение Risk/Reward (TP/SL)."
         }
     }

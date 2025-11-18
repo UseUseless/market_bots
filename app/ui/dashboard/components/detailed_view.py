@@ -130,6 +130,8 @@ def render_detailed_view(filtered_df: pd.DataFrame):
     """
     st.header("Детальный анализ отдельного бэктеста")
 
+    st.write("Колонки в `filtered_df`:", filtered_df.columns.tolist())
+
     if filtered_df.empty:
         st.warning("По выбранным фильтрам не найдено ни одного бэктеста для детального анализа.")
         return
@@ -143,7 +145,8 @@ def render_detailed_view(filtered_df: pd.DataFrame):
     if selected_file:
         # --- 1. Загрузка данных ---
         row = filtered_df[filtered_df["File"] == selected_file].iloc[0]
-        trades_df = load_trades_from_file(os.path.join(PATH_CONFIG["LOGS_DIR"], selected_file))
+        full_log_path = row["File Path"]
+        trades_df = load_trades_from_file(full_log_path)
         data_path = os.path.join(
             PATH_CONFIG["DATA_DIR"], row["Exchange"], row["Interval"],
             f"{row['Instrument'].upper()}.parquet"

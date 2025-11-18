@@ -8,6 +8,7 @@ from app.core.models.portfolio_state import PortfolioState
 from app.core.risk.risk_manager import BaseRiskManager
 from app.core.risk.sizer import BasePositionSizer
 from app.core.services.instrument_rules import InstrumentRulesValidator
+from config import BACKTEST_CONFIG
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,7 @@ class OrderManager:
         self.risk_manager = risk_manager
         self.position_sizer = position_sizer
         self.rules_validator = InstrumentRulesValidator(instrument_info)
+        self.max_exposure = BACKTEST_CONFIG.get("MAX_POSITION_EXPOSURE", 0.9)
 
     def process_signal(self, event: SignalEvent, state: PortfolioState, last_candle: pd.Series):
         """
@@ -51,43 +53,57 @@ class OrderManager:
             self._handle_exit_signal(event, state)
 
     def _handle_entry_signal(self, event: SignalEvent, state: PortfolioState, last_candle: pd.Series):
-        """Обрабатывает сигнал на открытие новой позиции."""
+        """
+        Обрабатывает сигнал на открытие новой позиции с двухступенчатым контролем размера.
+        """
         ideal_entry_price = last_candle['open']
 
+        if ideal_entry_price <= 0:
+            logger.warning(f"Идеальная цена входа равна нулю или отрицательна для {event.instrument}. Сигнал проигнорирован.")
+            return
+
         try:
-            # 1. Рассчитываем профиль риска (SL, TP, риск на акцию)
+            # --- Шаг 1: Расчет размера позиции на основе РИСКА НА СДЕЛКУ ---
+            # Используем ОБЩИЙ текущий капитал для расчета допустимого убытка.
             risk_profile = self.risk_manager.calculate_risk_profile(
                 entry_price=ideal_entry_price,
                 direction=event.direction,
                 capital=state.current_capital,
                 last_candle=last_candle
             )
+            quantity_from_risk = self.position_sizer.calculate_size(risk_profile)
 
-            # 2. Рассчитываем "идеальное" количество на основе профиля риска
-            quantity_float = self.position_sizer.calculate_size(risk_profile)
+            # --- Шаг 2: Расчет размера позиции на основе ЛИМИТА КОНЦЕНТРАЦИИ ---
+            # Используем ОБЩИЙ текущий капитал для расчета максимального размера вложения.
+            max_investment_amount = state.current_capital * self.max_exposure
+            quantity_from_exposure = max_investment_amount / ideal_entry_price
 
-            # 3. Корректируем количество с учетом правил биржи (лотность, шаг и т.д.)
-            final_quantity = self.rules_validator.adjust_quantity(quantity_float)
+            # --- Шаг 3: Выбор наиболее консервативного (наименьшего) размера ---
+            final_quantity_ideal = min(quantity_from_risk, quantity_from_exposure)
 
-            # 4. Если расчетное количество больше нуля, генерируем ордер.
+            # --- Шаг 4: Корректировка по правилам биржи (лотность, шаг) ---
+            final_quantity = self.rules_validator.adjust_quantity(final_quantity_ideal)
+
+            # --- Шаг 5: Финальная проверка и создание ордера ---
             if final_quantity > 0:
+                # Определяем, какой из лимитов сработал, для логирования
+                limiting_factor = "Риск" if quantity_from_risk < quantity_from_exposure else "Концентрация"
                 logger.info(
-                    f"Расчетное кол-во: {quantity_float:.4f}, скорректировано до {final_quantity} "
-                    f"с учетом правил биржи."
+                    f"Расчет размера позиции ({limiting_factor} лимит): "
+                    f"Q(риск): {quantity_from_risk:.2f}, Q(конц): {quantity_from_exposure:.2f} -> "
+                    f"Выбрано: {final_quantity_ideal:.2f} -> Скорректировано: {final_quantity}"
                 )
 
-                # Рассчитываем примерную стоимость ордера.
-                # Для шорт-позиций в будущем здесь потребуется логика маржинальных требований,
-                # но для спотовой торговли (лонг) это прямая стоимость покупки.
                 order_cost = final_quantity * ideal_entry_price
 
+                # Финальный предохранитель: проверяем, хватает ли СВОБОДНЫХ средств.
                 if order_cost > state.available_capital:
                     logger.warning(
-                        f"Недостаточно капитала для открытия позиции по {event.instrument}. "
+                        f"Недостаточно СВОБОДНОГО капитала для открытия позиции по {event.instrument}. "
                         f"Требуется: {order_cost:.2f}, доступно: {state.available_capital:.2f}. "
                         f"Сигнал проигнорирован."
                     )
-                    return  # Прерываем выполнение, ордер не будет создан
+                    return
 
                 order = OrderEvent(
                     timestamp=event.timestamp,

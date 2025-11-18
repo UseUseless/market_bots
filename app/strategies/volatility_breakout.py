@@ -5,6 +5,7 @@ from typing import Dict, Any, Optional
 
 from app.core.models.event import SignalEvent
 from app.strategies.base_strategy import BaseStrategy
+from app.core.services.feature_engine import FeatureEngine
 
 logger = logging.getLogger('backtester')
 
@@ -37,7 +38,7 @@ class VolatilityBreakoutStrategy(BaseStrategy):
     }
 
     def __init__(self, events_queue: Queue, instrument: str, params: Dict[str, Any],
-                 risk_manager_type: str, risk_manager_params: Optional[Dict[str, Any]] = None):
+                 feature_engine: FeatureEngine, risk_manager_type: str, risk_manager_params: Optional[Dict[str, Any]] = None):
 
         # 1. Извлекаем параметры из `params`
         self.variant = params["variant"]
@@ -69,7 +70,8 @@ class VolatilityBreakoutStrategy(BaseStrategy):
         self.min_history_needed += 1
 
         # 3. Вызываем родительский __init__
-        super().__init__(events_queue, instrument, params, risk_manager_type, risk_manager_params)
+        super().__init__(events_queue, instrument, params,
+                         feature_engine, risk_manager_type, risk_manager_params)
 
         # 4. Инициализация состояний
         self.state = {

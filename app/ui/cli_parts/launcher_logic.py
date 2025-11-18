@@ -8,7 +8,7 @@ from app.flows.batch_backtest_flow import run_batch_backtest_flow
 from app.flows.optimization_flow import run_optimization_flow
 from app.flows.live_flow import run_live_flow
 from app.flows.data_management_flow import update_lists_flow, download_data_flow
-
+from config import BASE_DIR
 from . import user_prompts
 
 def dispatch_data_management(settings: Dict[str, Any]):
@@ -54,13 +54,20 @@ def dispatch_live_trading(settings: Dict[str, Any]):
 
 
 def run_dashboard():
-    """Запускает Streamlit дашборд как внешний процесс."""
+    """Запускает Streamlit дашборд как внешний процесс из корня проекта."""
     print("\n--- Запуск панели анализа (Dashboard) ---\n")
+
+    # Путь к скрипту дашборда относительно корня проекта
     dashboard_path = os.path.join("app", "ui", "dashboard", "main.py")
+
+    # Команда для запуска. Streamlit сам найдет скрипт по относительному пути.
     command = ["streamlit", "run", dashboard_path]
+
     print("Чтобы остановить дашборд, нажмите Ctrl+C в этом окне.")
+
     try:
-        subprocess.run(command)
+        subprocess.run(command, cwd=BASE_DIR)
+
     except FileNotFoundError:
         questionary.print("\n[Ошибка] Команда 'streamlit' не найдена.", style="bold red")
         questionary.print("Убедитесь, что Streamlit установлен и доступен в вашем окружении (pip install streamlit).")

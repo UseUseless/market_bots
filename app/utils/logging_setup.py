@@ -80,7 +80,7 @@ class BacktestTimeFilter(logging.Filter):
         Если время симуляции еще не установлено (например, на этапе инициализации),
         использует заглушку 'SETUP'.
         """
-        record.sim_time = self._storage.sim_time or "SETUP"
+        record.sim_time = getattr(self._storage, 'sim_time', None) or "SETUP"
         return True
 
 backtest_time_filter = BacktestTimeFilter()

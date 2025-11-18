@@ -1,3 +1,28 @@
+import sys
+import os
+
+def find_project_root(start_path, marker_file='launcher.py'):
+    """
+    Поднимается вверх по дереву каталогов от start_path,
+    пока не найдет файл-маркер, указывающий на корень проекта.
+    Это надежный способ, не зависящий от глубины вложенности файла.
+    """
+    path = os.path.abspath(start_path)
+    while True:
+        if os.path.exists(os.path.join(path, marker_file)):
+            return path
+        parent_path = os.path.dirname(path)
+        if parent_path == path:  # Дошли до корня файловой системы
+            raise FileNotFoundError(f"Не удалось найти корень проекта с файлом-маркером '{marker_file}'")
+        path = parent_path
+
+try:
+    project_root = find_project_root(__file__)
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+except FileNotFoundError as e:
+    print(f"КРИТИЧЕСКАЯ ОШИБКА: {e}", file=sys.stderr)
+
 import streamlit as st
 import pandas as pd
 

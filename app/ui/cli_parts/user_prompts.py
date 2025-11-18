@@ -209,7 +209,8 @@ def prompt_for_optimization_settings() -> Optional[Dict[str, Any]]:
             "metrics": selected_metrics,
             "n_trials": int(n_trials),
             "total_periods": int(total_periods),
-            "train_periods": int(train_periods)
+            "train_periods": int(train_periods),
+            "test_periods": 1
         })
         return settings
     except UserCancelledError:

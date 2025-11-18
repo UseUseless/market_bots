@@ -4,6 +4,7 @@ from typing import Dict, Any, Optional
 
 from app.core.models.event import SignalEvent
 from app.strategies.base_strategy import BaseStrategy
+from app.core.services.feature_engine import FeatureEngine
 
 class TripleFilterStrategy(BaseStrategy):
     """
@@ -49,7 +50,7 @@ class TripleFilterStrategy(BaseStrategy):
     }
 
     def __init__(self, events_queue: Queue, instrument: str, params: Dict[str, Any],
-                 risk_manager_type: str, risk_manager_params: Optional[Dict[str, Any]] = None):
+                 feature_engine: FeatureEngine, risk_manager_type: str, risk_manager_params: Optional[Dict[str, Any]] = None):
 
         # 1. Извлекаем параметры из переданного словаря `params`
         self.ema_fast_period = params["ema_fast_period"]
@@ -67,7 +68,8 @@ class TripleFilterStrategy(BaseStrategy):
         ]
 
         # 3. Вызываем родительский __init__ ПОСЛЕ определения зависимостей
-        super().__init__(events_queue, instrument, params, risk_manager_type, risk_manager_params)
+        super().__init__(events_queue, instrument, params,
+                         feature_engine, risk_manager_type, risk_manager_params)
 
         # 4. Определяем имена колонок для удобства
         self.ema_fast_name = f'EMA_{self.ema_fast_period}'

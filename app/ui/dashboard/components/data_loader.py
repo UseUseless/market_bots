@@ -51,7 +51,8 @@ def _process_single_backtest_file(file_path: str) -> Optional[Dict[str, Any]]:
             initial_capital=BACKTEST_CONFIG["INITIAL_CAPITAL"],
             exchange=exchange,
             interval=interval,
-            risk_manager_type=risk_manager
+            risk_manager_type=risk_manager,
+            strategy_name=strategy_name
         )
 
         portfolio_metrics = analysis.portfolio_metrics
@@ -61,6 +62,7 @@ def _process_single_backtest_file(file_path: str) -> Optional[Dict[str, Any]]:
         profit_factor = portfolio_metrics.get("profit_factor", 0)
 
         return {
+            "File Path": file_path,
             "File": filename,
             "Exchange": exchange,
             "Strategy": strategy_name,
@@ -101,9 +103,12 @@ def load_all_backtests(logs_dir: str) -> Tuple[pd.DataFrame, List[str]]:
         return pd.DataFrame(), [f"Директория логов не найдена по пути: {logs_dir}"]
 
     # Собираем список файлов для обработки
-    log_files = [
-        os.path.join(logs_dir, f) for f in os.listdir(logs_dir) if f.endswith("_trades.jsonl")
-    ]
+    log_files = []
+    for root, dirs, files in os.walk(logs_dir):
+        for filename in files:
+            if filename.endswith("_trades.jsonl"):
+                # Добавляем полный путь к файлу в наш список
+                log_files.append(os.path.join(root, filename))
 
     # Используем st.progress для наглядности, если файлов много
     progress_bar = st.progress(0, text="Загрузка и обработка результатов бэктестов...")

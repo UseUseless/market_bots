@@ -120,7 +120,7 @@ class PortfolioMetricsCalculator:
             all_metrics = {key: 0.0 for key in METRIC_CONFIG.keys()}
             all_metrics['pnl_abs'] = 0.0
             all_metrics['pnl_pct'] = 0.0
-            all_metrics['total_trades'] = len(self.trades)
+            all_metrics['total_trades'] = 0
             return all_metrics
 
         results = {key: self.calculate(key) for key in METRIC_CONFIG.keys()}

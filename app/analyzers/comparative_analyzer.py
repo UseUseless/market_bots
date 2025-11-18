@@ -84,7 +84,7 @@ class ComparativeAnalyzer:
         equity_curves = {}
         for _, row in filtered_summary.iterrows():
             try:
-                trades_df = load_trades_from_file(os.path.join(self.logs_dir, row['File']))
+                trades_df = load_trades_from_file(row['File Path'])
                 if not trades_df.empty:
                     equity_curve = self.initial_capital_per_instrument + trades_df['pnl'].cumsum()
                     equity_curves[row['Strategy']] = equity_curve
@@ -122,7 +122,7 @@ class ComparativeAnalyzer:
         all_trades_list = []
         for _, row in filtered_summary.iterrows():
             try:
-                trades_df = load_trades_from_file(os.path.join(self.logs_dir, row['File']))
+                trades_df = load_trades_from_file(row['File Path'])
                 if not trades_df.empty:
                     all_trades_list.append(trades_df)
             except Exception as e:
