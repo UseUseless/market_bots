@@ -130,8 +130,6 @@ def render_detailed_view(filtered_df: pd.DataFrame):
     """
     st.header("Детальный анализ отдельного бэктеста")
 
-    st.write("Колонки в `filtered_df`:", filtered_df.columns.tolist())
-
     if filtered_df.empty:
         st.warning("По выбранным фильтрам не найдено ни одного бэктеста для детального анализа.")
         return

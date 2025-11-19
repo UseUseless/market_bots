@@ -1,6 +1,8 @@
 import questionary
 import os
 import subprocess
+from rich.console import Console
+from rich.markdown import Markdown
 from typing import Dict, Any, Callable, Tuple, Optional
 
 from app.flows.backtest_flow import run_single_backtest_flow
@@ -8,6 +10,7 @@ from app.flows.batch_backtest_flow import run_batch_backtest_flow
 from app.flows.optimization_flow import run_optimization_flow
 from app.flows.live_flow import run_live_flow
 from app.flows.data_management_flow import update_lists_flow, download_data_flow
+from docs.help_texts import HELP_TOPICS
 from config import BASE_DIR
 from . import user_prompts
 
@@ -53,6 +56,27 @@ def dispatch_live_trading(settings: Dict[str, Any]):
     print("\nLive-сессия завершена.")
 
 
+def dispatch_help():
+    """Отображает справочную информацию."""
+    console = Console()
+
+    while True:
+        topic_key = user_prompts.prompt_for_help_topic()
+
+        if not topic_key or "---" in topic_key:  # Добавили проверку на разделитель
+            if "---" in topic_key:
+                print("\nЭто просто разделитель, выберите тему ниже или выше.")
+                continue
+            break
+
+        text_content = HELP_TOPICS.get(topic_key, "Текст не найден.")
+
+        print("\n" + "=" * 50)
+        console.print(Markdown(text_content))
+        print("=" * 50 + "\n")
+
+        questionary.text("Нажмите Enter, чтобы вернуться к списку тем...").ask()
+
 def run_dashboard():
     """Запускает Streamlit дашборд как внешний процесс из корня проекта."""
     print("\n--- Запуск панели анализа (Dashboard) ---\n")
@@ -82,6 +106,7 @@ MENU_CONFIG: Dict[str, Optional[Tuple[Optional[Callable], Optional[Callable]]]] 
     "4. Запустить оптимизацию параметров (WFO)": (user_prompts.prompt_for_optimization_settings, dispatch_optimization),
     "------------------------------------------": None,
     "5. Запустить симуляцию в 'песочнице'": (user_prompts.prompt_for_live_settings, dispatch_live_trading),
+    "6. Справка и Философия": (None, dispatch_help),
     "Выход": ("EXIT", None)
 }
 

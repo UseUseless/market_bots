@@ -90,7 +90,7 @@ class PlotReportGenerator:
 
         if not self.benchmark_equity_curve.empty:
             ax.plot(self.benchmark_equity_curve.index, self.benchmark_equity_curve.values, label='Buy & Hold Benchmark',
-                    color='gray', linestyle='--', lw=1.5)
+                    color='gray', alpha=0.5, lw=1.5)
 
         ax.set_title(f"Backtest Results: {self.metadata.get('strategy_name', 'N/A')} on {self.report_filename}",
                      fontsize=16)

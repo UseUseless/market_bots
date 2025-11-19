@@ -5,6 +5,7 @@ import logging
 
 from . import dialogs as ui_helpers
 from app.strategies.base_strategy import BaseStrategy
+from docs.help_texts import HELP_TOPICS
 from app.analyzers.metrics.portfolio_metrics import METRIC_CONFIG
 from config import PATH_CONFIG, EXCHANGE_INTERVAL_MAPS
 
@@ -246,5 +247,23 @@ def prompt_for_live_settings() -> Optional[Dict[str, Any]]:
             settings["category"] = category
 
         return settings
+    except UserCancelledError:
+        return None
+
+def prompt_for_help_topic() -> Optional[str]:
+    """Показывает меню выбора темы помощи."""
+    try:
+        choices = list(HELP_TOPICS.keys()) + [GO_BACK_OPTION]
+
+        topic_key = ask(
+            questionary.select,
+            "Выберите раздел справки:",
+            choices=choices,
+            use_indicator=True
+        )
+
+        if topic_key == GO_BACK_OPTION:
+            return None
+        return topic_key
     except UserCancelledError:
         return None

@@ -57,9 +57,29 @@ class AnalysisSession:
         benchmark_calc = BenchmarkMetricsCalculator(historical_data, initial_capital, annual_factor)
         self.benchmark_metrics: Dict[str, Any] = benchmark_calc.calculate_all()
 
-        # Сохраняем кривые капитала для передачи в генератор графиков
-        self.portfolio_equity_curve = portfolio_calc.trades['equity_curve'] if portfolio_calc.is_valid else pd.Series()
-        self.benchmark_equity_curve = benchmark_calc.equity_curve if benchmark_calc.is_valid else pd.Series()
+        # --- FIX START: Привязка кривых капитала к ВРЕМЕНИ (Datetime), а не к номеру строки ---
+
+        # 1. Исправляем кривую стратегии
+        if portfolio_calc.is_valid:
+            # Берем таблицу сделок из калькулятора
+            temp_trades = portfolio_calc.trades.copy()
+            # Убеждаемся, что время выхода - это datetime
+            temp_trades['exit_timestamp_utc'] = pd.to_datetime(temp_trades['exit_timestamp_utc'])
+            # Устанавливаем время как индекс. Теперь график будет строиться по датам.
+            self.portfolio_equity_curve = temp_trades.set_index('exit_timestamp_utc')['equity_curve']
+        else:
+            self.portfolio_equity_curve = pd.Series()
+
+        # 2. Исправляем кривую бенчмарка
+        if benchmark_calc.is_valid:
+            # Берем рассчитанную кривую
+            temp_bench = benchmark_calc.equity_curve.copy()
+            # У бенчмарка индекс сейчас 0, 1, 2... (так как historical_data был сброшен)
+            # Нам нужно взять колонку 'time' из данных бенчмарка и сделать её индексом
+            temp_bench.index = pd.to_datetime(benchmark_calc.data['time'])
+            self.benchmark_equity_curve = temp_bench
+        else:
+            self.benchmark_equity_curve = pd.Series()
 
     def generate_all_reports(self,
                              base_filename: str,
