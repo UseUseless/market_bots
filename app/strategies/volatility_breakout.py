@@ -82,23 +82,24 @@ class VolatilityBreakoutStrategy(BaseStrategy):
 
     def _prepare_custom_features(self, data: pd.DataFrame) -> pd.DataFrame:
         if self.variant == "ADX_Donchian":
-            logger.info(f"Стратегия '{self.name}' рассчитывает кастомный 'squeeze_on'...")
             # Используем параметры из self.params
             std_str = str(self.params["adx_bb_std"]).replace('.', '_')
             bb_len = self.params["adx_bb_len"]
+
+            # Формируем имена колонок, которые должен был создать FeatureEngine
             bb_upper_col = f'BBU_{bb_len}_{std_str}'
             bb_lower_col = f'BBL_{bb_len}_{std_str}'
             bb_mid_col = f'BBM_{bb_len}_{std_str}'
 
             if not all(col in data.columns for col in [bb_upper_col, bb_lower_col, bb_mid_col]):
-                logger.error("Не найдены колонки Bollinger Bands. Расчет 'squeeze_on' невозможен.")
-                return pd.DataFrame()
+                logger.warning("Не найдены колонки Bollinger Bands. Пропуск расчета squeeze.")
+                return data
 
             bband_width = (data[bb_upper_col] - data[bb_lower_col]) / data[bb_mid_col]
+
             quantile_threshold = bband_width.rolling(self.params['adx_squeeze_period']).quantile(
                 self.params['adx_squeeze_quantile'])
             data['squeeze_on'] = bband_width < quantile_threshold
-            self._required_cols.append('squeeze_on')
         return data
 
     def _reset_state(self):

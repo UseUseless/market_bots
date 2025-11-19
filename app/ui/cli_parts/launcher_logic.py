@@ -61,20 +61,24 @@ def dispatch_help():
     console = Console()
 
     while True:
+        # Спрашиваем пользователя, какую тему он хочет почитать
         topic_key = user_prompts.prompt_for_help_topic()
 
-        if not topic_key or "---" in topic_key:  # Добавили проверку на разделитель
-            if "---" in topic_key:
-                print("\nЭто просто разделитель, выберите тему ниже или выше.")
-                continue
+        if not topic_key:
             break
 
+        if "---" in topic_key:
+            print("\nЭто просто разделитель, выберите тему ниже или выше.")
+            continue
+
+        # Получаем текст и рендерим его как Markdown
         text_content = HELP_TOPICS.get(topic_key, "Текст не найден.")
 
         print("\n" + "=" * 50)
         console.print(Markdown(text_content))
         print("=" * 50 + "\n")
 
+        # Пауза, чтобы пользователь успел прочитать перед возвратом в меню справки
         questionary.text("Нажмите Enter, чтобы вернуться к списку тем...").ask()
 
 def run_dashboard():
@@ -105,7 +109,7 @@ MENU_CONFIG: Dict[str, Optional[Tuple[Optional[Callable], Optional[Callable]]]] 
     "3. Проанализировать результаты (Dashboard)": (None, run_dashboard),
     "4. Запустить оптимизацию параметров (WFO)": (user_prompts.prompt_for_optimization_settings, dispatch_optimization),
     "------------------------------------------": None,
-    "5. Запустить симуляцию в 'песочнице'": (user_prompts.prompt_for_live_settings, dispatch_live_trading),
+    "5. Запустить Монитор Сигналов (Live)": (user_prompts.prompt_for_live_settings, dispatch_live_trading),
     "6. Справка и Философия": (None, dispatch_help),
     "Выход": ("EXIT", None)
 }

@@ -1,9 +1,10 @@
 import asyncio
 import logging
-from typing import Dict, Any
 import os
 import pandas as pd
+from typing import Dict, Any
 from asyncio import Queue as AsyncQueue
+from functools import partial
 
 from app.core.models.event import Event, MarketEvent, SignalEvent, OrderEvent, FillEvent
 from app.core.models.portfolio_state import PortfolioState
@@ -14,8 +15,11 @@ from app.core.services.risk_monitor import RiskMonitor
 from app.core.services.order_manager import OrderManager
 from app.core.services.fill_processor import FillProcessor
 
-from app.core.data.stream_handlers import TinkoffStreamDataHandler, BybitStreamDataHandler, BaseStreamDataHandler
+from app.core.services.data_feed import DataFeedService
+from app.core.execution.notifier import NotifierExecutionHandler
 from app.core.execution.live import LiveExecutionHandler
+
+from app.core.data.stream_handlers import TinkoffStreamDataHandler, BybitStreamDataHandler, BaseStreamDataHandler
 from app.utils.clients.tinkoff import TinkoffHandler
 from app.utils.clients.bybit import BybitHandler
 from app.utils.clients.abc import BaseDataClient
@@ -30,96 +34,87 @@ logger = logging.getLogger(__name__)
 
 class LiveEngine:
     """
-    Оркестратор для запуска одной торговой сессии в live-режиме или песочнице.
-    Отвечает за инициализацию всех компонентов, управление asyncio задачами
-    и корректное завершение работы.
+    Движок для работы в реальном времени.
+    Поддерживает режим 'SIGNAL_ONLY' (Монитор) и задел под 'TRADE_REAL'.
     """
 
     def __init__(self, settings: Dict[str, Any], events_queue: AsyncQueue[Event]):
         self.settings = settings
-        self.loop = asyncio.get_running_loop()
+        self.loop = None
         self.events_queue = events_queue
 
-        # Атрибуты, которые будут инициализированы
+        self.trade_mode = settings.get("trade_mode", "SIGNAL_ONLY")
+        self.is_trading_enabled = self.trade_mode in ["REAL", "SANDBOX"]
+
         self.data_client: BaseDataClient | None = None
         self.portfolio: Portfolio | None = None
         self.strategy = None
+
+        self.data_feed: DataFeedService | None = None
+
         self.data_handler: BaseStreamDataHandler | None = None
-        self.execution_handler: LiveExecutionHandler | None = None
+        self.execution_handler = None
         self.tasks = []
 
     async def run(self):
-        """Главный метод, запускающий live-сессию."""
-        logger.info(f"--- Запуск Live Trading Engine в режиме '{self.settings['trade_mode']}' ---")
+        """Главный метод запуска сессии."""
+        self.loop = asyncio.get_running_loop()
+
+        logger.info(f"--- Запуск Live Engine в режиме '{self.trade_mode}' ---")
         try:
             await self._initialize_components()
-            await self._prepare_initial_data()
+            await self._warm_up_data()
 
             logger.info("Запуск основных задач: стриминг данных и цикл обработки событий.")
             data_task = self.loop.create_task(self.data_handler.stream_data())
             loop_task = self.loop.create_task(self._main_event_loop())
             self.tasks = [data_task, loop_task]
 
-            logger.info("Live Engine успешно запущен. Для остановки нажмите Ctrl+C.")
+            logger.info("Live Engine запущен. Ожидание рыночных данных...")
             await asyncio.gather(*self.tasks)
 
         except asyncio.CancelledError:
-            logger.info("Задачи были отменены. Завершение работы...")
+            logger.info("Задачи отменены. Завершение работы...")
         except Exception as e:
             logger.critical(f"Критическая ошибка в Live Engine: {e}", exc_info=True)
         finally:
             self.stop()
 
     async def _initialize_components(self):
-        """Инициализирует все необходимые компоненты для live-торговли."""
-        logger.info("Инициализация компонентов...")
-
+        """Инициализация (DI контейнер)."""
         exchange = self.settings['exchange']
         instrument = self.settings['instrument']
         interval = self.settings['interval']
-        trade_mode = self.settings['trade_mode']
+        category = self.settings.get("category", "linear")
         strategy_class = AVAILABLE_STRATEGIES[self.settings['strategy']]
         rm_class = AVAILABLE_RISK_MANAGERS[self.settings['risk_manager_type']]
 
-        # --- 1. Создание клиентов API ---
+        # 1. Клиент данных
         if exchange == 'tinkoff':
-            self.data_client = TinkoffHandler(trade_mode=trade_mode)
+            self.data_client = TinkoffHandler(trade_mode="SANDBOX")
         elif exchange == 'bybit':
-            self.data_client = BybitHandler(trade_mode=trade_mode)
+            self.data_client = BybitHandler(trade_mode="REAL")
         else:
             raise ValueError(f"Неподдерживаемая биржа: {exchange}")
 
-        # --- 2. Получение информации об инструменте и начального капитала ---
-        instrument_info = await self.loop.run_in_executor(
-            None,
-            self.data_client.get_instrument_info,
-            instrument,
-            category=self.settings.get("category", "linear")
-        )
-        if not instrument_info:
-            raise ConnectionError(f"Не удалось получить информацию об инструменте {instrument}.")
-
-        # TODO: Реализовать получение реального баланса счета через API
-        # Сейчас для песочницы используется фиксированное значение, что является упрощением.
-        # Для реальной торговли здесь должен быть API-запрос баланса.
-        initial_capital = 100000.0
-        logger.info(f"Начальный капитал (установлен вручную): {initial_capital}")
-
-        # --- 3. Создание обработчиков и стратегии ---
-        self.execution_handler = LiveExecutionHandler(self.events_queue, exchange, trade_mode, self.loop)
-
-        if exchange == 'tinkoff':
-            self.data_handler = TinkoffStreamDataHandler(self.events_queue, instrument, interval)
-        else:  # bybit
-            self.data_handler = BybitStreamDataHandler(
-                self.events_queue, instrument, interval, self.loop,
-                channel_type=self.settings.get('category', 'linear'),
-                testnet=(trade_mode == "SANDBOX")
+        # 2. Информация об инструменте (Используем partial для kwargs!)
+        try:
+            # Оборачиваем вызов с именованными аргументами в partial
+            get_info_func = partial(
+                self.data_client.get_instrument_info,
+                instrument,
+                category=category
             )
+            instrument_info = await self.loop.run_in_executor(None, get_info_func)
+        except Exception as e:
+            logger.error(f"Ошибка получения инфо инструмента: {e}")
+            instrument_info = None
 
-        # --- 4. Сборка ядра (Portfolio и его сервисы) ---
-        # Создаем специальный "прокси" для очереди, чтобы из синхронных callback-ов (как в pybit)
-        # можно было безопасно класть события в асинхронную очередь.
+        if not instrument_info:
+            logger.warning(f"Не удалось получить инфо для {instrument}. Использую дефолт.")
+            instrument_info = {"min_order_qty": 1.0, "qty_step": 1.0, "lot_size": 1}
+
+        # 3. Исполнитель
         class AsyncQueuePutter:
             def __init__(self, q: AsyncQueue, loop: asyncio.AbstractEventLoop):
                 self._q, self._loop = q, loop
@@ -127,107 +122,130 @@ class LiveEngine:
             def put(self, item):
                 asyncio.run_coroutine_threadsafe(self._q.put(item), self._loop)
 
-        sync_compatible_queue = AsyncQueuePutter(self.events_queue, self.loop)
+        sync_queue = AsyncQueuePutter(self.events_queue, self.loop)
 
+        if self.is_trading_enabled:
+            self.execution_handler = LiveExecutionHandler(self.events_queue, exchange, self.trade_mode, self.loop)
+            initial_capital = 100000.0
+        else:
+            self.execution_handler = NotifierExecutionHandler(sync_queue)
+            initial_capital = 100000.0
+
+            # 4. Стрим данных
+        if exchange == 'tinkoff':
+            self.data_handler = TinkoffStreamDataHandler(self.events_queue, instrument, interval)
+        else:
+            self.data_handler = BybitStreamDataHandler(
+                self.events_queue, instrument, interval, self.loop,
+                channel_type=category,
+                testnet=False
+            )
+
+        # 5. Ядро
         feature_engine = FeatureEngine()
-
         strategy_params = strategy_class.get_default_params()
         rm_params = rm_class.get_default_params()
+
         self.strategy = strategy_class(
-            sync_compatible_queue,
-            instrument,
-            strategy_params,
-            feature_engine,  # Внедряем зависимость
-            self.settings['risk_manager_type'],
-            rm_params
+            sync_queue, instrument, strategy_params, feature_engine,
+            self.settings['risk_manager_type'], rm_params
         )
 
+        self.data_feed = DataFeedService(
+            feature_engine=feature_engine,
+            required_indicators=self.strategy.required_indicators,
+            max_len=500
+        )
+
+        # 6. Портфель
         risk_manager = rm_class(params=rm_params)
         position_sizer = FixedRiskSizer()
-        risk_monitor = RiskMonitor(sync_compatible_queue)
-        order_manager = OrderManager(sync_compatible_queue, risk_manager, position_sizer, instrument_info)
+        risk_monitor = RiskMonitor(sync_queue)
+        order_manager = OrderManager(sync_queue, risk_manager, position_sizer, instrument_info)
 
-        log_path = os.path.join(PATH_CONFIG["LOGS_LIVE_DIR"], f"{trade_mode.lower()}_{instrument}.jsonl")
+        log_filename = f"{self.trade_mode.lower()}_{instrument}_signals.jsonl"
+        log_path = os.path.join(PATH_CONFIG["LOGS_LIVE_DIR"], log_filename)
 
         fill_processor = FillProcessor(
-            trade_log_file=log_path,
-            exchange=exchange,
-            interval=interval,
-            strategy_name=self.strategy.name,
-            risk_manager_name=risk_manager.__class__.__name__,
+            trade_log_file=log_path, exchange=exchange, interval=interval,
+            strategy_name=self.strategy.name, risk_manager_name=risk_manager.__class__.__name__,
             risk_manager_params=rm_params
         )
 
         portfolio_state = PortfolioState(initial_capital)
         self.portfolio = Portfolio(
-            sync_compatible_queue,
-            portfolio_state,
-            risk_monitor,
-            order_manager,
-            fill_processor
-        )
-        logger.info("Все компоненты успешно инициализированы.")
-
-    async def _prepare_initial_data(self):
-        """Загружает и подготавливает начальный набор исторических данных для стратегии."""
-        min_bars_needed = self.strategy.min_history_needed
-        buffer_multiplier = LIVE_TRADING_CONFIG['LIVE_HISTORY_BUFFER_MULTIPLIER']
-        bars_to_load = min_bars_needed * buffer_multiplier
-
-        # Грубая оценка, сколько дней нужно загрузить, чтобы получить нужное кол-во свечей
-        # (зависит от интервала, но для интрадей это будет с запасом)
-        days_to_load = (bars_to_load * pd.Timedelta(self.settings['interval']).total_seconds()) / (24 * 3600)
-        days_to_load = max(int(days_to_load) + 2, 2)  # +2 дня на всякий случай
-
-        logger.info(
-            f"Требуется {min_bars_needed} баров для старта. Загрузка ~{bars_to_load} баров ({days_to_load} дней) истории...")
-
-        historical_data = await self.loop.run_in_executor(
-            None, self.data_client.get_historical_data, self.settings['instrument'], self.settings['interval'],
-            days_to_load
+            sync_queue, portfolio_state, risk_monitor, order_manager, fill_processor
         )
 
-        if historical_data.empty or len(historical_data) < min_bars_needed:
-            raise ValueError(
-                f"Недостаточно исторических данных для запуска. Требуется {min_bars_needed}, получено {len(historical_data)}.")
+    async def _warm_up_data(self):
+        """Загружает историю для разогрева индикаторов."""
+        min_bars = self.strategy.min_history_needed
+        bars_to_load = max(min_bars * 2, 300)
+        days_to_load = 3
+        category = self.settings.get("category", "linear")
 
-        enriched_data = self.strategy.process_data(historical_data)
+        logger.info(f"Разогрев данных: Загрузка истории за {days_to_load} дн. (~{bars_to_load} баров)...")
 
-        # "Прогреваем" историю стратегии, чтобы она была готова к первому событию
-        for _, row in enriched_data.tail(min_bars_needed + 2).iterrows():
-            self.strategy.data_history.append(row)
+        # Используем partial и здесь, чтобы передать category
+        get_hist_func = partial(
+            self.data_client.get_historical_data,
+            self.settings['instrument'],
+            self.settings['interval'],
+            days_to_load,
+            category=category
+        )
 
-        logger.info(f"История стратегии успешно 'прогрета' {len(self.strategy.data_history)} барами.")
+        historical_data = await self.loop.run_in_executor(None, get_hist_func)
+
+        if historical_data.empty:
+            logger.warning("Не удалось загрузить историю! Индикаторы начнут считаться с нуля.")
+            return
+
+        self.data_feed.warm_up(historical_data)
+        logger.info(f"Разогрев завершен. В памяти {len(self.data_feed._buffer)} свечей.")
 
     async def _main_event_loop(self):
-        """Главный цикл, который обрабатывает события из очереди."""
-        logger.info("Основной цикл обработки событий запущен...")
+        """Главный цикл обработки."""
         while True:
             event = await self.events_queue.get()
             try:
                 if isinstance(event, MarketEvent):
+                    candle_time = event.timestamp.strftime('%H:%M:%S')
+                    candle_info = event.data
+                    log_msg = (
+                        f"📊 {event.instrument:<8} | {candle_time} | "
+                        f"O: {candle_info['open']:<8} H: {candle_info['high']:<8} L: {candle_info['low']:<8} C: {candle_info['close']:<8} | "
+                        f"Vol: {int(candle_info['volume'])}"
+                    )
+                    logger.info(log_msg)
+
                     self.portfolio.update_market_price(event)
-                    self.strategy.on_market_event(event)
+                    data_window = self.data_feed.add_candle_and_get_window(event.data)
+
+                    if data_window is not None:
+                        event.data = data_window
+                        self.strategy.on_market_event(event)
+                    else:
+                        logger.debug("Недостаточно данных для расчета индикаторов.")
+
                 elif isinstance(event, SignalEvent):
                     self.portfolio.on_signal(event)
+
                 elif isinstance(event, OrderEvent):
-                    # В live-режиме исполнение ордера - асинхронная операция
-                    await self.execution_handler.execute_order(event)
+                    self.execution_handler.execute_order(event)
+
                 elif isinstance(event, FillEvent):
                     self.portfolio.on_fill(event)
+
             except Exception as e:
-                logger.error(f"Ошибка при обработке события {type(event).__name__}: {e}", exc_info=True)
+                logger.error(f"Ошибка в цикле событий: {e}", exc_info=True)
             finally:
                 self.events_queue.task_done()
 
     def stop(self):
-        """Корректно останавливает все компоненты."""
-        logger.info("Начало остановки Live Engine...")
-        if self.execution_handler:
+        logger.info("Остановка Live Engine...")
+        if self.execution_handler and hasattr(self.execution_handler, 'stop'):
             self.execution_handler.stop()
-
         for task in self.tasks:
             if not task.done():
                 task.cancel()
-
-        logger.info("Live Engine остановлен.")

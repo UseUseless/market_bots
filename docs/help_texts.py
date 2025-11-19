@@ -141,7 +141,7 @@ MATH_OF_TRADING_TEXT = """
 
 ## 1. Математическое Ожидание (Expectancy)
 Это сумма, которую вы зарабатываете в среднем на одну сделку.
-$$ E = (Win\% \\times AvgWin) - (Loss\% \\times AvgLoss) $$
+$$ E = (Win\\% \\times AvgWin) - (Loss\\% \\times AvgLoss) $$
 
 *   **Win%**: Процент прибыльных сделок.
 *   **AvgWin**: Средняя прибыль в $ (или %).

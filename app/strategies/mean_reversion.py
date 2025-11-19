@@ -72,17 +72,16 @@ class MeanReversionStrategy(BaseStrategy):
         """
         Рассчитывает кастомный индикатор Z-Score поверх стандартных индикаторов.
         """
-        logger.info(f"Стратегия '{self.name}' рассчитывает кастомные фичи (STD, Z-Score)...")
         sma_col_name = f'SMA_{self.sma_period}'
         if sma_col_name not in data.columns:
-            logger.error(f"Колонка {sma_col_name} не найдена. Расчет Z-Score невозможен.")
-            return pd.DataFrame()
+            return data
 
         std_dev = data['close'].rolling(window=self.sma_period).std()
-        data['z_score'] = (data['close'] - data[sma_col_name]) / std_dev
 
-        # Добавляем кастомную колонку в список для проверки на NaN
-        self._required_cols.append('z_score')
+        if std_dev.iloc[-1] == 0:
+            data['z_score'] = 0
+        else:
+            data['z_score'] = (data['close'] - data[sma_col_name]) / std_dev
         return data
 
     def _calculate_signals(self, prev_candle: pd.Series, last_candle: pd.Series, timestamp: pd.Timestamp):
