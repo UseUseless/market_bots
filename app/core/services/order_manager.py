@@ -56,7 +56,7 @@ class OrderManager:
         """
         Обрабатывает сигнал на открытие новой позиции с двухступенчатым контролем размера.
         """
-        ideal_entry_price = last_candle['open']
+        ideal_entry_price = last_candle['close']
 
         if ideal_entry_price <= 0:
             logger.warning(f"Идеальная цена входа равна нулю или отрицательна для {event.instrument}. Сигнал проигнорирован.")

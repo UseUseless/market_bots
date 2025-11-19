@@ -1,7 +1,7 @@
 import queue
 import logging
 import pandas as pd
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from app.core.models.event import MarketEvent, SignalEvent, OrderEvent, FillEvent
 from app.core.models.portfolio_state import PortfolioState
@@ -39,6 +39,7 @@ class BacktestEngine:
         self.settings = settings
         self.components: Dict[str, Any] = {}
         self.events_queue = events_queue
+        self.pending_strategy_order: Optional[OrderEvent] = None
 
     def _initialize_components(self) -> None:
         """
@@ -135,59 +136,81 @@ class BacktestEngine:
         logger.info("Этап подготовки данных завершен.")
         return enriched_data
 
+    def _process_queue(self, current_candle: pd.Series, phase: str):
+        """
+        Вспомогательный метод для обработки очереди событий.
+
+        :param phase: 'EXECUTION' (начало бара) или 'STRATEGY' (конец бара).
+                      В фазе EXECUTION мы исполняем SL/TP немедленно.
+                      В фазе STRATEGY мы сохраняем сигналы на следующий бар.
+        """
+        events_queue = self.components['events_queue']
+        portfolio = self.components['portfolio']
+        execution_handler = self.components['execution_handler']
+
+        while not events_queue.empty():
+            try:
+                event = events_queue.get(block=False)
+            except queue.Empty:
+                break
+
+            if isinstance(event, SignalEvent):
+                portfolio.on_signal(event)
+
+            elif isinstance(event, OrderEvent):
+                if event.trigger_reason == 'SIGNAL':
+                    self.pending_strategy_order = event
+                else:
+                    execution_handler.execute_order(event, current_candle)
+
+            elif isinstance(event, FillEvent):
+                portfolio.on_fill(event)
+
     def _run_event_loop(self, enriched_data: pd.DataFrame) -> None:
         """
-        Запускает главный цикл обработки событий с интрабар-логикой.
+        Главный цикл симуляции.
+        Реализует логику: Исполнение (Open) -> Риски (High/Low) -> Анализ (Close).
         """
         logger.info("Запуск основного цикла обработки событий...")
 
-        events_queue = self.components['events_queue']
         portfolio = self.components['portfolio']
         strategy = self.components['strategy']
         execution_handler = self.components['execution_handler']
         instrument = self.settings['instrument']
 
         for _, current_candle in enriched_data.iterrows():
-            # Создаем MarketEvent для текущей свечи
             market_event = MarketEvent(
                 timestamp=current_candle['time'],
                 instrument=instrument,
                 data=current_candle
             )
 
-            # Устанавливаем время симуляции для логгера
             backtest_time_filter.set_sim_time(market_event.timestamp)
 
-            # 1. ПРИОРИТЕТНАЯ ОБРАБОТКА РИСКОВ (SL/TP)
+            # ФАЗА 1: ИСПОЛНЕНИЕ ОТЛОЖЕННЫХ ОРДЕРОВ (Начало свечи, цена Open)
+            if self.pending_strategy_order:
+                execution_handler.execute_order(self.pending_strategy_order, current_candle)
+                self.pending_strategy_order = None
+
+                # Сразу обрабатываем FillEvent, чтобы позиция появилась в портфеле
+                # ДО проверки рисков на этой же свече.
+                self._process_queue(current_candle, phase='EXECUTION')
+
+            # ФАЗА 2: ПРОВЕРКА РИСКОВ (Внутри свечи, цены High/Low)
+            # Если мы вошли в Фазе 1, здесь мы проверим, не выбило ли нас на этой же свече.
             portfolio.update_market_price(market_event)
 
-            # 2. ГЕНЕРАЦИЯ СИГНАЛОВ СТРАТЕГИЕЙ
+            # Если сработал SL/TP, RiskMonitor сгенерировал OrderEvent.
+            # Мы должны исполнить его немедленно (внутри этой же свечи).
+            self._process_queue(current_candle, phase='EXECUTION')
+
+            # ФАЗА 3: АНАЛИЗ СТРАТЕГИИ (Конец свечи, цена Close)
             strategy.on_market_event(market_event)
 
-            # 3. ОБРАБОТКА ВСЕХ НАКОПЛЕННЫХ СОБЫТИЙ
-            while not events_queue.empty():
-                try:
-                    event = events_queue.get(block=False)
-                except queue.Empty:
-                    break
-
-                try:
-                    # MarketEvent уже обработан, так что его можно пропустить, если он вдруг попадется
-                    if isinstance(event, MarketEvent):
-                        continue
-                    elif isinstance(event, SignalEvent):
-                        portfolio.on_signal(event)
-                    elif isinstance(event, OrderEvent):
-                        # Исполняем ордер, используя данные ТЕКУЩЕЙ свечи.
-                        # SimulatedExecutionHandler сам разберется, какую цену взять (open или price_hint).
-                        execution_handler.execute_order(event, current_candle)
-                    elif isinstance(event, FillEvent):
-                        portfolio.on_fill(event)
-                except Exception as e:
-                    logger.error(
-                        f"Критическая ошибка при обработке события {type(event).__name__} для {instrument}: {e}",
-                        exc_info=True
-                    )
+            # Если стратегия дала сигнал, он попадет в очередь.
+            # В _process_queue мы сохраним его в self.pending_strategy_order
+            # и НЕ будем исполнять до следующей итерации (Фаза 1 следующей свечи).
+            self._process_queue(current_candle, phase='STRATEGY')
 
         backtest_time_filter.reset_sim_time()
         logger.info("Основной цикл завершен.")
