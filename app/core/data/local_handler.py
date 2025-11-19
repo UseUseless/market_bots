@@ -26,8 +26,8 @@ class HistoricLocalDataHandler:
 
     def _resample_and_fill_gaps(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Выравнивает временную сетку, чтобы убрать гэпы, и заполняет пропуски.
-        Эта версия использует ffill и bfill для гарантии отсутствия NaN.
+        Выравнивает временную сетку.
+        ИСПРАВЛЕНО: Убран bfill (Look-ahead bias). Используется только ffill.
         """
         if df.empty:
             return df
@@ -47,25 +47,23 @@ class HistoricLocalDataHandler:
 
         resampled_df = df.resample(freq).first()
 
-        # 1. Заполняем 'volume' нулями. Это простая и независимая операция.
         resampled_df['volume'] = resampled_df['volume'].fillna(0)
 
-        # 2. Заполняем цены. Сначала вперед, чтобы заполнить все внутренние гэпы.
+        # 2. Заполняем цены ТОЛЬКО вперед (ffill).
+        # Это закрывает дырки ВНУТРИ дня (если 5 минут не было сделок, цена считается старой).
+        # Это НЕ создает look-ahead bias.
         resampled_df.ffill(inplace=True)
 
-        # 3. Затем заполняем назад. Это закроет NaN в самом начале, если они были.
-        resampled_df.bfill(inplace=True)
+        resampled_df.dropna(inplace=True)
 
-        # 4. Теперь, когда мы уверены, что NaN нет, мы можем безопасно менять типы.
-        #    Колонки цен уже имеют правильный тип float.
         resampled_df['volume'] = resampled_df['volume'].astype(int)
 
         resampled_df.reset_index(inplace=True)
 
         original_rows = len(df)
         filled_rows = len(resampled_df)
-        if filled_rows > original_rows:
-            logger.info(f"Заполнение гэпов: {original_rows} -> {filled_rows} свечей (+{filled_rows - original_rows}).")
+        if filled_rows != original_rows:
+            logger.info(f"Выравнивание сетки: {original_rows} -> {filled_rows} свечей.")
 
         return resampled_df
 
