@@ -5,9 +5,9 @@ from typing import Dict, Any
 
 import optuna
 
-from app.optimization.preparer import WFODataPreparer
-from app.optimization.step_runner import WFOStepRunner
-from app.optimization.reporter import OptimizationReporter
+from app.backtest.optimization.preparer import WFODataPreparer
+from app.backtest.optimization.step_runner import WFOStepRunner
+from app.backtest.optimization.reporter import OptimizationReporter
 
 logger = logging.getLogger(__name__)
 

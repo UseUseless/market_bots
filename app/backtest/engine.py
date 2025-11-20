@@ -7,7 +7,7 @@ from app.core.models.event import MarketEvent, SignalEvent, OrderEvent, FillEven
 from app.core.models.portfolio_state import PortfolioState
 from app.core.services.feature_engine import FeatureEngine
 from app.core.portfolio import Portfolio
-from app.core.data.local_handler import HistoricLocalDataHandler
+from app.core.data.feeds.local import HistoricLocalDataHandler
 from app.core.execution.simulated import SimulatedExecutionHandler
 from app.core.risk.sizer import FixedRiskSizer
 from app.core.risk.risk_manager import AVAILABLE_RISK_MANAGERS
@@ -17,7 +17,7 @@ from app.core.services.fill_processor import FillProcessor
 
 from app.strategies.base_strategy import BaseStrategy
 from app.utils.logging_setup import backtest_time_filter
-from app.utils.file_io import load_instrument_info
+from app.core.services.instrument_rules import load_instrument_info
 from config import PATH_CONFIG, BACKTEST_CONFIG
 
 logger = logging.getLogger('backtester')

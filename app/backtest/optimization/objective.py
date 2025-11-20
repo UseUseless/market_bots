@@ -3,7 +3,7 @@ import pandas as pd
 from typing import Type, List, Dict
 import queue
 
-from app.engines.backtest_engine import BacktestEngine
+from app.backtest.engine import BacktestEngine
 from config import BACKTEST_CONFIG, EXCHANGE_SPECIFIC_CONFIG, PATH_CONFIG
 from app.strategies.base_strategy import BaseStrategy
 from app.core.risk.risk_manager import AVAILABLE_RISK_MANAGERS

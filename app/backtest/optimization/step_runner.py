@@ -8,9 +8,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import optuna
 from rich.console import Console
 
-from app.flows.backtest_flow import _run_and_analyze_single_instrument
+from app.backtest.flows.single import _run_and_analyze_single_instrument
 
-from app.optimization.objective import Objective
+from app.backtest.optimization.objective import Objective
 from app.analyzers.metrics.portfolio_metrics import METRIC_CONFIG
 from app.strategies import AVAILABLE_STRATEGIES
 from app.core.risk.risk_manager import AVAILABLE_RISK_MANAGERS

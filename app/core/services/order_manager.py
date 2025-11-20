@@ -10,7 +10,7 @@ from app.core.risk.sizer import BasePositionSizer
 from app.core.services.instrument_rules import InstrumentRulesValidator
 from config import BACKTEST_CONFIG
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger('backtester')
 
 class OrderManager:
     """

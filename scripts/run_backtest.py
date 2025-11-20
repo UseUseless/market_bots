@@ -2,7 +2,7 @@ import argparse
 import logging
 
 # Импортируем нашу новую функцию-оркестратор
-from app.flows.backtest_flow import run_single_backtest_flow
+from app.backtest.flows.single import run_single_backtest_flow
 from app.strategies import AVAILABLE_STRATEGIES
 from app.core.risk.risk_manager import AVAILABLE_RISK_MANAGERS
 from app.utils.logging_setup import setup_global_logging

@@ -1,7 +1,7 @@
 import logging
 from typing import Dict, Any
 
-from app.engines.optimization_engine import OptimizationEngine
+from app.backtest.optimization_engine import OptimizationEngine
 from app.utils.logging_setup import setup_global_logging
 
 # Получаем логгер для этого модуля

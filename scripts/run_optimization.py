@@ -4,7 +4,7 @@ import sys
 from typing import List
 
 # 1. Импортируем "flow", который содержит всю реальную логику
-from app.flows.optimization_flow import run_optimization_flow
+from app.backtest.flows.optimization import run_optimization_flow
 
 # 2. Импортируем необходимые конфигурации и утилиты для парсера
 from app.utils.logging_setup import setup_global_logging

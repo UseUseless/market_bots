@@ -5,11 +5,11 @@ from rich.console import Console
 from rich.markdown import Markdown
 from typing import Dict, Any, Callable, Tuple, Optional
 
-from app.flows.backtest_flow import run_single_backtest_flow
-from app.flows.batch_backtest_flow import run_batch_backtest_flow
-from app.flows.optimization_flow import run_optimization_flow
-from app.flows.live_flow import run_live_flow
-from app.flows.data_management_flow import update_lists_flow, download_data_flow
+from app.backtest.flows.single import run_single_backtest_flow
+from app.backtest.flows.batch import run_batch_backtest_flow
+from app.backtest.flows.optimization import run_optimization_flow
+from app.live.flows.monitor import run_live_monitor_flow
+from app.core.data.flows.management import update_lists_flow, download_data_flow
 from docs.help_texts import HELP_TOPICS
 from config import BASE_DIR
 from . import user_prompts
@@ -50,9 +50,9 @@ def dispatch_optimization(settings: Dict[str, Any]):
 
 
 def dispatch_live_trading(settings: Dict[str, Any]):
-    """Вызывает flow для live-торговли."""
-    print("\nЗапускаю live-бота... Нажмите Ctrl+C, чтобы остановить.")
-    run_live_flow(settings)
+    """Вызывает flow для live-торговли (НОВЫЙ МОНИТОР)."""
+    print("\nЗапускаю Signal Monitor (Новая Архитектура)... Нажмите Ctrl+C, чтобы остановить.")
+    run_live_monitor_flow(settings) # <-- СТАЛО
     print("\nLive-сессия завершена.")
 
 

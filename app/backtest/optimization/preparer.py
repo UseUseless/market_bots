@@ -3,8 +3,8 @@ import logging
 from tqdm import tqdm
 from typing import Dict, List, Tuple, Any
 
-from app.optimization.splitter import split_data_by_periods
-from app.core.data.local_handler import HistoricLocalDataHandler
+from app.backtest.optimization.splitter import split_data_by_periods
+from app.core.data.feeds.local import HistoricLocalDataHandler
 from config import PATH_CONFIG
 
 logger = logging.getLogger(__name__)

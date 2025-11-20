@@ -6,7 +6,7 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, Any
 
-from .backtest_flow import _run_and_analyze_single_instrument
+from app.backtest.flows.single import _run_and_analyze_single_instrument
 
 from app.analyzers.reports.excel_report import ExcelReportGenerator
 from app.strategies import AVAILABLE_STRATEGIES

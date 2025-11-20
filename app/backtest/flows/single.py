@@ -4,7 +4,7 @@ import logging
 from typing import Dict, Any, Optional
 import queue
 
-from app.engines.backtest_engine import BacktestEngine
+from app.backtest.engine import BacktestEngine
 from app.analyzers.analysis_session import AnalysisSession
 from app.strategies import AVAILABLE_STRATEGIES
 from app.utils.backtest_logging import setup_backtest_logging

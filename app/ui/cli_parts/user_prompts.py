@@ -219,40 +219,21 @@ def prompt_for_optimization_settings() -> Optional[Dict[str, Any]]:
 
 
 def prompt_for_live_settings() -> Optional[Dict[str, Any]]:
-    """Проводит диалог для сбора настроек live-режима (SIGNAL ONLY)."""
+    """
+    Теперь просто подтверждает запуск, так как настройки берутся из БД.
+    """
     try:
-        strategies = get_available_strategies()
-        if not strategies:
-            print("Ошибка: не найдено ни одной доступной стратегии.")
+        confirmation = ask(
+            questionary.confirm,
+            "Запустить монитор сигналов используя конфигурации из Базы Данных?",
+            default=True
+        )
+        if not confirmation:
             return None
 
-        exchange = ask(questionary.select, "Выберите биржу:", choices=["bybit", "tinkoff", GO_BACK_OPTION])
-        instrument = ask(questionary.text, f"Введите тикер для {exchange.upper()}:")
-        strategy_name = ask(questionary.select, "Выберите стратегию:", choices=[*strategies.keys(), GO_BACK_OPTION])
+        # Возвращаем пустой словарь, так как flow сам все достанет из БД
+        return {}
 
-        live_intervals = ['1min', '3min', '5min', '15min']
-        available_intervals = [i for i in live_intervals if i in EXCHANGE_INTERVAL_MAPS[exchange]]
-        interval = ask(questionary.select, "Выберите интервал:", choices=[*available_intervals, GO_BACK_OPTION],
-                       default="1min")
-
-        rm_type = ask(questionary.select, "Выберите риск-менеджер:", choices=["FIXED", "ATR", GO_BACK_OPTION],
-                      default="FIXED")
-
-        settings = {
-            "exchange": exchange,
-            "instrument": instrument,
-            "strategy": strategy_name,
-            "interval": interval,
-            "risk_manager_type": rm_type,
-            "trade_mode": "SIGNAL_ONLY"
-        }
-
-        if exchange == 'bybit':
-            category = ask(questionary.select, "Выберите категорию рынка Bybit:",
-                           choices=["linear", "spot", "inverse", GO_BACK_OPTION], default="linear")
-            settings["category"] = category
-
-        return settings
     except UserCancelledError:
         return None
 

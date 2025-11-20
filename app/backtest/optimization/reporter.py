@@ -8,7 +8,7 @@ import optuna
 
 from app.analyzers.analysis_session import AnalysisSession
 from app.analyzers.metrics.portfolio_metrics import METRIC_CONFIG
-from app.core.data.local_handler import HistoricLocalDataHandler
+from app.core.data.feeds.local import HistoricLocalDataHandler
 from config import BACKTEST_CONFIG, PATH_CONFIG
 
 logger = logging.getLogger(__name__)
