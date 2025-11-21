@@ -6,6 +6,7 @@ from typing import Dict, Any, Optional
 from app.core.models.event import SignalEvent
 from app.strategies.base_strategy import BaseStrategy
 from app.core.services.feature_engine import FeatureEngine
+from app.core.constants import TradeDirection
 
 logger = logging.getLogger('backtester')
 
@@ -92,16 +93,16 @@ class MeanReversionStrategy(BaseStrategy):
 
         # Сигнал на покупку (возврат к среднему снизу)
         if prev_z_score < self.lower_threshold and current_z_score >= self.lower_threshold:
-            self.events_queue.put(SignalEvent(timestamp, self.instrument, "BUY", self.name))
+            self.events_queue.put(SignalEvent(timestamp, self.instrument, TradeDirection.BUY, self.name))
 
         # Сигнал на продажу (возврат к среднему сверху)
         elif prev_z_score > self.upper_threshold and current_z_score <= self.upper_threshold:
-            self.events_queue.put(SignalEvent(timestamp, self.instrument, "SELL", self.name))
+            self.events_queue.put(SignalEvent(timestamp, self.instrument, TradeDirection.SELL, self.name))
 
         # Сигнал на закрытие лонга (пересечение нулевой линии)
         elif prev_z_score < 0 and current_z_score >= 0:
-            self.events_queue.put(SignalEvent(timestamp, self.instrument, "SELL", self.name))
+            self.events_queue.put(SignalEvent(timestamp, self.instrument, TradeDirection.SELL, self.name))
 
         # Сигнал на закрытие шорта (пересечение нулевой линии)
         elif prev_z_score > 0 and current_z_score <= 0:
-            self.events_queue.put(SignalEvent(timestamp, self.instrument, "BUY", self.name))
+            self.events_queue.put(SignalEvent(timestamp, self.instrument, TradeDirection.BUY, self.name))

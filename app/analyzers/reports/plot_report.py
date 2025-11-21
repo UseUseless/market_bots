@@ -7,6 +7,7 @@ import pandas as pd
 from matplotlib import pyplot as plt
 
 from app.analyzers.metrics.portfolio_metrics import METRIC_CONFIG
+from app.core.constants import ExchangeType
 from config import EXCHANGE_SPECIFIC_CONFIG
 
 logger = logging.getLogger(__name__)
@@ -48,7 +49,7 @@ class PlotReportGenerator:
 
         profit_factor_str = f"{profit_factor:.2f}" if np.isfinite(profit_factor) else "inf"
 
-        exchange = self.metadata.get("exchange", "tinkoff")
+        exchange = self.metadata.get("exchange", ExchangeType.TINKOFF)
         annual_factor = EXCHANGE_SPECIFIC_CONFIG.get(exchange, {}).get("SHARPE_ANNUALIZATION_FACTOR", 252)
 
         return {

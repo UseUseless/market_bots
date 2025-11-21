@@ -1,13 +1,14 @@
 import asyncio
 import logging
-from datetime import datetime
 
 from app.live.bus.signal_bus import SignalBus
 from app.core.models.event import SignalEvent
 from app.bots.manager import BotManager
 from app.storage.database import async_session_factory
-from app.storage.repositories import BotRepository, ConfigRepository
+from app.storage.repositories import BotRepository
 from app.storage.models import StrategyConfig
+from app.utils.time_helper import parse_interval_to_timedelta, msk_timezone
+from app.core.constants import TradeDirection
 
 logger = logging.getLogger(__name__)
 
@@ -76,10 +77,31 @@ class TelegramBridge:
                     await self.bot_manager.send_message(config.bot_id, chat_id, msg)
 
     def _format_message(self, event: SignalEvent) -> str:
-        emoji = "🟢" if event.direction == "BUY" else "🔴"
+        # 1. Считаем время
+        duration = parse_interval_to_timedelta(event.interval)
+        close_time_utc = event.timestamp + duration
+
+        # 2. Переводим в МСК
+        msk_time = close_time_utc.astimezone(msk_timezone())
+        time_str = msk_time.strftime('%H:%M:%S')
+
+        if event.direction == TradeDirection.BUY:
+            header = "🟢 **СИГНАЛ НА ПОКУПКУ (BUY)**"
+        else:
+            header = "🔴 **СИГНАЛ НА ПРОДАЖУ (SELL)**"
+
+        price_str = f"`{event.price}`" if event.price else "_по рынку_"
+
         return (
-            f"{emoji} **SIGNAL: {event.direction}**\n"
-            f"#{event.instrument}\n"
-            f"Strategy: `{event.strategy_id}`\n"
-            f"Time: `{event.timestamp.strftime('%H:%M:%S')}`"
+            f"{header}\n\n"
+            f"💎 **Инструмент:** `#{event.instrument}`\n"
+            f"⏳ **Таймфрейм:** `{event.interval}`\n"
+            f"⚡ **Направление:** `{event.direction}`\n"
+            f"💵 **Цена (Close):** {price_str}\n"
+            f"🧠 **Стратегия:** `{event.strategy_id}`\n"
+            f"🕒 **Свеча закрыта:** `{time_str} (МСК)`\n\n"
+            f"ℹ️ _Инфо: Цена сигнала соответствует цене закрытия свечи. Время указано на момент окончания формирования свечи._\n\n"
+            f"⚠️ _Дисклеймер:_\n"
+            f"_Сигнал сформирован автоматически. Не является инвест-рекомендацией. "
+            f"Принимайте решения самостоятельно._"
         )

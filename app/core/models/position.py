@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from datetime import datetime
 
+from app.core.constants import TradeDirection
+
 @dataclass
 class Position:
     """
@@ -26,7 +28,7 @@ class Position:
     entry_timestamp: datetime
     """Временная метка (UTC) свечи, на которой была открыта позиция."""
 
-    direction: str  # 'BUY' или 'SELL'
+    direction: TradeDirection  # 'BUY' или 'SELL'
     """Направление позиции: 'BUY' для длинной, 'SELL' для короткой."""
 
     stop_loss: float

@@ -5,6 +5,7 @@ from typing import Dict, Any, Optional
 from app.core.models.event import SignalEvent
 from app.strategies.base_strategy import BaseStrategy
 from app.core.services.feature_engine import FeatureEngine
+from app.core.constants import TradeDirection
 
 class TripleFilterStrategy(BaseStrategy):
     """
@@ -89,7 +90,7 @@ class TripleFilterStrategy(BaseStrategy):
         buy_volume = last_candle['volume'] > last_candle[self.volume_sma_name]
 
         if buy_trend and buy_impulse and buy_volume:
-            signal = SignalEvent(timestamp=timestamp, instrument=self.instrument, direction="BUY",
+            signal = SignalEvent(timestamp=timestamp, instrument=self.instrument, direction=TradeDirection.BUY,
                                  strategy_id=self.name)
             self.events_queue.put(signal)
             return
@@ -101,7 +102,7 @@ class TripleFilterStrategy(BaseStrategy):
         sell_volume = last_candle['volume'] > last_candle[self.volume_sma_name]
 
         if sell_trend and sell_impulse and sell_volume:
-            signal = SignalEvent(timestamp=timestamp, instrument=self.instrument, direction="SELL",
+            signal = SignalEvent(timestamp=timestamp, instrument=self.instrument, direction=TradeDirection.SELL,
                                  strategy_id=self.name)
             self.events_queue.put(signal)
             return

@@ -101,3 +101,12 @@ class BotRepository:
         )
         result = await self.session.execute(query)
         return result.scalars().all()
+
+    async def get_all_subscribers_for_bot(self, bot_id: int) -> List[int]:
+        """Возвращает список chat_id всех активных подписчиков этого бота."""
+        query = select(TelegramSubscriber.chat_id).where(
+            TelegramSubscriber.bot_id == bot_id,
+            TelegramSubscriber.is_active == True
+        )
+        result = await self.session.execute(query)
+        return result.scalars().all()

@@ -7,43 +7,46 @@ from aiogram.filters import Command
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.storage.repositories import BotRepository
-from app.storage.models import BotInstance
 
 logger = logging.getLogger(__name__)
 
 
 class BotManager:
     """
-    Управляет жизненным циклом N телеграм-ботов.
-    Запускает поллинг, регистрирует хендлеры.
+    Управляет жизненным циклом N телеграм-ботов с поддержкой Hot Reload.
     """
 
     def __init__(self, session_factory: async_sessionmaker):
         self.session_factory = session_factory
-        self.active_bots: Dict[int, Bot] = {}  # bot_db_id -> Bot object
-        self.dp = Dispatcher()  # Один диспетчер на всех ботов
+        self.active_bots: Dict[int, Bot] = {}
+        self.polling_tasks: Dict[int, asyncio.Task] = {}
+        self.dp = Dispatcher()
 
         # --- РЕГИСТРАЦИЯ ХЕНДЛЕРОВ ---
         self.dp.message.register(self.cmd_start, Command("start"))
 
     async def cmd_start(self, message: types.Message, bot: Bot):
         """Обработка команды /start."""
-        # Нам нужно понять, какому именно боту из БД написали.
-        # aiogram передает объект bot в хендлер.
-        # Мы найдем его ID в нашем словаре active_bots (обратный поиск).
-
+        # Находим ID бота в нашей базе
         bot_db_id = None
         for bid, b_obj in self.active_bots.items():
-            if b_obj.id == bot.id:  # aiogram bot id matches
+            if b_obj.id == bot.id:
                 bot_db_id = bid
                 break
 
         if bot_db_id is None:
-            await message.answer("Ошибка конфигурации бота.")
+            await message.answer("⚠️ Ошибка: Бот не найден в конфигурации.")
             return
 
         async with self.session_factory() as session:
             repo = BotRepository(session)
+            # Дополнительная проверка статуса при получении команды
+            # (на случай, если бот выключается, но поллинг еще не остановился)
+            bots_data = await repo.get_all_active_bots()
+            if bot_db_id not in [b.id for b in bots_data]:
+                await message.answer("⚠️ Этот бот отключен администратором.")
+                return
+
             is_new = await repo.register_subscriber(
                 bot_id=bot_db_id,
                 chat_id=message.chat.id,
@@ -51,51 +54,129 @@ class BotManager:
             )
 
         if is_new:
-            await message.answer("✅ Вы успешно подписались на сигналы этого бота!")
+            await message.answer("✅ Вы успешно подписались на сигналы!")
             logger.info(f"New subscriber {message.chat.id} for bot {bot_db_id}")
         else:
             await message.answer("Вы уже подписаны. Ожидайте сигналов.")
 
-    async def start(self):
-        """Загружает ботов из БД и запускает поллинг."""
+    async def _start_bot_polling(self, bot_id: int, bot: Bot):
+        """Запускает поллинг для ОДНОГО конкретного бота."""
+        try:
+            # Удаляем вебхук, чтобы не конфликтовать с поллингом
+            await bot.delete_webhook(drop_pending_updates=True)
+
+            # Запускаем поллинг конкретного бота с общим диспетчером
+            await self.dp.start_polling(bot)
+        except asyncio.CancelledError:
+            logger.info(f"Polling stopped for bot ID {bot_id}")
+            raise
+        except Exception as e:
+            logger.error(f"Polling error for bot ID {bot_id}: {e}")
+
+    async def _broadcast(self, bot_id: int, text: str):
+        """Рассылает сообщение всем подписчикам бота."""
         async with self.session_factory() as session:
             repo = BotRepository(session)
-            bots_data = await repo.get_all_active_bots()
+            chat_ids = await repo.get_all_subscribers_for_bot(bot_id)
 
-        if not bots_data:
-            logger.warning("Нет активных ботов в БД для запуска.")
+        if not chat_ids:
             return
 
-        runners = []
-        for bot_data in bots_data:
+        logger.info(f"Broadcasting to {len(chat_ids)} users via bot {bot_id}")
+        bot = self.active_bots.get(bot_id)
+        if not bot:
+            return
+
+        for chat_id in chat_ids:
             try:
-                bot = Bot(token=bot_data.token)
-                # Сохраняем ссылку
-                self.active_bots[bot_data.id] = bot
-
-                # Удаляем вебхук на всякий случай и запускаем
-                await bot.delete_webhook(drop_pending_updates=True)
-                logger.info(f"Bot started: {bot_data.name}")
-
-                # Создаем polling task для каждого бота
-                # Используем polling диспетчера, передавая список ботов?
-                # В aiogram 3.x мульти-бот делается немного иначе, но
-                # самый простой способ - запустить dp.start_polling для списка ботов,
-                # но пока сделаем для одного, или через цикл.
-                pass
+                await bot.send_message(chat_id, text, parse_mode="Markdown")
+                # Небольшая задержка, чтобы не упереться в лимиты Телеграма
+                await asyncio.sleep(0.05)
             except Exception as e:
-                logger.error(f"Failed to start bot {bot_data.name}: {e}")
+                logger.warning(f"Failed to broadcast to {chat_id}: {e}")
 
-        if self.active_bots:
-            # Запускаем поллинг для всех созданных ботов
-            bots_list = list(self.active_bots.values())
-            await self.dp.start_polling(*bots_list)
+    async def start(self):
+        """
+        Главный цикл-менеджер (Watchdog).
+        Следит за БД и управляет задачами поллинга.
+        """
+        logger.info("🤖 Bot Manager Orchestrator started.")
+
+        while True:
+            try:
+                async with self.session_factory() as session:
+                    repo = BotRepository(session)
+                    # Получаем список ботов, у которых is_active = 1
+                    db_bots = await repo.get_all_active_bots()
+
+                current_ids = set(self.active_bots.keys())
+                target_ids = {b.id for b in db_bots}
+                db_bots_map = {b.id: b for b in db_bots}
+
+                # 1. Находим новых ботов для запуска
+                ids_to_add = target_ids - current_ids
+                # 2. Находим выключенных ботов для остановки
+                ids_to_remove = current_ids - target_ids
+
+                # --- STOPPING ---
+                for bid in ids_to_remove:
+                    logger.info(f"🛑 Stopping bot ID {bid}...")
+
+                    # 1. Прощаемся перед отключением
+                    await self._broadcast(bid,
+                                          "💤 **Бот приостанавливает работу.**\nМониторинг сигналов временно отключен.")
+
+                    # Отменяем задачу поллинга
+                    if bid in self.polling_tasks:
+                        self.polling_tasks[bid].cancel()
+                        try:
+                            await self.polling_tasks[bid]
+                        except asyncio.CancelledError:
+                            pass
+                        del self.polling_tasks[bid]
+
+                    # Закрываем сессию бота
+                    bot = self.active_bots.pop(bid)
+                    await bot.session.close()
+                    logger.info(f"Bot ID {bid} stopped.")
+
+                # --- STARTING ---
+                for bid in ids_to_add:
+                    bot_data = db_bots_map[bid]
+                    try:
+                        logger.info(f"🆕 Starting bot ID {bid}: {bot_data.name}")
+                        bot = Bot(token=bot_data.token)
+
+                        # Проверка токена
+                        bot_user = await bot.get_me()
+                        logger.info(f"   Authorized as @{bot_user.username}")
+
+                        self.active_bots[bid] = bot
+
+                        # Запускаем поллинг в отдельной задаче
+                        task = asyncio.create_task(self._start_bot_polling(bid, bot))
+                        self.polling_tasks[bid] = task
+
+                        await self._broadcast(bid,
+                                              "🚀 **Бот активирован!**\nСистема мониторинга запущена. Ожидайте сигналов.")
+
+                    except Exception as e:
+                        logger.error(f"❌ Failed to start bot {bot_data.name}: {e}")
+
+            except Exception as e:
+                logger.error(f"Bot Manager loop error: {e}")
+
+            # Пауза перед следующей проверкой БД
+            await asyncio.sleep(5)
 
     async def send_message(self, bot_id: int, chat_id: int, text: str):
-        """Отправка сообщения конкретному пользователю от конкретного бота."""
+        """Отправка сообщения (если бот активен)."""
         bot = self.active_bots.get(bot_id)
         if bot:
             try:
                 await bot.send_message(chat_id, text, parse_mode="Markdown")
             except Exception as e:
-                logger.error(f"Failed to send msg to {chat_id}: {e}")
+                logger.error(f"Failed to send msg to {chat_id} via bot {bot_id}: {e}")
+        else:
+            # Если бота нет в active_bots, значит он выключен в БД
+            logger.warning(f"Attempt to send message via disabled bot {bot_id}")

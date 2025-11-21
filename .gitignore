@@ -15,7 +15,7 @@ __pycache__/
 *.bkp
 .$*
 .backup
-.db
+*.db
 
 # Папка с данными
 /data/

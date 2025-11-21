@@ -18,6 +18,7 @@ from typing import Dict, Any, Tuple
 from app.utils.clients.abc import BaseDataClient
 from app.utils.clients.tinkoff import TinkoffHandler
 from app.utils.clients.bybit import BybitHandler
+from app.core.constants import ExchangeType
 from config import DATA_LOADER_CONFIG, PATH_CONFIG
 
 # Получаем логгер для текущего модуля
@@ -28,11 +29,11 @@ logger = logging.getLogger(__name__)
 
 def _get_client(exchange: str) -> BaseDataClient:
     """Создает и возвращает экземпляр клиента для указанной биржи."""
-    if exchange == 'tinkoff':
+    if exchange == ExchangeType.TINKOFF:
         # Для публичных данных и скачивания достаточно токена "только для чтения",
         # который используется по умолчанию в конструкторе.
         return TinkoffHandler()
-    elif exchange == 'bybit':
+    elif exchange == ExchangeType.BYBIT:
         # Для публичных данных (списки, тикеры, история) можно использовать
         # режим REAL без ключей API.
         return BybitHandler(trade_mode="REAL")

@@ -5,6 +5,7 @@ from datetime import datetime
 from app.core.models.event import MarketEvent, OrderEvent
 from app.core.models.portfolio_state import PortfolioState
 from app.core.models.position import Position
+from app.core.constants import TradeDirection, TriggerReason
 
 logger = logging.getLogger(__name__)
 
@@ -50,38 +51,38 @@ class RiskMonitor:
         candle_low = event.data['low']
 
         # --- Проверка для ДЛИННОЙ позиции (BUY) ---
-        if position.direction == 'BUY':
+        if position.direction == TradeDirection.BUY:
             # Приоритетная проверка Stop Loss
             if candle_low <= position.stop_loss:
                 logger.info(f"!!! СРАБОТАЛ STOP LOSS для {position.instrument} по цене {position.stop_loss:.4f}. Генерирую ордер на закрытие.")
-                self._generate_exit_order(event.timestamp, position, "SL", position.stop_loss)
+                self._generate_exit_order(event.timestamp, position, TriggerReason.STOP_LOSS, position.stop_loss)
                 return  # Выходим, чтобы не проверять TP на этой же свече
 
             # Проверка Take Profit (только если SL не сработал)
             if candle_high >= position.take_profit:
                 logger.info(f"!!! СРАБОТАЛ TAKE PROFIT для {position.instrument} по цене {position.take_profit:.4f}. Генерирую ордер на закрытие.")
-                self._generate_exit_order(event.timestamp, position, "TP", position.take_profit)
+                self._generate_exit_order(event.timestamp, position, TriggerReason.TAKE_PROFIT, position.take_profit)
                 return
 
         # --- Проверка для КОРОТКОЙ позиции (SELL) ---
-        elif position.direction == 'SELL':
+        elif position.direction == TradeDirection.SELL:
             # Приоритетная проверка Stop Loss
             if candle_high >= position.stop_loss:
                 logger.info(f"!!! СРАБОТАЛ STOP LOSS для {position.instrument} по цене {position.stop_loss:.4f}. Генерирую ордер на закрытие.")
-                self._generate_exit_order(event.timestamp, position, "SL", position.stop_loss)
+                self._generate_exit_order(event.timestamp, position, TriggerReason.STOP_LOSS, position.stop_loss)
                 return
 
             # Проверка Take Profit (только если SL не сработал)
             if candle_low <= position.take_profit:
                 logger.info(f"!!! СРАБОТАЛ TAKE PROFIT для {position.instrument} по цене {position.take_profit:.4f}. Генерирую ордер на закрытие.")
-                self._generate_exit_order(event.timestamp, position, "TP", position.take_profit)
+                self._generate_exit_order(event.timestamp, position, TriggerReason.TAKE_PROFIT, position.take_profit)
                 return
 
-    def _generate_exit_order(self, timestamp: datetime, position: Position, reason: str, execution_price: float):
+    def _generate_exit_order(self, timestamp: datetime, position: Position, reason: TriggerReason, execution_price: float):
         """
         Создает и отправляет в очередь событие OrderEvent на закрытие позиции.
         """
-        exit_direction = "SELL" if position.direction == "BUY" else "BUY"
+        exit_direction = TradeDirection.SELL if position.direction == TradeDirection.BUY else TradeDirection.BUY
         order = OrderEvent(
             timestamp=timestamp,
             instrument=position.instrument,

@@ -7,6 +7,7 @@ from . import dialogs as ui_helpers
 from app.strategies.base_strategy import BaseStrategy
 from docs.help_texts import HELP_TOPICS
 from app.analyzers.metrics.portfolio_metrics import METRIC_CONFIG
+from app.core.constants import ExchangeType
 from config import PATH_CONFIG, EXCHANGE_INTERVAL_MAPS
 
 
@@ -84,7 +85,7 @@ def prompt_for_data_management() -> Optional[Dict[str, Any]]:
         )
 
         if action == UPDATE_LISTS:
-            exchange = ask(questionary.select, "Выберите биржу:", choices=["tinkoff", "bybit", GO_BACK_OPTION])
+            exchange = ask(questionary.select, "Выберите биржу:", choices=[ExchangeType.TINKOFF, ExchangeType.BYBIT, GO_BACK_OPTION])
             return {"action": "update", "exchange": exchange}
 
         elif action == DOWNLOAD_DATA:
@@ -92,7 +93,7 @@ def prompt_for_data_management() -> Optional[Dict[str, Any]]:
                 questionary.select, "Что вы хотите скачать?",
                 choices=["Отдельные тикеры (ручной ввод)", "Готовый список инструментов", GO_BACK_OPTION]
             )
-            exchange = ask(questionary.select, "Выберите биржу:", choices=["tinkoff", "bybit", GO_BACK_OPTION])
+            exchange = ask(questionary.select, "Выберите биржу:", choices=[ExchangeType.TINKOFF, ExchangeType.BYBIT, GO_BACK_OPTION])
 
             settings = {"action": "download", "exchange": exchange}
 
@@ -118,7 +119,7 @@ def prompt_for_data_management() -> Optional[Dict[str, Any]]:
 
             settings.update({"interval": interval, "days": int(days)})
 
-            if exchange == 'bybit':
+            if exchange == ExchangeType.BYBIT:
                 category = ask(questionary.select, "Выберите категорию рынка Bybit:",
                                choices=["linear", "spot", "inverse", GO_BACK_OPTION], default="linear")
                 settings["category"] = category

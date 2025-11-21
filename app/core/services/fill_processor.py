@@ -5,6 +5,7 @@ from app.core.models.event import FillEvent
 from app.core.models.portfolio_state import PortfolioState
 from app.core.models.position import Position
 from app.utils.file_io import save_trade_log
+from app.core.constants import TradeDirection
 
 logger = logging.getLogger(__name__)
 
@@ -81,9 +82,9 @@ class FillProcessor:
     def _handle_fill_close(self, event: FillEvent, state: PortfolioState, position: Position):
         """Обрабатывает исполнение ордера на закрытие позиции."""
         gross_pnl = 0.0
-        if position.direction == 'BUY':
+        if position.direction == TradeDirection.BUY:
             gross_pnl = (event.price - position.entry_price) * event.quantity
-        else:  # 'SELL'
+        else:  # TradeDirection.SELL
             gross_pnl = (position.entry_price - event.price) * event.quantity
 
         commission_exit = event.commission

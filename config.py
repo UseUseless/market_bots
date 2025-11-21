@@ -1,5 +1,6 @@
 import os
 from dotenv import load_dotenv
+from app.core.constants import ExchangeType
 
 # Загружаем переменные окружения из файла .env
 load_dotenv()
@@ -51,7 +52,7 @@ LIVE_TRADING_CONFIG = {
 }
 
 EXCHANGE_INTERVAL_MAPS = {
-    "tinkoff": {
+    ExchangeType.TINKOFF: {
         "1min": "CANDLE_INTERVAL_1_MIN", "2min": "CANDLE_INTERVAL_2_MIN",
         "3min": "CANDLE_INTERVAL_3_MIN", "5min": "CANDLE_INTERVAL_5_MIN",
         "10min": "CANDLE_INTERVAL_10_MIN", "15min": "CANDLE_INTERVAL_15_MIN",
@@ -60,7 +61,7 @@ EXCHANGE_INTERVAL_MAPS = {
         "1day": "CANDLE_INTERVAL_DAY", "1week": "CANDLE_INTERVAL_WEEK",
         "1month": "CANDLE_INTERVAL_MONTH",
     },
-    "bybit": {
+    ExchangeType.BYBIT: {
         "1min": "1", "3min": "3", "5min": "5", "15min": "15", "30min": "30", "1hour": "60",
         "2hour": "120", "4hour": "240", "6hour": "360", "12hour": "720", "1day": "D",
         "1week": "W", "1month": "M",
@@ -92,7 +93,7 @@ BACKTEST_CONFIG = {
 }
 
 EXCHANGE_SPECIFIC_CONFIG = {
-    "tinkoff": {
+    ExchangeType.TINKOFF: {
         "SHARPE_ANNUALIZATION_FACTOR": 252,
         # Время основной сессии MOEX в UTC
         "SESSION_START_UTC": "06:50",
@@ -100,7 +101,7 @@ EXCHANGE_SPECIFIC_CONFIG = {
         # Класс-код для поиска акций
         "DEFAULT_CLASS_CODE": "TQBR",
     },
-    "bybit": {
+    ExchangeType.BYBIT: {
         # Для крипты, торгующейся 24/7, коэффициент 365
         "SHARPE_ANNUALIZATION_FACTOR": 365,
         # None означает отсутствие фильтрации по сессии (торговля 24/7)

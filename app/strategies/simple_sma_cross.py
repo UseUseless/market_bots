@@ -5,6 +5,7 @@ from typing import Dict, Any, Optional
 from app.strategies.base_strategy import BaseStrategy
 from app.core.models.event import SignalEvent
 from app.core.services.feature_engine import FeatureEngine
+from app.core.constants import TradeDirection
 
 
 class SimpleSMACrossStrategy(BaseStrategy):
@@ -48,8 +49,8 @@ class SimpleSMACrossStrategy(BaseStrategy):
         """
         # Сигнал на покупку: цена пересекла SMA снизу вверх
         if prev_candle['close'] < prev_candle[self.sma_name] and last_candle['close'] > last_candle[self.sma_name]:
-            self.events_queue.put(SignalEvent(timestamp, self.instrument, "BUY", self.name))
+            self.events_queue.put(SignalEvent(timestamp, self.instrument, TradeDirection.BUY, self.name))
 
         # Сигнал на продажу (закрытие лонга): цена пересекла SMA сверху вниз
         elif prev_candle['close'] > prev_candle[self.sma_name] and last_candle['close'] < last_candle[self.sma_name]:
-            self.events_queue.put(SignalEvent(timestamp, self.instrument, "SELL", self.name))
+            self.events_queue.put(SignalEvent(timestamp, self.instrument, TradeDirection.SELL, self.name))

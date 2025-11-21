@@ -26,44 +26,67 @@ class HistoricLocalDataHandler:
 
     def _resample_and_fill_gaps(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Выравнивает временную сетку.
-        ИСПРАВЛЕНО: Убран bfill (Look-ahead bias). Используется только ffill.
+        Выравнивает временную сетку, корректно агрегирует данные
+        и заполняет пропуски (gaps) внутри торговой сессии.
         """
         if df.empty:
             return df
 
         df.set_index('time', inplace=True)
 
+        # Карта частот для pandas
         freq_map = {
             '1min': '1min', '2min': '2min', '3min': '3min', '5min': '5min', '10min': '10min',
             '15min': '15min', '30min': '30min', '1hour': '1h', '2hour': '2h',
             '4hour': '4h', '1day': 'D'
         }
         freq = freq_map.get(self.interval)
+
         if not freq:
-            logger.warning(
-                f"Не удалось определить частоту для resample для интервала '{self.interval}'. Пропускаем заполнение гэпов.")
+            logger.warning(f"Не удалось определить частоту для resample: '{self.interval}'.")
             return df.reset_index()
 
-        resampled_df = df.resample(freq).first()
+        # Если мы собираем минутки в 5-минутки, или просто выравниваем сетку:
+        # - Объем должен суммироваться.
+        # - Хай и Лоу должны искаться реальные.
+        agg_rules = {
+            'open': 'first',
+            'high': 'max',
+            'low': 'min',
+            'close': 'last',
+            'volume': 'sum'
+        }
 
-        resampled_df['volume'] = resampled_df['volume'].fillna(0)
+        # Поддержка turnover (оборота), если он есть в данных
+        if 'turnover' in df.columns:
+            agg_rules['turnover'] = 'sum'
 
-        # 2. Заполняем цены ТОЛЬКО вперед (ffill).
-        # Это закрывает дырки ВНУТРИ дня (если 5 минут не было сделок, цена считается старой).
-        # Это НЕ создает look-ahead bias.
-        resampled_df.ffill(inplace=True)
+        # Применяем правила. Это создает сетку с NaNs там, где данных нет.
+        resampled_df = df.resample(freq).agg(agg_rules)
 
-        resampled_df.dropna(inplace=True)
+        # Логика: Если свечи не было (биржа работала, но сделок не было, или разрыв связи),
+        # цена остается прежней, а объем равен 0.
+        # Сначала протягиваем цену закрытия (Close) вперед
+        resampled_df['close'] = resampled_df['close'].ffill()
 
-        resampled_df['volume'] = resampled_df['volume'].astype(int)
+        # Остальные цены для "пустой" свечи должны быть равны Close (флэт)
+        resampled_df['open'] = resampled_df['open'].fillna(resampled_df['close'])
+        resampled_df['high'] = resampled_df['high'].fillna(resampled_df['close'])
+        resampled_df['low'] = resampled_df['low'].fillna(resampled_df['close'])
+
+        # Объем для пустой свечи — это 0 (а не объем прошлой свечи!)
+        resampled_df['volume'] = resampled_df['volume'].fillna(0).astype(int)
+
+        if 'turnover' in resampled_df.columns:
+            resampled_df['turnover'] = resampled_df['turnover'].fillna(0)
 
         resampled_df.reset_index(inplace=True)
 
+        # Логируем только если размер изменился (реально были дырки или склейка)
         original_rows = len(df)
         filled_rows = len(resampled_df)
         if filled_rows != original_rows:
-            logger.info(f"Выравнивание сетки: {original_rows} -> {filled_rows} свечей.")
+            logger.info(f"Выравнивание сетки ({self.interval}): {original_rows} -> {filled_rows} строк.")
 
         return resampled_df
 

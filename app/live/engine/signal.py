@@ -28,7 +28,27 @@ class SignalEngine:
         """
         try:
             # 1. Разогрев
-            await feed.warm_up(days=3)
+            # Рассчитываем, сколько дней истории нужно стратегии
+            # Например, если нужно 200 свечей по 5 минут = 1000 минут ~= 0.7 дня.
+            # Берем с запасом (x2), но минимум 1 день.
+
+            needed_candles = strategy.min_history_needed + 10
+
+            # Грубый перевод интервалов в минуты
+            interval_mins_map = {
+                "1min": 1, "3min": 3, "5min": 5, "15min": 15, "30min": 30, "1hour": 60, "2hour": 120,
+                "4hour": 240, "6hour": 360, "12hour": 720, "1day": 1440, "1week": 10080, "1month": 40320,
+            }
+
+            # Получаем множитель, если интервал неизвестен - считаем как 1 мин
+            mins_per_candle = interval_mins_map.get(feed.interval, 1)
+
+            total_minutes_needed = needed_candles * mins_per_candle
+            days_needed = (total_minutes_needed / 1440) * 1.5  # Коэффициент запаса
+
+            days_to_load = max(1, int(days_needed + 0.9))  # Округляем вверх, минимум 1 день
+
+            await feed.warm_up(days=days_to_load)
 
             # 2. Стрим
             stream_queue = asyncio.Queue()

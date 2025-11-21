@@ -8,6 +8,7 @@ from app.core.interfaces.abstract_feed import IDataFeed
 from app.core.services.feature_engine import FeatureEngine
 from app.utils.clients.abc import BaseDataClient
 from app.core.data.feeds.stream import BaseStreamDataHandler, TinkoffStreamDataHandler, BybitStreamDataHandler
+from app.core.constants import ExchangeType
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,6 @@ class UnifiedDataFeed(IDataFeed):
         self.client = client
         self.exchange = exchange
         self.instrument = instrument
-        # ИСПРАВЛЕНИЕ: Сохраняем в защищенную переменную
         self._interval = interval
 
         self.feature_engine = feature_engine
@@ -64,9 +64,9 @@ class UnifiedDataFeed(IDataFeed):
 
     def start_stream(self, event_queue: asyncio.Queue, loop: asyncio.AbstractEventLoop, **kwargs):
         """Инициализирует подключение к вебсокету."""
-        if self.exchange == 'tinkoff':
+        if self.exchange == ExchangeType.TINKOFF:
             self.stream_handler = TinkoffStreamDataHandler(event_queue, self.instrument, self._interval)
-        elif self.exchange == 'bybit':
+        elif self.exchange == ExchangeType.BYBIT:
             self.stream_handler = BybitStreamDataHandler(
                 event_queue, self.instrument, self._interval, loop,
                 channel_type=kwargs.get('category', 'linear'), testnet=False

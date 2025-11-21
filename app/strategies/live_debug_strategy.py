@@ -5,7 +5,7 @@ from typing import Dict, Any, Optional
 from app.core.models.event import SignalEvent
 from app.strategies.base_strategy import BaseStrategy
 from app.core.services.feature_engine import FeatureEngine
-
+from app.core.constants import TradeDirection
 
 class LiveDebugStrategy(BaseStrategy):
     """
@@ -32,7 +32,7 @@ class LiveDebugStrategy(BaseStrategy):
         # Проверяем, что индикатор реально посчитался (DataFeed работает)
         sma_val = last_candle.get('SMA_5')
 
-        direction = "BUY" if self.counter % 2 == 0 else "SELL"
+        direction = TradeDirection.BUY if self.counter % 2 == 0 else TradeDirection.SELL
 
         print(f"\n[DEBUG STRATEGY] Свеча получена! Close: {last_candle['close']}, SMA_5: {sma_val}")
         print(f"[DEBUG STRATEGY] Генерирую тестовый сигнал {direction}...\n")
@@ -41,6 +41,8 @@ class LiveDebugStrategy(BaseStrategy):
             timestamp=timestamp,
             instrument=self.instrument,
             direction=direction,
-            strategy_id=self.name
+            strategy_id=self.name,
+            price=last_candle['close'],
+            interval=self.params.get("candle_interval", "1min")
         )
         self.events_queue.put(signal)

@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
 import pandas as pd
+from app.core.constants import TradeDirection
 
 @dataclass
 class TradeRiskProfile:
@@ -92,10 +93,10 @@ class FixedRiskManager(BaseRiskManager):
         if entry_price <= 0:
             raise ValueError(f"Цена входа должна быть положительной, получено: {entry_price}")
 
-        risk_percent = self.risk_percent_long if direction == 'BUY' else self.risk_percent_short
+        risk_percent = self.risk_percent_long if direction == TradeDirection.BUY else self.risk_percent_short
         sl_percent = risk_percent / 100.0
 
-        if direction == 'BUY':
+        if direction == TradeDirection.BUY:
             stop_loss_price = entry_price * (1 - sl_percent)
             take_profit_price = entry_price * (1 + (sl_percent * self.tp_ratio))
         else:
@@ -148,7 +149,7 @@ class AtrRiskManager(BaseRiskManager):
         if entry_price <= 0:
             raise ValueError(f"Цена входа должна быть положительной, получено: {entry_price}")
 
-        risk_percent = self.risk_percent_long if direction == 'BUY' else self.risk_percent_short
+        risk_percent = self.risk_percent_long if direction == TradeDirection.BUY else self.risk_percent_short
 
         if last_candle is None:
             raise ValueError("Для AtrRiskManager необходимы данные последней свечи (last_candle).")
@@ -159,10 +160,10 @@ class AtrRiskManager(BaseRiskManager):
             raise ValueError(f"ATR value is invalid (None or <=0). Skipping signal. Last candle: {last_candle}")
 
         sl_distance = atr_value * self.sl_multiplier
-        stop_loss_price = entry_price - sl_distance if direction == 'BUY' else entry_price + sl_distance
+        stop_loss_price = entry_price - sl_distance if direction == TradeDirection.BUY else entry_price + sl_distance
 
         tp_distance = atr_value * self.tp_multiplier
-        take_profit_price = entry_price + tp_distance if direction == 'BUY' else entry_price - tp_distance
+        take_profit_price = entry_price + tp_distance if direction == TradeDirection.BUY else entry_price - tp_distance
 
         if take_profit_price <= 0:
             # Для шортов при низкой цене входа TP может уйти в минус.

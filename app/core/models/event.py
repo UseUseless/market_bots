@@ -3,6 +3,8 @@ from datetime import datetime
 import pandas as pd
 from typing import Optional
 
+from app.core.constants import TradeDirection, TriggerReason
+
 @dataclass
 class Event:
     """
@@ -19,7 +21,7 @@ class MarketEvent(Event):
     """
     timestamp: datetime
     instrument: str
-    data: pd.Series # Строка DataFrame с ценами (OHLCV) и индикаторами
+    data: pd.Series
 
 @dataclass
 class SignalEvent(Event):
@@ -29,12 +31,10 @@ class SignalEvent(Event):
     """
     timestamp: datetime
     instrument: str
-    direction: str  # 'BUY' или 'SELL'
-
-    # На будущее, если будут одновременно работать две стратегии,
-    # чтобы не перекрывали сигналы друг друга, а исполнялись по отдельности
-    # и не проходили проверки друг за друга
-    strategy_id: str # Имя стратегии, сгенерировавшей сигнал
+    direction: TradeDirection
+    strategy_id: str
+    price: Optional[float] = None
+    interval: str = None
 
 @dataclass
 class OrderEvent(Event):
@@ -45,10 +45,10 @@ class OrderEvent(Event):
     timestamp: datetime
     instrument: str
     quantity: float
-    direction: str
-    trigger_reason: str  # 'SIGNAL', 'SL', 'TP'
-    stop_loss: float = 0.0      # Цена Stop Loss
-    take_profit: float = 0.0    # Цена Take Profit
+    direction: TradeDirection
+    trigger_reason: TriggerReason
+    stop_loss: float = 0.0
+    take_profit: float = 0.0
     price_hint: Optional[float] = None
 
 @dataclass
@@ -60,9 +60,9 @@ class FillEvent(Event):
     timestamp: datetime
     instrument: str
     quantity: float
-    direction: str  # 'BUY' или 'SELL'
-    price: float    # Фактическая цена исполнения
-    commission: float # Комиссия за сделку
-    trigger_reason: str
-    stop_loss: float = 0.0      # Цена Stop Loss (пробрасывается из OrderEvent)
-    take_profit: float = 0.0    # Цена Take Profit (пробрасывается из OrderEvent)
+    direction: TradeDirection
+    price: float
+    commission: float
+    trigger_reason: TriggerReason
+    stop_loss: float = 0.0
+    take_profit: float = 0.0

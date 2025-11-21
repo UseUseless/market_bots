@@ -106,7 +106,7 @@ MENU_CONFIG: Dict[str, Optional[Tuple[Optional[Callable], Optional[Callable]]]] 
     "1. Управление данными (скачать/обновить)": (user_prompts.prompt_for_data_management, dispatch_data_management),
     "-----------------------------------------": None,
     "2. Запустить бэктест": (user_prompts.prompt_for_backtest_settings, dispatch_backtest),
-    "3. Проанализировать результаты (Dashboard)": (None, run_dashboard),
+    "3. Запустить дэшборд (анализ тестов и боты)": (None, run_dashboard),
     "4. Запустить оптимизацию параметров (WFO)": (user_prompts.prompt_for_optimization_settings, dispatch_optimization),
     "------------------------------------------": None,
     "5. Запустить Монитор Сигналов (Live)": (user_prompts.prompt_for_live_settings, dispatch_live_trading),

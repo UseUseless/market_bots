@@ -8,6 +8,7 @@ from app.core.models.portfolio_state import PortfolioState
 from app.core.risk.risk_manager import BaseRiskManager
 from app.core.risk.sizer import BasePositionSizer
 from app.core.services.instrument_rules import InstrumentRulesValidator
+from app.core.constants import TradeDirection, TriggerReason
 from config import BACKTEST_CONFIG
 
 logger = logging.getLogger('backtester')
@@ -110,7 +111,7 @@ class OrderManager:
                     instrument=event.instrument,
                     quantity=final_quantity,
                     direction=event.direction,
-                    trigger_reason="SIGNAL",
+                    trigger_reason=TriggerReason.SIGNAL,
                     stop_loss=risk_profile.stop_loss_price,
                     take_profit=risk_profile.take_profit_price
                 )
@@ -130,8 +131,10 @@ class OrderManager:
         position = state.positions.get(event.instrument)
 
         # Сигнал на закрытие - это сигнал в противоположном направлении
-        is_exit_signal = (event.direction == "SELL" and position.direction == 'BUY') or \
-                         (event.direction == "BUY" and position.direction == 'SELL')
+        is_exit_signal = (
+                (event.direction == TradeDirection.SELL and position.direction == TradeDirection.BUY) or
+                (event.direction == TradeDirection.BUY and position.direction == TradeDirection.SELL)
+        )
 
         if is_exit_signal:
             order = OrderEvent(
@@ -139,7 +142,7 @@ class OrderManager:
                 instrument=event.instrument,
                 quantity=position.quantity,  # Закрываем всю позицию
                 direction=event.direction,
-                trigger_reason="SIGNAL"
+                trigger_reason=TriggerReason.SIGNAL
             )
             self.events_queue.put(order)
             state.pending_orders.add(event.instrument)

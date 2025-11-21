@@ -4,6 +4,7 @@ from typing import Any, Dict
 
 from app.core.models.event import OrderEvent, FillEvent
 from app.core.execution.abc import BaseExecutionHandler
+from app.core.constants import TradeDirection
 
 
 class SimulatedExecutionHandler(BaseExecutionHandler):
@@ -26,7 +27,7 @@ class SimulatedExecutionHandler(BaseExecutionHandler):
         self.slippage_enabled = slippage_config.get("ENABLED", False)
         self.impact_coefficient = slippage_config.get("IMPACT_COEFFICIENT", 0.1)
 
-    def _simulate_slippage(self, ideal_price: float, quantity: int, direction: str, candle_volume: int) -> float:
+    def _simulate_slippage(self, ideal_price: float, quantity: int, direction: TradeDirection, candle_volume: int) -> float:
         """
         Приватный метод для симуляции проскальзывания (slippage).
         Логика полностью перенесена из старого класса Portfolio.
@@ -40,9 +41,9 @@ class SimulatedExecutionHandler(BaseExecutionHandler):
         MAX_SLIPPAGE_PERCENT = 0.20  # 20%
         slippage_percent = min(slippage_percent, MAX_SLIPPAGE_PERCENT)
 
-        if direction == 'BUY':
+        if direction == TradeDirection.BUY:
             return ideal_price * (1 + slippage_percent)
-        else:  # 'SELL'
+        else:  # TradeDirection.SELL
             return ideal_price * (1 - slippage_percent)
 
     def execute_order(self, event: OrderEvent, last_candle: pd.Series):

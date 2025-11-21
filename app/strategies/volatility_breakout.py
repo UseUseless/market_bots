@@ -6,6 +6,7 @@ from typing import Dict, Any, Optional
 from app.core.models.event import SignalEvent
 from app.strategies.base_strategy import BaseStrategy
 from app.core.services.feature_engine import FeatureEngine
+from app.core.constants import TradeDirection
 
 logger = logging.getLogger('backtester')
 
@@ -119,8 +120,8 @@ class VolatilityBreakoutStrategy(BaseStrategy):
             donchian_lower = prev_candle[f'DCL_{donchian_len}_{donchian_len}']
             adx = current_candle[f'ADX_{adx_len}']
 
-            if current_candle['close'] > donchian_upper and adx > adx_threshold: return "BUY"
-            if current_candle['close'] < donchian_lower and adx > adx_threshold: return "SELL"
+            if current_candle['close'] > donchian_upper and adx > adx_threshold: return TradeDirection.BUY
+            if current_candle['close'] < donchian_lower and adx > adx_threshold: return TradeDirection.SELL
         return None
 
     def _calculate_signals(self, prev_candle: pd.Series, last_candle: pd.Series, timestamp: pd.Timestamp):
@@ -135,8 +136,8 @@ class VolatilityBreakoutStrategy(BaseStrategy):
                 self._reset_state()
                 return
 
-            pullback_triggered = (direction == "BUY" and last_candle['low'] <= pullback_ema) or \
-                                 (direction == "SELL" and last_candle['high'] >= pullback_ema)
+            pullback_triggered = (direction == TradeDirection.BUY and last_candle['low'] <= pullback_ema) or \
+                                 (direction == TradeDirection.SELL and last_candle['high'] >= pullback_ema)
 
             if pullback_triggered:
                 logger.info(f"Откат к EMA({self.pullback_ema_period}) произошел. Генерирую сигнал {direction}.")
@@ -151,8 +152,8 @@ class VolatilityBreakoutStrategy(BaseStrategy):
             donchian_upper = prev_candle[f'DCU_{donchian_len}_{donchian_len}']
             donchian_lower = prev_candle[f'DCL_{donchian_len}_{donchian_len}']
 
-            confirmed = (direction == "BUY" and last_candle['close'] > donchian_upper) or \
-                        (direction == "SELL" and last_candle['close'] < donchian_lower)
+            confirmed = (direction == TradeDirection.BUY and last_candle['close'] > donchian_upper) or \
+                        (direction == TradeDirection.SELL and last_candle['close'] < donchian_lower)
 
             if confirmed:
                 logger.info("Пробой ПОДТВЕРЖДЕН.")

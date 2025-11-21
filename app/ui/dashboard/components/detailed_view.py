@@ -19,6 +19,7 @@ import numpy as np
 from app.utils.file_io import load_trades_from_file
 from app.analyzers.metrics.portfolio_metrics import PortfolioMetricsCalculator
 from app.analyzers.metrics.benchmark_metrics import BenchmarkMetricsCalculator
+from app.core.constants import TradeDirection
 from config import PATH_CONFIG, BACKTEST_CONFIG, EXCHANGE_SPECIFIC_CONFIG
 
 
@@ -94,8 +95,8 @@ def plot_trades_on_chart(historical_data: pd.DataFrame, trades_df: pd.DataFrame)
     trades_df['exit_timestamp_utc'] = pd.to_datetime(trades_df['exit_timestamp_utc'])
 
     # Маркеры входа
-    long_entries = trades_df[trades_df['direction'] == 'BUY']
-    short_entries = trades_df[trades_df['direction'] == 'SELL']
+    long_entries = trades_df[trades_df['direction'] == TradeDirection.BUY]
+    short_entries = trades_df[trades_df['direction'] == TradeDirection.SELL]
     fig.add_trace(go.Scatter(
         x=long_entries['entry_timestamp_utc'], y=long_entries['entry_price'], mode='markers',
         marker=dict(symbol='triangle-up', color='green', size=12), name='Вход в Лонг'
