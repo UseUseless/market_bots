@@ -3,12 +3,10 @@ import queue
 import logging
 from typing import Dict, Any
 
-# DB & Repos
 from app.adapters.database.database import async_session_factory
 from app.adapters.database.repositories import ConfigRepository
 from app.adapters.database.models import StrategyConfig
 
-# Core Components
 from app.services.feature_engine.feature_engine import FeatureEngine
 from app.services.data_provider.feeds.unified_feed import UnifiedDataFeed
 from app.services.messaging.signal_bus import SignalBus
@@ -18,7 +16,6 @@ from app.adapters.database.signal_logger import DBLoggerAdapter
 from app.adapters.telegram.publisher import TelegramBridge
 from app.adapters.telegram.manager import BotManager
 
-# Clients & Strategies
 from app.adapters.exchanges.tinkoff import TinkoffHandler
 from app.adapters.exchanges.bybit import BybitHandler
 from app.strategies import AVAILABLE_STRATEGIES

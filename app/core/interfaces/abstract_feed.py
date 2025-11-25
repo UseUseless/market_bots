@@ -11,9 +11,8 @@ class IDataFeed(ABC):
     @abstractmethod
     def get_history(self, length: int) -> pd.DataFrame:
         """
-        Возвращает N последних свечей.
-        Критически важно для расчета индикаторов (SMA, RSI) и формирования
-        матрицы признаков для ML.
+        Возвращает N последних свечей (включая текущую только что закрытую).
+        Критически важно для расчета индикаторов (SMA, RSI) и ML-фичей.
         """
         raise NotImplementedError
 

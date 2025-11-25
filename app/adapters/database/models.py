@@ -58,6 +58,10 @@ class StrategyConfig(Base):
 
     bot = relationship("BotInstance", back_populates="strategies")
 
+    # Связь 1-к-1 с состоянием портфеля
+    portfolio_state = relationship("PortfolioDB", back_populates="strategy_config", uselist=False,
+                                   cascade="all, delete-orphan")
+
 
 class SignalLog(Base):
     __tablename__ = "signal_logs"
@@ -70,3 +74,47 @@ class SignalLog(Base):
     direction = Column(String, nullable=False)
     price = Column(Float, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+# --- НОВЫЕ МОДЕЛИ ДЛЯ СОХРАНЕНИЯ СОСТОЯНИЯ ---
+
+class PortfolioDB(Base):
+    """
+    Снимок состояния портфеля для конкретной стратегии.
+    """
+    __tablename__ = "portfolios"
+
+    id = Column(Integer, primary_key=True, index=True)
+    # unique=True обеспечивает связь 1-к-1
+    strategy_config_id = Column(Integer, ForeignKey("strategy_configs.id"), unique=True, nullable=False)
+
+    current_capital = Column(Float, default=0.0)
+    initial_capital = Column(Float, default=0.0)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Связи
+    strategy_config = relationship("StrategyConfig", back_populates="portfolio_state")
+    positions = relationship("PositionDB", back_populates="portfolio", cascade="all, delete-orphan")
+
+
+class PositionDB(Base):
+    """
+    Открытая позиция в базе данных.
+    """
+    __tablename__ = "positions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    portfolio_id = Column(Integer, ForeignKey("portfolios.id"), nullable=False)
+
+    instrument = Column(String, nullable=False)
+    quantity = Column(Float, nullable=False)
+    entry_price = Column(Float, nullable=False)
+    direction = Column(String, nullable=False)  # BUY / SELL
+
+    stop_loss = Column(Float, nullable=True)
+    take_profit = Column(Float, nullable=True)
+
+    entry_timestamp = Column(DateTime, nullable=False)
+    entry_commission = Column(Float, default=0.0)
+
+    portfolio = relationship("PortfolioDB", back_populates="positions")

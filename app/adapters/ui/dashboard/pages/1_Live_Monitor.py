@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import sqlite3
-import time
 import os
 from config import BASE_DIR
 

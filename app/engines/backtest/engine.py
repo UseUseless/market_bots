@@ -14,6 +14,7 @@ from app.services.risk_engine.risk_manager import AVAILABLE_RISK_MANAGERS
 from app.services.risk_engine.risk_monitor import RiskMonitor
 from app.services.execution.order_manager import OrderManager
 from app.services.accounting.fill_processor import FillProcessor
+from app.services.data_provider.feeds.backtest_feed import BacktestDataFeed
 
 from app.strategies.base_strategy import BaseStrategy
 from app.core.logging_setup import backtest_time_filter
@@ -169,7 +170,7 @@ class BacktestEngine:
     def _run_event_loop(self, enriched_data: pd.DataFrame) -> None:
         """
         Главный цикл симуляции.
-        Реализует логику: Исполнение (Open) -> Риски (High/Low) -> Анализ (Close).
+        Использует BacktestDataFeed для эмуляции потока данных.
         """
         logger.info("Запуск основного цикла обработки событий...")
 
@@ -178,7 +179,14 @@ class BacktestEngine:
         execution_handler = self.components['execution_handler']
         instrument = self.settings['instrument']
 
-        for _, current_candle in enriched_data.iterrows():
+        # 1. Инициализируем Фид
+        feed = BacktestDataFeed(data=enriched_data, interval=self.settings['interval'])
+
+        # 2. Крутим цикл, пока есть данные
+        while feed.next():
+            current_candle = feed.get_current_candle()
+
+            # Создаем событие рынка для Портфеля и Риск-менеджера
             market_event = MarketEvent(
                 timestamp=current_candle['time'],
                 instrument=instrument,
@@ -191,25 +199,17 @@ class BacktestEngine:
             if self.pending_strategy_order:
                 execution_handler.execute_order(self.pending_strategy_order, current_candle)
                 self.pending_strategy_order = None
-
-                # Сразу обрабатываем FillEvent, чтобы позиция появилась в портфеле
-                # ДО проверки рисков на этой же свече.
                 self._process_queue(current_candle, phase='EXECUTION')
 
             # ФАЗА 2: ПРОВЕРКА РИСКОВ (Внутри свечи, цены High/Low)
-            # Если мы вошли в Фазе 1, здесь мы проверим, не выбило ли нас на этой же свече.
             portfolio.update_market_price(market_event)
-
-            # Если сработал SL/TP, RiskMonitor сгенерировал OrderEvent.
-            # Мы должны исполнить его немедленно (внутри этой же свечи).
             self._process_queue(current_candle, phase='EXECUTION')
 
             # ФАЗА 3: АНАЛИЗ СТРАТЕГИИ (Конец свечи, цена Close)
-            strategy.on_market_event(market_event)
+            # ВАЖНО: Теперь мы передаем стратегии фид, а не событие!
+            strategy.on_candle(feed)
 
             # Если стратегия дала сигнал, он попадет в очередь.
-            # В _process_queue мы сохраним его в self.pending_strategy_order
-            # и НЕ будем исполнять до следующей итерации (Фаза 1 следующей свечи).
             self._process_queue(current_candle, phase='STRATEGY')
 
         backtest_time_filter.reset_sim_time()

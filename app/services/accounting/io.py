@@ -5,7 +5,6 @@ from datetime import datetime
 
 import pandas as pd
 
-
 def load_trades_from_file(file_path: str) -> pd.DataFrame:
     """Загружает сделки из файла, поддерживая .jsonl формат."""
     if not os.path.exists(file_path):

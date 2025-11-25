@@ -66,7 +66,10 @@ class SignalEngine:
                 is_new = await feed.process_candle(candle_data)
 
                 if is_new:
-                    await strategy.on_candle(feed)
+                    # Важно: BaseStrategy.on_candle теперь синхронный метод.
+                    # Чтобы не блокировать Event Loop тяжелыми расчетами, запускаем в executor.
+                    loop = asyncio.get_running_loop()
+                    await loop.run_in_executor(None, strategy.on_candle, feed)
 
                     # Bridge Sync -> Async
                     try:

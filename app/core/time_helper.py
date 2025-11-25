@@ -1,6 +1,5 @@
 from datetime import timedelta, timezone
 
-
 def parse_interval_to_timedelta(interval_str: str) -> timedelta:
     """
     Преобразует строковый интервал (например, '5min', '4hour') в объект timedelta.

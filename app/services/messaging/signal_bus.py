@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import List, Set
+from typing import Set
 from app.core.interfaces.abstract_publisher import IPublisher
 from app.core.models.event import Event
 

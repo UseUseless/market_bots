@@ -1,10 +1,8 @@
-# market_bots/scripts/manage_data.py
-
 import argparse
 import logging
 
 # 1. Импортируем "flows" - функции, содержащие реальную логику из `app`.
-from app.services.data_provider.flows import update_lists_flow, download_data_flow
+from app.services.data_provider.management import update_lists_flow, download_data_flow
 from app.core.logging_setup import setup_global_logging
 from config import DATA_LOADER_CONFIG
 

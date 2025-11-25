@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
 
-from app.services.analyzers.metrics.portfolio_metrics import METRIC_CONFIG
+from app.services.analytics.metrics.portfolio_metrics import METRIC_CONFIG
 from app.core.constants import ExchangeType
 from config import EXCHANGE_SPECIFIC_CONFIG
 
