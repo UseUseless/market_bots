@@ -5,9 +5,8 @@ from typing import List, Dict, Any, Optional
 import asyncio
 
 from app.core.models.event import MarketEvent
-from app.core.services.feature_engine import FeatureEngine
+from app.services.feature_engine.feature_engine import FeatureEngine
 from app.core.interfaces.abstract_feed import IDataFeed
-from app.core.interfaces.abstract_publisher import IPublisher
 
 
 class BaseStrategy(ABC):

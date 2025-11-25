@@ -1,5 +1,4 @@
 from typing import Dict, List, Set, Any
-
 from app.core.models.position import Position
 
 class PortfolioState:
@@ -64,3 +63,16 @@ class PortfolioState:
         # Для простоты спотовой торговли это работает. Для маржинальной торговли
         # здесь была бы более сложная логика с учетом плеча и маржинальных требований.
         return self.current_capital - self.frozen_capital
+
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        Сериализация состояния. Нужна для сохранения чекпоинтов
+        или передачи состояния в ML-модель.
+        """
+        return {
+            "current_capital": self.current_capital,
+            "positions_count": len(self.positions),
+            "frozen_capital": self.frozen_capital,
+            "available_capital": self.available_capital,
+            "pending_orders": list(self.pending_orders)
+        }

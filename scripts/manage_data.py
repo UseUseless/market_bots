@@ -4,8 +4,8 @@ import argparse
 import logging
 
 # 1. Импортируем "flows" - функции, содержащие реальную логику из `app`.
-from app.core.data.flows.management import update_lists_flow, download_data_flow
-from app.utils.logging_setup import setup_global_logging
+from app.services.data_provider.flows import update_lists_flow, download_data_flow
+from app.core.logging_setup import setup_global_logging
 from config import DATA_LOADER_CONFIG
 
 # 2. Константы для значений по умолчанию в argparse остаются здесь.

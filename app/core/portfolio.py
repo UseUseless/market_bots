@@ -6,9 +6,9 @@ import logging
 from app.core.models.event import MarketEvent, SignalEvent, FillEvent, Event
 from app.core.models.portfolio_state import PortfolioState
 
-from app.core.services.risk_monitor import RiskMonitor
-from app.core.services.order_manager import OrderManager
-from app.core.services.fill_processor import FillProcessor
+from app.services.risk_engine.risk_monitor import RiskMonitor
+from app.services.execution.order_manager import OrderManager
+from app.services.accounting.fill_processor import FillProcessor
 
 logger = logging.getLogger(__name__)
 

@@ -6,9 +6,9 @@ import questionary
 # Добавляем корень проекта в sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from app.storage.database import async_session_factory
-from app.storage.repositories import ConfigRepository
-from app.storage.models import StrategyConfig
+from app.adapters.database.database import async_session_factory
+from app.adapters.database.repositories import ConfigRepository
+from app.adapters.database.models import StrategyConfig
 from sqlalchemy import select
 
 
