@@ -3,7 +3,7 @@ import pytest
 from queue import Queue
 from datetime import datetime
 
-from app.services.data_provider.feeds.local import HistoricLocalDataHandler
+from app.infrastructure.feeds.local import HistoricLocalDataHandler
 
 
 @pytest.fixture

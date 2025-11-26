@@ -2,9 +2,9 @@ import asyncio
 import sys
 import questionary
 
-from app.adapters.database.database import async_session_factory
-from app.adapters.database.repositories import ConfigRepository
-from app.adapters.database.models import StrategyConfig
+from app.infrastructure.database.session import async_session_factory
+from app.infrastructure.database.repositories import ConfigRepository
+from app.infrastructure.database.models import StrategyConfig
 from sqlalchemy import select
 
 

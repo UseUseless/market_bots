@@ -6,7 +6,7 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.adapters.database.repositories import BotRepository
+from app.infrastructure.database.repositories import BotRepository
 
 logger = logging.getLogger(__name__)
 

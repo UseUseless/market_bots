@@ -3,30 +3,43 @@ import pandas as pd
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional
 
-from app.services.feature_engine.feature_engine import FeatureEngine
-from app.core.interfaces.abstract_feed import IDataFeed
+from app.core.calculations.indicators import FeatureEngine
+from app.core.interfaces import IDataFeed
+from app.shared.schemas import StrategyConfigModel
 
 
 class BaseStrategy(ABC):
     """
     Абстрактный базовый класс для всех торговых стратегий.
-    Реализует принцип Open/Closed и гарантирует расчет кастомных фичей в Live.
+    Теперь работает со строгой конфигурацией StrategyConfigModel.
     """
     params_config: Dict[str, Dict[str, Any]] = {}
     required_indicators: List[Dict[str, Any]] = []
     min_history_needed: int = 1
 
-    def __init__(self, events_queue: Queue, instrument: str, params: Dict[str, Any],
+    def __init__(self,
+                 events_queue: Queue,
                  feature_engine: FeatureEngine,
-                 risk_manager_type: str = "FIXED", risk_manager_params: Optional[Dict[str, Any]] = None):
+                 config: StrategyConfigModel):
 
         self.events_queue = events_queue
-        self.instrument: str = instrument
-        self.name: str = self.__class__.__name__
-        self.params = params
         self.feature_engine = feature_engine
+
+        # Сохраняем полный конфиг
+        self.config = config
+
+        # Для обратной совместимости и удобства распаковываем часто используемые поля
+        self.instrument: str = config.instrument
+        self.params: Dict[str, Any] = config.params
+        self.name: str = config.strategy_name
+
         self._prev_candle_cache: Optional[pd.Series] = None
-        self._add_risk_manager_requirements(risk_manager_type, risk_manager_params)
+
+        # Инициализация риск-менеджера из конфига
+        self._add_risk_manager_requirements(
+            config.risk_manager_type,
+            config.risk_manager_params
+        )
 
     @classmethod
     def get_default_params(cls) -> Dict[str, Any]:
@@ -36,15 +49,13 @@ class BaseStrategy(ABC):
                 config.update(base_class.params_config)
         return {name: p_config['default'] for name, p_config in config.items()}
 
-    def _add_risk_manager_requirements(self, risk_manager_type: str, risk_manager_params: Optional[Dict[str, Any]]):
+    def _add_risk_manager_requirements(self, risk_manager_type: str, risk_manager_params: Dict[str, Any]):
         if risk_manager_type == "ATR":
-            _rm_params = risk_manager_params if risk_manager_params is not None else {}
-            atr_period = _rm_params.get("atr_period", 14)
+            atr_period = risk_manager_params.get("atr_period", 14)
             atr_requirement = {"name": "atr", "params": {"period": atr_period}}
 
             current_requirements = list(self.required_indicators)
-            if not any(
-                    req.get('name') == 'atr' and req['params']['period'] == atr_period for req in current_requirements):
+            if not any(req.get('name') == 'atr' and req['params']['period'] == atr_period for req in current_requirements):
                 current_requirements.append(atr_requirement)
             self.required_indicators = current_requirements
 

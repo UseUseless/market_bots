@@ -1,7 +1,7 @@
 import argparse
 
-from app.engines.live.orchestrator import run_live_monitor_flow
-from app.core.logging_setup import setup_global_logging
+from app.core.engine.live.orchestrator import run_live_monitor_flow
+from app.shared.logging_setup import setup_global_logging
 
 
 def main():

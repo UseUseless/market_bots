@@ -1,14 +1,14 @@
 import asyncio
 import logging
 
-from app.services.messaging.signal_bus import SignalBus
-from app.core.models.event import SignalEvent
+from app.core.event_bus import SignalBus
+from app.shared.events import SignalEvent
 from app.adapters.telegram.manager import BotManager
-from app.adapters.database.database import async_session_factory
-from app.adapters.database.repositories import BotRepository
-from app.adapters.database.models import StrategyConfig
-from app.core.time_helper import parse_interval_to_timedelta, msk_timezone
-from app.core.constants import TradeDirection
+from app.infrastructure.database.session import async_session_factory
+from app.infrastructure.database.repositories import BotRepository
+from app.infrastructure.database.models import StrategyConfig
+from app.shared.time_helper import parse_interval_to_timedelta, msk_timezone
+from app.shared.primitives import TradeDirection
 
 logger = logging.getLogger(__name__)
 

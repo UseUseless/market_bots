@@ -1,6 +1,0 @@
-datasets/*
-models/*
-!datasets/.gitkeep
-!models/.gitkeep
-__pycache__/
-.ipynb_checkpoints/

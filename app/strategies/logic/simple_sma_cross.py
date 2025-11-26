@@ -1,11 +1,11 @@
 from queue import Queue
 import pandas as pd
-from typing import Dict, Any, Optional
 
+from app.shared.schemas import StrategyConfigModel
 from app.strategies.base_strategy import BaseStrategy
-from app.core.models.event import SignalEvent
-from app.services.feature_engine.feature_engine import FeatureEngine
-from app.core.constants import TradeDirection
+from app.shared.events import SignalEvent
+from app.core.calculations.indicators import FeatureEngine
+from app.shared.primitives import TradeDirection
 
 
 class SimpleSMACrossStrategy(BaseStrategy):
@@ -32,16 +32,21 @@ class SimpleSMACrossStrategy(BaseStrategy):
         }
     }
 
-    def __init__(self, events_queue: Queue, instrument: str, params: Dict[str, Any],
-                 feature_engine: FeatureEngine, risk_manager_type: str, risk_manager_params: Optional[Dict[str, Any]] = None):
-        self.sma_period = params["sma_period"]
+    def __init__(self,
+                 events_queue: Queue,
+                 feature_engine: FeatureEngine,
+                 config: StrategyConfigModel):
 
+        # 1. Сначала достаем параметры из конфига для настройки индикаторов
+        self.sma_period = config.params["sma_period"]
+
+        # 2. Настраиваем индикаторы
         self.min_history_needed = self.sma_period + 1
         self.required_indicators = [{"name": "sma", "params": {"period": self.sma_period}}]
         self.sma_name = f"SMA_{self.sma_period}"
 
-        super().__init__(events_queue, instrument, params, feature_engine,
-                         risk_manager_type, risk_manager_params)
+        # 3. Инициализируем базовый класс
+        super().__init__(events_queue, feature_engine, config)
 
     def _calculate_signals(self, prev_candle: pd.Series, last_candle: pd.Series, timestamp: pd.Timestamp):
         """

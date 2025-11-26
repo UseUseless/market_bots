@@ -1,12 +1,12 @@
 import pandas as pd
 from queue import Queue
 import logging
-from typing import Dict, Any, Optional
 
-from app.core.models.event import SignalEvent
+from app.shared.events import SignalEvent
 from app.strategies.base_strategy import BaseStrategy
-from app.services.feature_engine.feature_engine import FeatureEngine
-from app.core.constants import TradeDirection
+from app.core.calculations.indicators import FeatureEngine
+from app.shared.primitives import TradeDirection
+from app.shared.schemas import StrategyConfigModel
 
 logger = logging.getLogger('backtester')
 
@@ -51,23 +51,24 @@ class MeanReversionStrategy(BaseStrategy):
         }
     }
 
-    def __init__(self, events_queue: Queue, instrument: str, params: Dict[str, Any],
-                 feature_engine: FeatureEngine, risk_manager_type: str, risk_manager_params: Optional[Dict[str, Any]] = None):
+    def __init__(self,
+                 events_queue: Queue,
+                 feature_engine: FeatureEngine,
+                 config: StrategyConfigModel):
 
-        # 1. Извлекаем параметры из переданного словаря `params`
-        self.sma_period = params["sma_period"]
-        self.upper_threshold = params["z_score_upper_threshold"]
-        self.lower_threshold = params["z_score_lower_threshold"]
+        # 1. Извлекаем параметры из config.params
+        self.sma_period = config.params["sma_period"]
+        self.upper_threshold = config.params["z_score_upper_threshold"]
+        self.lower_threshold = config.params["z_score_lower_threshold"]
 
-        # 2. Динамически формируем зависимости на основе параметров
+        # 2. Динамически формируем зависимости
         self.min_history_needed = self.sma_period + 1
         self.required_indicators = [
             {"name": "sma", "params": {"period": self.sma_period}},
         ]
 
-        # 3. Вызываем родительский __init__ ПОСЛЕ определения зависимостей
-        super().__init__(events_queue, instrument, params, feature_engine,
-                         risk_manager_type, risk_manager_params)
+        # 3. Вызываем родительский __init__
+        super().__init__(events_queue, feature_engine, config)
 
     def _prepare_custom_features(self, data: pd.DataFrame) -> pd.DataFrame:
         """

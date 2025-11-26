@@ -1,0 +1,6 @@
+datasets/__init__.py
+models/*
+!datasets/.gitkeep
+!models/.gitkeep
+__pycache__/
+.ipynb_checkpoints/

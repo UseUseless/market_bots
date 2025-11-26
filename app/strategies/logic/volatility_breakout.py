@@ -1,12 +1,12 @@
 import pandas as pd
 from queue import Queue
 import logging
-from typing import Dict, Any, Optional
 
-from app.core.models.event import SignalEvent
+from app.shared.events import SignalEvent
 from app.strategies.base_strategy import BaseStrategy
-from app.services.feature_engine.feature_engine import FeatureEngine
-from app.core.constants import TradeDirection
+from app.core.calculations.indicators import FeatureEngine
+from app.shared.primitives import TradeDirection
+from app.shared.schemas import StrategyConfigModel
 
 logger = logging.getLogger('backtester')
 
@@ -38,10 +38,13 @@ class VolatilityBreakoutStrategy(BaseStrategy):
         "adx_adx_threshold": {"type": "int", "default": 20, "optimizable": True, "low": 18, "high": 30},
     }
 
-    def __init__(self, events_queue: Queue, instrument: str, params: Dict[str, Any],
-                 feature_engine: FeatureEngine, risk_manager_type: str, risk_manager_params: Optional[Dict[str, Any]] = None):
+    def __init__(self,
+                 events_queue: Queue,
+                 feature_engine: FeatureEngine,
+                 config: StrategyConfigModel):
 
-        # 1. Извлекаем параметры из `params`
+        # 1. Извлекаем параметры
+        params = config.params # Используем локальную переменную для краткости
         self.variant = params["variant"]
         self.breakout_timeout_bars = params["entry_breakout_timeout_bars"]
         self.confirm_breakout = params["entry_confirm_breakout"]
@@ -70,9 +73,8 @@ class VolatilityBreakoutStrategy(BaseStrategy):
             self.min_history_needed = max(self.min_history_needed, self.pullback_ema_period)
         self.min_history_needed += 1
 
-        # 3. Вызываем родительский __init__
-        super().__init__(events_queue, instrument, params,
-                         feature_engine, risk_manager_type, risk_manager_params)
+        # 3. Инициализация базы
+        super().__init__(events_queue, feature_engine, config)
 
         # 4. Инициализация состояний
         self.state = {

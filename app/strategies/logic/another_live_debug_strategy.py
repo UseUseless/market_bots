@@ -1,11 +1,11 @@
 from queue import Queue
 import pandas as pd
-from typing import Dict, Any, Optional
 
-from app.core.models.event import SignalEvent
+from app.shared.events import SignalEvent
 from app.strategies.base_strategy import BaseStrategy
-from app.services.feature_engine.feature_engine import FeatureEngine
-from app.core.constants import TradeDirection
+from app.core.calculations.indicators import FeatureEngine
+from app.shared.primitives import TradeDirection
+from app.shared.schemas import StrategyConfigModel
 
 class LiveDebugStrategy(BaseStrategy):
     """
@@ -20,10 +20,11 @@ class LiveDebugStrategy(BaseStrategy):
     required_indicators = [{"name": "sma", "params": {"period": 5}}]
     min_history_needed = 10
 
-    def __init__(self, events_queue: Queue, instrument: str, params: Dict[str, Any],
-                 feature_engine: FeatureEngine, risk_manager_type: str,
-                 risk_manager_params: Optional[Dict[str, Any]] = None):
-        super().__init__(events_queue, instrument, params, feature_engine, risk_manager_type, risk_manager_params)
+    def __init__(self,
+                 events_queue: Queue,
+                 feature_engine: FeatureEngine,
+                 config: StrategyConfigModel):
+        super().__init__(events_queue, feature_engine, config)
         self.counter = 0
 
     def _calculate_signals(self, prev_candle: pd.Series, last_candle: pd.Series, timestamp: pd.Timestamp):

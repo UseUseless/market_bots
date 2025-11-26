@@ -1,11 +1,11 @@
 import pandas as pd
 from queue import Queue
-from typing import Dict, Any, Optional
 
-from app.core.models.event import SignalEvent
+from app.shared.events import SignalEvent
 from app.strategies.base_strategy import BaseStrategy
-from app.services.feature_engine.feature_engine import FeatureEngine
-from app.core.constants import TradeDirection
+from app.core.calculations.indicators import FeatureEngine
+from app.shared.primitives import TradeDirection
+from app.shared.schemas import StrategyConfigModel
 
 class TripleFilterStrategy(BaseStrategy):
     """
@@ -50,16 +50,18 @@ class TripleFilterStrategy(BaseStrategy):
         }
     }
 
-    def __init__(self, events_queue: Queue, instrument: str, params: Dict[str, Any],
-                 feature_engine: FeatureEngine, risk_manager_type: str, risk_manager_params: Optional[Dict[str, Any]] = None):
+    def __init__(self,
+                 events_queue: Queue,
+                 feature_engine: FeatureEngine,
+                 config: StrategyConfigModel):
 
-        # 1. Извлекаем параметры из переданного словаря `params`
-        self.ema_fast_period = params["ema_fast_period"]
-        self.ema_slow_period = params["ema_slow_period"]
-        self.ema_trend_period = params["ema_trend_period"]
-        self.volume_sma_period = params["volume_sma_period"]
+        # 1. Извлекаем параметры
+        self.ema_fast_period = config.params["ema_fast_period"]
+        self.ema_slow_period = config.params["ema_slow_period"]
+        self.ema_trend_period = config.params["ema_trend_period"]
+        self.volume_sma_period = config.params["volume_sma_period"]
 
-        # 2. Динамически формируем зависимости на основе параметров
+        # 2. Динамически формируем зависимости
         self.min_history_needed = self.ema_trend_period + 1
         self.required_indicators = [
             {"name": "ema", "params": {"period": self.ema_fast_period}},
@@ -68,9 +70,8 @@ class TripleFilterStrategy(BaseStrategy):
             {"name": "sma", "params": {"period": self.volume_sma_period, "column": "volume"}},
         ]
 
-        # 3. Вызываем родительский __init__ ПОСЛЕ определения зависимостей
-        super().__init__(events_queue, instrument, params,
-                         feature_engine, risk_manager_type, risk_manager_params)
+        # 3. Инициализация базы
+        super().__init__(events_queue, feature_engine, config)
 
         # 4. Определяем имена колонок для удобства
         self.ema_fast_name = f'EMA_{self.ema_fast_period}'

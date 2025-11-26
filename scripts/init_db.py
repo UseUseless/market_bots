@@ -1,10 +1,9 @@
 import asyncio
 import sys
-import os
 
-from app.adapters.database.database import init_models
-from app.adapters.database.database import async_session_factory
-from app.adapters.database.repositories import ConfigRepository
+from app.infrastructure.database.session import init_models
+from app.infrastructure.database.session import async_session_factory
+from app.infrastructure.database.repositories import ConfigRepository
 
 
 async def main():

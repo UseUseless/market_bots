@@ -4,13 +4,13 @@ import sys
 from typing import List
 
 # 1. Импортируем "flow", который содержит всю реальную логику
-from app.engines.backtest.flows.optimization import run_optimization_flow
+from app.core.engine.optimization.runner import run_optimization_flow
 
 # 2. Импортируем необходимые конфигурации и утилиты для парсера
-from app.core.logging_setup import setup_global_logging
+from app.shared.logging_setup import setup_global_logging
 from app.strategies import AVAILABLE_STRATEGIES
-from app.services.risk_engine.risk_manager import AVAILABLE_RISK_MANAGERS
-from app.services.analytics.metrics.portfolio_metrics import METRIC_CONFIG
+from app.core.risk_engine.risk_manager import AVAILABLE_RISK_MANAGERS
+from app.core.analysis.constants import METRIC_CONFIG
 
 logger = logging.getLogger(__name__)
 
