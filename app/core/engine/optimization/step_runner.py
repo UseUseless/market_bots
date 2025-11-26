@@ -9,12 +9,14 @@ import optuna
 from rich.console import Console
 
 from app.core.engine.backtest.runners import _run_and_analyze_single_instrument
+from app.core.calculations.indicators import FeatureEngine
 
 from app.core.engine.optimization.objective import Objective
 from app.core.analysis.constants import METRIC_CONFIG
 from app.strategies import AVAILABLE_STRATEGIES
 from app.core.risk.manager import AVAILABLE_RISK_MANAGERS
-from config import BACKTEST_CONFIG
+
+from app.shared.config import config
 
 logger = logging.getLogger(__name__)
 
@@ -26,11 +28,17 @@ class WFOStepRunner:
     2. Out-of-Sample: Запускает бэктест с лучшими параметрами на тестовой выборке.
     """
 
-    def __init__(self, settings: Dict[str, Any], step_num: int, train_slices: Dict, test_slices: Dict):
+    def __init__(self,
+                 settings: Dict[str, Any],
+                 step_num: int,
+                 train_slices: Dict,
+                 test_slices: Dict,
+                 feature_engine: FeatureEngine):
         self.settings = settings
         self.step_num = step_num
         self.train_slices = train_slices
         self.test_slices = test_slices
+        self.feature_engine = feature_engine
         self.console = Console()
 
     def _run_in_sample_optimization(self) -> optuna.Study:
@@ -39,14 +47,18 @@ class WFOStepRunner:
         directions = [METRIC_CONFIG[m]["direction"] for m in metrics_to_optimize]
         study = optuna.create_study(directions=directions)
         strategy_class = AVAILABLE_STRATEGIES[self.settings["strategy"]]
+
+        # Внедрение зависимости feature_engine в Objective
         objective = Objective(
             strategy_class=strategy_class,
             exchange=self.settings["exchange"],
             interval=self.settings["interval"],
             risk_manager_type=self.settings["rm"],
             train_data_slices=self.train_slices,
-            metrics=metrics_to_optimize
+            metrics=metrics_to_optimize,
+            feature_engine=self.feature_engine  # <--- Передаем инстанс
         )
+
         study.optimize(objective, n_trials=self.settings["n_trials"], n_jobs=-1, show_progress_bar=True)
         return study
 
@@ -87,6 +99,10 @@ class WFOStepRunner:
 
         # --- Подготовка задач для пула потоков ---
         tasks = []
+
+        initial_capital = config.BACKTEST_CONFIG["INITIAL_CAPITAL"]
+        commission_rate = config.BACKTEST_CONFIG["COMMISSION_RATE"]
+
         for instrument, oos_slice in self.test_slices.items():
             task_settings = {
                 **self.settings,
@@ -96,28 +112,32 @@ class WFOStepRunner:
                 "risk_manager_type": self.settings["rm"],
                 "strategy_params": {**strategy_class.get_default_params(), **strategy_params},
                 "risk_manager_params": {**rm_class.get_default_params(), **rm_params},
-                "initial_capital": BACKTEST_CONFIG["INITIAL_CAPITAL"] / len(self.settings["instrument_list"]),
-                "commission_rate": BACKTEST_CONFIG["COMMISSION_RATE"],
+                "initial_capital": initial_capital,
+                "commission_rate": commission_rate,
                 "trade_log_path": None,
             }
             tasks.append(task_settings)
 
         # --- Запуск OOS-тестов в несколько потоков ---
         all_oos_trades = []
-        # Можно запускать и в один поток, если OOS-инструментов мало, но ThreadPool не помешает
-        with ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
+        # Используем os.cpu_count() или дефолтное значение
+        max_workers = os.cpu_count() or 4
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_settings = {executor.submit(_run_and_analyze_single_instrument, task): task for task in tasks}
 
             for future in as_completed(future_to_settings):
-                analysis_results = future.result()
-                if analysis_results and not analysis_results["trades_df"].empty:
-                    all_oos_trades.append(analysis_results["trades_df"])
+                try:
+                    analysis_results = future.result()
+                    if analysis_results and not analysis_results["trades_df"].empty:
+                        all_oos_trades.append(analysis_results["trades_df"])
+                except Exception as e:
+                    logger.error(f"Ошибка в OOS тесте: {e}")
 
         return pd.concat(all_oos_trades, ignore_index=True) if all_oos_trades else pd.DataFrame()
 
     def run(self) -> Tuple[pd.DataFrame, Dict, optuna.Study]:
         """Запускает полный шаг WFO и возвращает результаты."""
-        # Эта часть остается без изменений
         tqdm.write(f"\n--- Шаг {self.step_num} ---")
         study = self._run_in_sample_optimization()
         best_trial = self._select_best_trial(study)

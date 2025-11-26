@@ -3,7 +3,6 @@ import argparse
 from app.core.engine.live.orchestrator import run_live_monitor_flow
 from app.shared.logging_setup import setup_global_logging
 
-
 def main():
     """
     Запускает режим 'Сигналы'.

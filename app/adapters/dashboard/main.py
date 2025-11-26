@@ -1,5 +1,15 @@
 import sys
 import os
+import streamlit as st
+import pandas as pd
+
+from app.adapters.dashboard.components.data_loader import load_all_backtests
+from app.adapters.dashboard.components.sidebar import render_sidebar
+from app.adapters.dashboard.components.detailed_view import render_detailed_view
+from app.adapters.dashboard.components.comparison_view import render_comparison_view
+
+from app.shared.config import config
+PATH_CONFIG = config.PATH_CONFIG
 
 def find_project_root(start_path, marker_file='launcher.py'):
     """
@@ -22,15 +32,6 @@ try:
         sys.path.insert(0, project_root)
 except FileNotFoundError as e:
     print(f"КРИТИЧЕСКАЯ ОШИБКА: {e}", file=sys.stderr)
-
-import streamlit as st
-import pandas as pd
-
-from app.adapters.dashboard.components.data_loader import load_all_backtests
-from app.adapters.dashboard.components.sidebar import render_sidebar
-from app.adapters.dashboard.components.detailed_view import render_detailed_view
-from app.adapters.dashboard.components.comparison_view import render_comparison_view
-from config import PATH_CONFIG
 
 def style_summary_table(df: pd.DataFrame) -> "pd.io.formats.style.Styler":
     """

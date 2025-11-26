@@ -4,13 +4,17 @@ import subprocess
 import questionary
 from rich.console import Console
 
-from config import BASE_DIR
 from . import user_prompts
 
 from app.infrastructure.storage.data_manager import update_lists_flow, download_data_flow
 from app.core.engine.backtest.runners import run_single_backtest_flow, run_batch_backtest_flow
 from app.core.engine.optimization.runner import run_optimization_flow
 from app.core.engine.live.orchestrator import run_live_monitor_flow
+from app.bootstrap.container import container
+from app.shared.primitives import ExchangeType
+from app.shared.config import config
+
+BASE_DIR = config.BASE_DIR
 
 # --- КОНФИГУРАЦИЯ МАППИНГА ---
 # Связываем имя файла скрипта с красивым названием и логикой UI.
@@ -64,14 +68,29 @@ SCRIPT_HANDLERS = {
 # --- Вспомогательные функции диспетчеров ---
 
 def _dispatch_data(settings):
-    """Разруливает логику manage_data, так как там два действия."""
+    """Разруливает логику manage_data."""
     if not settings: return
-    action = settings.pop("action")
-    if action == "update":
-        success, msg = update_lists_flow(settings)
-        print(msg)
-    elif action == "download":
-        download_data_flow(settings)
+
+    # 1. Определяем нужного клиента
+    exchange = settings.get("exchange")
+    # Логика: Tinkoff -> Sandbox (безопасно), Bybit -> Real (публичные данные)
+    mode = "SANDBOX" if exchange == ExchangeType.TINKOFF else "REAL"
+
+    try:
+        # 2. Получаем клиента из контейнера
+        client = container.get_exchange_client(exchange, mode=mode)
+
+        action = settings.pop("action")
+        if action == "update":
+            # 3. Передаем клиента
+            success, msg = update_lists_flow(settings, client)
+            print(msg)
+        elif action == "download":
+            # 3. Передаем клиента
+            download_data_flow(settings, client)
+
+    except Exception as e:
+        print(f"Ошибка при инициализации клиента биржи: {e}")
 
 
 def _run_external_script(script_name: str):
@@ -82,11 +101,11 @@ def _run_external_script(script_name: str):
     # копируем текущее окружение и добавляем корень проекта в PYTHONPATH
     env = os.environ.copy()
     # Добавляем BASE_DIR (где лежит папка app) в пути поиска питона
-    env["PYTHONPATH"] = BASE_DIR + os.pathsep + env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = str(BASE_DIR) + os.pathsep + env.get("PYTHONPATH", "")
 
     try:
         # Используем текущий интерпретатор Python
-        subprocess.run([sys.executable, script_path], cwd=BASE_DIR)
+        subprocess.run([sys.executable, script_path], cwd=BASE_DIR, env=env)
     except KeyboardInterrupt:
         print(f"\nСкрипт {script_name} остановлен.")
     except Exception as e:

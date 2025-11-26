@@ -9,12 +9,9 @@ from app.core.interfaces import BaseExecutionHandler, BaseTradeClient
 from app.infrastructure.exchanges.bybit import BybitHandler
 from app.infrastructure.exchanges.tinkoff import TinkoffHandler
 from app.shared.primitives import TradeDirection, TriggerReason, ExchangeType
+from app.shared.config import config
 
 from tinkoff.invest import AsyncClient, OrderExecutionReportStatus, OrderDirection
-
-from config import (TOKEN_SANDBOX, TOKEN_READONLY, BYBIT_TESTNET_API_KEY,
-                    BYBIT_TESTNET_API_SECRET, TOKEN_FULL_ACCESS,
-                    LIVE_TRADING_CONFIG, EXCHANGE_SPECIFIC_CONFIG)
 
 
 class LiveExecutionHandler(BaseExecutionHandler):
@@ -33,9 +30,10 @@ class LiveExecutionHandler(BaseExecutionHandler):
         self.account_id = None
         self.figi_cache = {}
 
+        # Определяем токены в зависимости от режима
         if exchange == ExchangeType.TINKOFF:
             self.client = TinkoffHandler(trade_mode=trade_mode)
-            self.stream_token = TOKEN_SANDBOX if trade_mode == "SANDBOX" else TOKEN_FULL_ACCESS
+            self.stream_token = config.TINKOFF_TOKEN_SANDBOX if trade_mode == "SANDBOX" else config.TINKOFF_TOKEN_FULL_ACCESS
         elif exchange == ExchangeType.BYBIT:
             self.client = BybitHandler(trade_mode=trade_mode)
         else:
@@ -48,9 +46,11 @@ class LiveExecutionHandler(BaseExecutionHandler):
         if instrument in self.figi_cache:
             return self.figi_cache[instrument]
 
-        class_code = EXCHANGE_SPECIFIC_CONFIG['tinkoff']['DEFAULT_CLASS_CODE']
+        class_code = config.EXCHANGE_SPECIFIC_CONFIG['tinkoff']['DEFAULT_CLASS_CODE']
+
         logging.info(f"LiveExecutionHandler (Tinkoff): Поиск FIGI для {instrument}...")
-        async with AsyncClient(token=TOKEN_READONLY) as client:
+
+        async with AsyncClient(token=config.TINKOFF_TOKEN_READONLY) as client:
             response = await client.instruments.find_instrument(query=instrument)
             instrument_info = next((instr for instr in response.instruments if instr.class_code == class_code), None)
             if not instrument_info:
@@ -99,7 +99,7 @@ class LiveExecutionHandler(BaseExecutionHandler):
                     async with AsyncClient(token=self.stream_token) as client:
                         if self.trade_mode == "SANDBOX":
                             self.account_id = await self._get_tinkoff_sandbox_account_id(client)
-                        # Для REAL ID счета должен быть передан или найден иначе, но для примера ок
+                        # Для REAL ID счета должен быть передан или найден иначе (config.TINKOFF_ACCOUNT_ID)
 
                         logging.info(f"Tinkoff Stream: Прослушивание сделок на счете {self.account_id}")
 
@@ -116,7 +116,7 @@ class LiveExecutionHandler(BaseExecutionHandler):
 
                                 price = trade.price.units + trade.price.nano / 1e9
                                 commission = (
-                                            trade.commission.units + trade.commission.nano / 1e9) if trade.commission else 0.0
+                                        trade.commission.units + trade.commission.nano / 1e9) if trade.commission else 0.0
 
                                 direction = TradeDirection.BUY if trade.direction == OrderDirection.ORDER_DIRECTION_BUY else TradeDirection.SELL
 
@@ -136,8 +136,9 @@ class LiveExecutionHandler(BaseExecutionHandler):
                     ws = WebSocket(
                         testnet=(self.trade_mode == "SANDBOX"),
                         channel_type="private",
-                        api_key=BYBIT_TESTNET_API_KEY,
-                        api_secret=BYBIT_TESTNET_API_SECRET,
+                        api_key=config.BYBIT_TESTNET_API_KEY if self.trade_mode == "SANDBOX" else None,
+                        # TODO: Add Real keys logic if needed
+                        api_secret=config.BYBIT_TESTNET_API_SECRET if self.trade_mode == "SANDBOX" else None,
                     )
 
                     def handle_execution(message):
@@ -157,7 +158,6 @@ class LiveExecutionHandler(BaseExecutionHandler):
                                         direction=direction,
                                         price=float(trade['execPrice']),
                                         commission=float(trade.get('execFee', 0.0)),
-                                        # ИСПРАВЛЕНИЕ 3
                                         trigger_reason=TriggerReason.SIGNAL
                                     )
                                     asyncio.run_coroutine_threadsafe(self.events_queue.put(fill_event), self.loop)
@@ -171,9 +171,10 @@ class LiveExecutionHandler(BaseExecutionHandler):
                     logging.warning("Bybit: WebSocket поток сделок отключился.")
 
             except Exception as e:
+                delay = config.LIVE_TRADING_CONFIG['LIVE_RECONNECT_DELAY_SECONDS']
                 logging.error(
-                    f"LiveExecutionHandler: Ошибка потока: {e}. Реконнект через {LIVE_TRADING_CONFIG['LIVE_RECONNECT_DELAY_SECONDS']} сек...")
-                await asyncio.sleep(LIVE_TRADING_CONFIG['LIVE_RECONNECT_DELAY_SECONDS'])
+                    f"LiveExecutionHandler: Ошибка потока: {e}. Реконнект через {delay} сек...")
+                await asyncio.sleep(delay)
 
     def stop(self):
         if self.fill_listener_task:

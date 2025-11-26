@@ -8,6 +8,7 @@ import optuna
 from app.core.engine.optimization.preparer import WFODataPreparer
 from app.core.engine.optimization.step_runner import WFOStepRunner
 from app.core.engine.optimization.reporter import OptimizationReporter
+from app.core.calculations.indicators import FeatureEngine
 
 logger = logging.getLogger(__name__)
 
@@ -23,13 +24,14 @@ class OptimizationEngine:
     4. Вызвать OptimizationReporter для генерации итоговых отчетов.
     """
 
-    def __init__(self, settings: Dict[str, Any]):
+    def __init__(self, settings: Dict[str, Any], feature_engine: FeatureEngine):
         """
         Инициализирует движок оптимизации.
 
         :param settings: Словарь с настройками, полученный из UI-слоя.
         """
         self.settings = self._prepare_settings(settings)
+        self.feature_engine = feature_engine
 
     def _prepare_settings(self, settings: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -74,7 +76,13 @@ class OptimizationEngine:
                 test_slices = {i: pd.concat(p[test_start:test_end]) for i, p in all_instrument_periods.items()}
 
                 # Запускаем один шаг
-                step_runner = WFOStepRunner(self.settings, step_num, train_slices, test_slices)
+                step_runner = WFOStepRunner(
+                    self.settings,
+                    step_num,
+                    train_slices,
+                    test_slices,
+                    feature_engine=self.feature_engine
+                )
                 oos_trades_df, step_summary, study = step_runner.run()
 
                 # Собираем результаты

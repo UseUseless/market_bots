@@ -2,9 +2,12 @@ import pandas as pd
 from typing import List, Dict, Tuple, Optional
 
 from app.infrastructure.storage.file_io import load_trades_from_file
-from config import PATH_CONFIG, BACKTEST_CONFIG, EXCHANGE_SPECIFIC_CONFIG
+from app.shared.config import config
 from app.core.analysis.metrics import PortfolioMetricsCalculator
 
+PATH_CONFIG = config.PATH_CONFIG
+BACKTEST_CONFIG = config.BACKTEST_CONFIG
+EXCHANGE_SPECIFIC_CONFIG = config.EXCHANGE_SPECIFIC_CONFIG
 
 class ComparativeAnalyzer:
     """

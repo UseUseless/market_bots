@@ -9,7 +9,7 @@ from pybit.unified_trading import HTTP
 
 from app.core.interfaces import TradeModeType, BaseDataClient, BaseTradeClient
 from app.shared.primitives import ExchangeType
-from app.shared.settings import settings
+from app.shared.config import config
 
 logger = logging.getLogger(__name__)
 
@@ -22,8 +22,8 @@ class BybitHandler(BaseDataClient, BaseTradeClient):
         api_secret = ""
 
         if use_testnet:
-            api_key = settings.BYBIT_TESTNET_API_KEY
-            api_secret = settings.BYBIT_TESTNET_API_SECRET
+            api_key = config.BYBIT_TESTNET_API_KEY
+            api_secret = config.BYBIT_TESTNET_API_SECRET
             if not api_key or "Your" in api_key or not api_secret or "Your" in api_secret:
                 raise ConnectionError(f"API ключи для Bybit ({trade_mode}) не заданы в .env.")
         # Для режима "REAL" мы оставляем api_key и api_secret пустыми строками,
@@ -42,7 +42,7 @@ class BybitHandler(BaseDataClient, BaseTradeClient):
         instrument_upper = instrument.upper()
         category = kwargs.get("category", "linear")
         logging.info(f"Bybit Client: используется категория '{category}'")
-        api_interval = settings.EXCHANGE_INTERVAL_MAPS[ExchangeType.BYBIT].get(interval)
+        api_interval = config.EXCHANGE_INTERVAL_MAPS[ExchangeType.BYBIT].get(interval)
         if not api_interval:
             logging.error(f"Неподдерживаемый интервал для Bybit: {interval}.")
             return pd.DataFrame()

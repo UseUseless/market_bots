@@ -9,7 +9,9 @@ from app.core.risk.manager import BaseRiskManager
 from app.core.risk.sizer import BasePositionSizer
 from app.core.execution.rules import InstrumentRulesValidator
 from app.shared.primitives import TradeDirection, TriggerReason
-from config import BACKTEST_CONFIG
+from app.shared.config import config
+
+BACKTEST_CONFIG = config.BACKTEST_CONFIG
 
 logger = logging.getLogger('backtester')
 

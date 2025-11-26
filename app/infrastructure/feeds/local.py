@@ -1,10 +1,10 @@
 import logging
 import os
 from datetime import time
-
 import pandas as pd
 
-from config import EXCHANGE_SPECIFIC_CONFIG
+from app.shared.config import config
+EXCHANGE_SPECIFIC_CONFIG = config.EXCHANGE_SPECIFIC_CONFIG
 
 logger = logging.getLogger('backtester')
 

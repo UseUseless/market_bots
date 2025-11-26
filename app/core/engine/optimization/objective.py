@@ -1,15 +1,17 @@
 import optuna
 import pandas as pd
-from typing import Type, List, Dict
 import queue
 
 from app.core.engine.backtest.loop import BacktestEngine
-from config import BACKTEST_CONFIG, EXCHANGE_SPECIFIC_CONFIG, PATH_CONFIG
-from app.strategies.base_strategy import BaseStrategy
-from app.core.risk_engine.risk_manager import AVAILABLE_RISK_MANAGERS
+from app.core.risk.manager import AVAILABLE_RISK_MANAGERS
 from app.core.analysis.metrics import PortfolioMetricsCalculator
 from app.core.analysis.constants import METRIC_CONFIG
 import logging
+from app.shared.config import config
+
+EXCHANGE_SPECIFIC_CONFIG = config.EXCHANGE_SPECIFIC_CONFIG
+BACKTEST_CONFIG = config.BACKTEST_CONFIG
+PATH_CONFIG = config.PATH_CONFIG
 
 logger = logging.getLogger(__name__)
 
@@ -20,10 +22,14 @@ class Objective:
     Принимает уже подготовленные срезы данных для каждого инструмента.
     """
 
-    def __init__(self, strategy_class: Type[BaseStrategy], exchange: str,
-                 interval: str, risk_manager_type: str,
-                 train_data_slices: Dict[str, pd.DataFrame],
-                 metrics: List[str]):
+    def __init__(self,
+                 strategy_class,
+                 exchange,
+                 interval,
+                 risk_manager_type,
+                 train_data_slices,
+                 metrics,
+                 feature_engine):
         self.strategy_class = strategy_class
         self.exchange = exchange
         self.interval = interval
@@ -33,6 +39,7 @@ class Objective:
         self.instrument_list = list(train_data_slices.keys())
         self.annualization_factor = EXCHANGE_SPECIFIC_CONFIG[exchange]["SHARPE_ANNUALIZATION_FACTOR"]
         self.total_initial_capital = BACKTEST_CONFIG["INITIAL_CAPITAL"]
+        self.feature_engine = feature_engine
 
     def _suggest_params(self, trial: optuna.Trial) -> tuple[dict, dict]:
         strategy_params = {}
@@ -91,7 +98,12 @@ class Objective:
                 }
 
                 events_queue = queue.Queue()
-                engine = BacktestEngine(backtest_settings, events_queue)
+                engine = BacktestEngine(
+                    settings=backtest_settings,
+                    events_queue=events_queue,
+                    feature_engine=self.feature_engine
+                )
+
                 backtest_results = engine.run()
 
                 if backtest_results["status"] == "success" and not backtest_results["trades_df"].empty:

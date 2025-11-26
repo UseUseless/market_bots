@@ -4,7 +4,7 @@ import logging
 # Импортируем нашу новую функцию-оркестратор
 from app.core.engine.backtest.runners import run_single_backtest_flow
 from app.strategies import AVAILABLE_STRATEGIES
-from app.core.risk_engine.risk_manager import AVAILABLE_RISK_MANAGERS
+from app.core.risk.manager import AVAILABLE_RISK_MANAGERS
 from app.shared.logging_setup import setup_global_logging
 
 def main():

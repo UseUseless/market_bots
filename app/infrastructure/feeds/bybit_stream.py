@@ -8,7 +8,8 @@ from pybit.unified_trading import WebSocket
 
 from app.infrastructure.feeds.stream_base import BaseStreamDataHandler
 from app.shared.events import MarketEvent
-from config import LIVE_TRADING_CONFIG
+from app.shared.config import config
+LIVE_TRADING_CONFIG = config.LIVE_TRADING_CONFIG
 
 
 class BybitStreamDataHandler(BaseStreamDataHandler):
@@ -59,8 +60,7 @@ class BybitStreamDataHandler(BaseStreamDataHandler):
 
     async def stream_data(self):
         """
-        Основной метод, который запускает WebSocket и следит за его состоянием,
-        перезапуская при необходимости.
+        Основной метод, который запускает WebSocket и следит за его состоянием.
         """
         interval_map = {"1min": "1", "3min": "3", "5min": "5", "15min": "15", "30min": "30", "1hour": "60", "1day": "D"}
         api_interval = interval_map.get(self.interval_str)
@@ -77,7 +77,6 @@ class BybitStreamDataHandler(BaseStreamDataHandler):
                     channel_type=self.channel_type
                 )
 
-                # Подписываемся на поток kline, передавая наш защищенный callback
                 self.ws.kline_stream(
                     interval=api_interval,
                     symbol=self.instrument.upper(),
@@ -85,21 +84,26 @@ class BybitStreamDataHandler(BaseStreamDataHandler):
                 )
                 logging.info(f"Bybit Stream: Успешно подписались на kline.{api_interval}.{self.instrument.upper()}.")
 
-                # Внутренний цикл-"наблюдатель" (watchdog)
                 while self.ws.is_connected():
-                    # Просто спим и периодически проверяем соединение
-                    await asyncio.sleep(15)
+                    await asyncio.sleep(5)
 
-                    # Если мы вышли из этого цикла, значит, соединение было потеряно
                 logging.warning("Bybit Stream: WebSocket соединение потеряно.")
 
+            except asyncio.CancelledError:
+                # --- ВАЖНО: Если задачу отменили извне (Ctrl+C), выходим чисто ---
+                logging.info("Bybit Stream: Получена команда на остановку. Закрываем соединение...")
+                if self.ws:
+                    self.ws.exit()
+                raise # Пробрасываем отмену наверх, чтобы loop.py понял, что мы закончили
+
             except Exception as e:
-                logging.error(f"Bybit Stream: Критическая ошибка при установке соединения: {e}")
+                logging.error(f"Bybit Stream: Ошибка соединения: {e}")
 
             finally:
-                # В любом случае (обрыв или ошибка) останавливаем текущий экземпляр WebSocket, если он есть
+                # Этот блок сработает и при ошибке, и при реконнекте
                 if self.ws:
                     self.ws.exit()
 
-                logging.info(f"Переподключение через {LIVE_TRADING_CONFIG['LIVE_RECONNECT_DELAY_SECONDS']} секунд...")
-                await asyncio.sleep(LIVE_TRADING_CONFIG['LIVE_RECONNECT_DELAY_SECONDS'])
+            # Если мы здесь, значит произошла ошибка (не CancelledError), и нужен реконнект
+            logging.info(f"Переподключение через {LIVE_TRADING_CONFIG['LIVE_RECONNECT_DELAY_SECONDS']} секунд...")
+            await asyncio.sleep(LIVE_TRADING_CONFIG['LIVE_RECONNECT_DELAY_SECONDS'])

@@ -6,8 +6,10 @@ from typing import Dict, Any, Optional, List, Tuple
 
 from app.infrastructure.storage.file_io import load_trades_from_file
 from app.core.analysis.session import AnalysisSession
-from config import PATH_CONFIG, BACKTEST_CONFIG
+from app.shared.config import config
 
+PATH_CONFIG = config.PATH_CONFIG
+BACKTEST_CONFIG = config.BACKTEST_CONFIG
 
 def _process_single_backtest_file(file_path: str) -> Optional[Dict[str, Any]]:
     """

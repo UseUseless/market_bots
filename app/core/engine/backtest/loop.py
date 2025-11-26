@@ -7,23 +7,23 @@ from app.shared.events import MarketEvent, SignalEvent, OrderEvent, FillEvent
 from app.core.portfolio.state import PortfolioState
 from app.shared.schemas import StrategyConfigModel
 from app.core.portfolio.manager import Portfolio
-from app.core.calculations.indicators import FeatureEngine
 from app.infrastructure.feeds.local import HistoricLocalDataHandler
-from app.services.execution import SimulatedExecutionHandler
+from app.core.execution.simulator import SimulatedExecutionHandler
 from app.core.risk.sizer import FixedRiskSizer
 from app.core.risk.manager import AVAILABLE_RISK_MANAGERS
 from app.core.risk.monitor import RiskMonitor
 from app.core.execution.order_logic import OrderManager
 from app.core.portfolio.accounting import FillProcessor
 from app.core.engine.backtest.feeds import BacktestDataFeed
-
+from app.core.calculations.indicators import FeatureEngine
 
 from app.strategies.base_strategy import BaseStrategy
 from app.shared.logging_setup import backtest_time_filter
 from app.infrastructure.storage.file_io import load_instrument_info
-from config import PATH_CONFIG, BACKTEST_CONFIG
+from app.shared.config import config
 
 logger = logging.getLogger('backtester')
+
 
 class BacktestEngine:
     """
@@ -32,17 +32,20 @@ class BacktestEngine:
     и запуска основного цикла обработки событий.
     """
 
-    def __init__(self, settings: Dict[str, Any], events_queue: queue.Queue):
+    def __init__(self, settings: Dict[str, Any], events_queue: queue.Queue, feature_engine: FeatureEngine):
         """
         Инициализирует движок с заданной конфигурацией.
 
-        :param settings: Словарь с полной конфигурацией для одного бэктеста.
-        :param events_queue: Внешне созданная очередь событий.
+        :param settings: Настройки бэктеста.
+        :param events_queue: Очередь событий.
+        :param feature_engine: Сервис для расчета индикаторов (DI).
         """
         self.settings = settings
-        self.components: Dict[str, Any] = {}
         self.events_queue = events_queue
-        self.pending_strategy_order: Optional[OrderEvent] = None
+        self.feature_engine = feature_engine
+
+        self.components: Dict[str, Any] = {}
+        self.pending_strategy_order: Optional[Any] = None
 
     def _initialize_components(self) -> None:
         """
@@ -53,14 +56,14 @@ class BacktestEngine:
         events_queue = self.events_queue
         self.components['events_queue'] = events_queue
 
+        data_dir = self.settings.get("data_dir", config.PATH_CONFIG["DATA_DIR"])
+
         instrument_info = load_instrument_info(
             exchange=self.settings["exchange"],
             instrument=self.settings["instrument"],
             interval=self.settings["interval"],
-            data_dir=self.settings.get("data_dir", PATH_CONFIG["DATA_DIR"])
+            data_dir=data_dir
         )
-
-        feature_engine = FeatureEngine()
 
         strategy_class = self.settings["strategy_class"]
         strategy_params = self.settings.get("strategy_params") or strategy_class.get_default_params()
@@ -74,10 +77,9 @@ class BacktestEngine:
             risk_manager_params=self.settings.get("risk_manager_params") or {}
         )
 
-        # 2. Передаем его в стратегию
         strategy = strategy_class(
-            events_queue=events_queue,
-            feature_engine=feature_engine,
+            events_queue=self.events_queue,
+            feature_engine=self.feature_engine,
             config=strategy_config
         )
         self.components['strategy'] = strategy
@@ -99,10 +101,12 @@ class BacktestEngine:
             risk_manager_params=rm_params
         )
 
+        slippage_conf = config.BACKTEST_CONFIG.get("SLIPPAGE_CONFIG", {})
+
         execution_handler = SimulatedExecutionHandler(
             events_queue,
             commission_rate=self.settings["commission_rate"],
-            slippage_config=BACKTEST_CONFIG.get("SLIPPAGE_CONFIG", {})
+            slippage_config=slippage_conf
         )
         self.components['execution_handler'] = execution_handler
 
@@ -126,11 +130,13 @@ class BacktestEngine:
         if data_slice is not None:
             raw_data = data_slice
         else:
+            data_path = self.settings.get("data_dir", config.PATH_CONFIG["DATA_DIR"])
+
             data_handler = HistoricLocalDataHandler(
                 exchange=self.settings["exchange"],
                 instrument_id=self.settings["instrument"],
                 interval_str=self.settings["interval"],
-                data_path=self.settings.get("data_dir", PATH_CONFIG["DATA_DIR"])
+                data_path=data_path
             )
             raw_data = data_handler.load_raw_data()
 
@@ -153,8 +159,6 @@ class BacktestEngine:
         Вспомогательный метод для обработки очереди событий.
 
         :param phase: 'EXECUTION' (начало бара) или 'STRATEGY' (конец бара).
-                      В фазе EXECUTION мы исполняем SL/TP немедленно.
-                      В фазе STRATEGY мы сохраняем сигналы на следующий бар.
         """
         events_queue = self.components['events_queue']
         portfolio = self.components['portfolio']
@@ -217,7 +221,6 @@ class BacktestEngine:
             self._process_queue(current_candle, phase='EXECUTION')
 
             # ФАЗА 3: АНАЛИЗ СТРАТЕГИИ (Конец свечи, цена Close)
-            # ВАЖНО: Теперь мы передаем стратегии фид, а не событие!
             strategy.on_candle(feed)
 
             # Если стратегия дала сигнал, он попадет в очередь.
@@ -252,7 +255,9 @@ class BacktestEngine:
                 "open_positions": portfolio.state.positions
             }
         except Exception as e:
-            logger.error(f"BacktestEngine столкнулся с ошибкой на верхнем уровне для {self.settings['instrument']}: {e}", exc_info=True)
+            logger.error(
+                f"BacktestEngine столкнулся с ошибкой на верхнем уровне для {self.settings['instrument']}: {e}",
+                exc_info=True)
             return {
                 "status": "error",
                 "message": str(e),

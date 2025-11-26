@@ -5,7 +5,9 @@ from typing import Dict, List, Tuple, Any
 
 from app.core.engine.optimization.splitter import split_data_by_periods
 from app.infrastructure.feeds.local import HistoricLocalDataHandler
-from config import PATH_CONFIG
+from app.shared.config import config
+
+PATH_CONFIG = config.PATH_CONFIG
 
 logger = logging.getLogger(__name__)
 
@@ -15,15 +17,15 @@ class WFODataPreparer:
     Отвечает исключительно за загрузку и нарезку данных для Walk-Forward Optimization.
     """
 
-    def __init__(self, settings: Dict[str, Any]):
+    def __init__(self, data_settings: Dict[str, Any]):
         """
         Инициализирует подготовитель данных с настройками оптимизации.
 
-        :param settings: Словарь с настройками, содержащий 'instrument_list',
+        :param data_settings: Словарь с настройками, содержащий 'instrument_list',
                          'exchange', 'interval', 'total_periods', 'train_periods',
                          'test_periods'.
         """
-        self.settings = settings
+        self.data_settings = data_settings
 
     def prepare(self) -> Tuple[Dict[str, List[pd.DataFrame]], int]:
         """
@@ -37,13 +39,13 @@ class WFODataPreparer:
         """
         logger.info("--- Предварительная загрузка и нарезка данных ---")
         all_instrument_periods = {}
-        instrument_list = self.settings["instrument_list"]
+        instrument_list = self.data_settings["instrument_list"]
 
         for instrument in tqdm(instrument_list, desc="Подготовка данных"):
             data_handler = HistoricLocalDataHandler(
-                exchange=self.settings["exchange"],
+                exchange=self.data_settings["exchange"],
                 instrument_id=instrument,
-                interval_str=self.settings["interval"],
+                interval_str=self.data_settings["interval"],
                 data_path=PATH_CONFIG["DATA_DIR"]
             )
             full_dataset = data_handler.load_raw_data()
@@ -53,7 +55,7 @@ class WFODataPreparer:
 
             # Делегируем нарезку функции из splitter.py
             all_instrument_periods[instrument] = split_data_by_periods(
-                full_dataset, self.settings["total_periods"]
+                full_dataset, self.data_settings["total_periods"]
             )
 
         if not all_instrument_periods:
@@ -63,8 +65,8 @@ class WFODataPreparer:
         first_instrument_periods = next(iter(all_instrument_periods.values()))
         num_steps = (
                 len(first_instrument_periods)
-                - self.settings["train_periods"]
-                - self.settings["test_periods"] + 1
+                - self.data_settings["train_periods"]
+                - self.data_settings["test_periods"] + 1
         )
 
         if num_steps <= 0:

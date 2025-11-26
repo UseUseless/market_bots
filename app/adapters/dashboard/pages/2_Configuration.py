@@ -1,16 +1,16 @@
 import streamlit as st
 import pandas as pd
 import sqlite3
-import os
-from config import BASE_DIR
+
 from app.strategies import AVAILABLE_STRATEGIES
-from config import EXCHANGE_INTERVAL_MAPS
+from app.shared.config import config
+
+EXCHANGE_INTERVAL_MAPS = config.EXCHANGE_INTERVAL_MAPS
+BASE_DIR = config.BASE_DIR
+DB_PATH = config.DB_PATH
 
 st.set_page_config(page_title="Configuration", page_icon="⚙️", layout="wide")
 st.title("⚙️ Управление Конфигурацией")
-
-DB_PATH = os.path.join(BASE_DIR, "market_bots.db")
-
 
 def get_connection():
     return sqlite3.connect(DB_PATH)

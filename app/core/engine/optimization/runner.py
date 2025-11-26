@@ -3,6 +3,7 @@ from typing import Dict, Any
 
 from app.core.engine.optimization.engine import OptimizationEngine
 from app.shared.logging_setup import setup_global_logging
+from app.bootstrap.container import container
 
 # Получаем логгер для этого модуля
 logger = logging.getLogger(__name__)
@@ -25,7 +26,8 @@ def run_optimization_flow(settings: Dict[str, Any]):
 
         # 2. Создаем экземпляр движка, передавая ему все настройки.
         # Движок сам обработает и дополнит настройки (например, создаст instrument_list из portfolio_path).
-        engine = OptimizationEngine(settings)
+        feature_engine = container.feature_engine
+        engine = OptimizationEngine(settings, feature_engine)
 
         # 3. Запускаем основной, длительный процесс оптимизации.
         engine.run()

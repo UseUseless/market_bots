@@ -1,16 +1,14 @@
 import streamlit as st
 import pandas as pd
 import sqlite3
-import os
-from config import BASE_DIR
 
-# Настройка страницы
+from app.shared.config import config
+
+BASE_DIR = config.BASE_DIR
+DB_PATH = config.DB_PATH
+
 st.set_page_config(page_title="Live Monitor", page_icon="🚀", layout="wide")
-
 st.title("🚀 Live Signal Monitor")
-
-DB_PATH = os.path.join(BASE_DIR, "market_bots.db")
-
 
 def load_data():
     """Читает данные из SQLite напрямую в Pandas DF."""

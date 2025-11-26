@@ -82,10 +82,21 @@ class SignalEngine:
                     except queue.Empty:
                         pass
 
+
         except asyncio.CancelledError:
             logger.info(f"🛑 [Engine] Stopping strategy #{config_id}...")
-            stream_task.cancel()
+
+            if stream_task and not stream_task.done():
+                stream_task.cancel()
+
+                try:
+                    # Ждем, пока стрим реально закроет соединения
+                    await stream_task
+
+                except asyncio.CancelledError:
+                    pass  # Это нормально, мы сами его отменили
             raise
+
         except Exception as e:
             logger.error(f"⚠️ [Engine] Error in strategy #{config_id}: {e}", exc_info=True)
             await asyncio.sleep(5)  # Пауза перед рестартом при ошибке

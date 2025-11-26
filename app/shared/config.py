@@ -1,21 +1,17 @@
-import os
 from pathlib import Path
 from typing import Dict, Any, Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
-# Импортируем Enum, чтобы ключи словарей совпадали с логикой приложения
-# (Убедись, что app/shared/primitives.py уже создан, иначе используй просто строки "tinkoff", "bybit")
 from app.shared.primitives import ExchangeType
 
 
-class Settings(BaseSettings):
+class AppConfig(BaseSettings):
     """
     Единый источник конфигурации.
     Читает переменные из .env, определяет пути и хранит константы.
     """
 
     # --- 1. Основные пути (Paths) ---
-    # Корень проекта (app/shared/settings.py -> ../../)
+    # Корень проекта (app/shared/config.py -> ../../)
     BASE_DIR: Path = Path(__file__).parent.parent.parent
 
     @property
@@ -101,48 +97,48 @@ class Settings(BaseSettings):
             }
         }
 
+    @property
+    def EXCHANGE_INTERVAL_MAPS(self) -> Dict[str, Dict[str, str]]:
+        return {
+            ExchangeType.TINKOFF: {
+                "1min": "CANDLE_INTERVAL_1_MIN", "2min": "CANDLE_INTERVAL_2_MIN",
+                "3min": "CANDLE_INTERVAL_3_MIN", "5min": "CANDLE_INTERVAL_5_MIN",
+                "10min": "CANDLE_INTERVAL_10_MIN", "15min": "CANDLE_INTERVAL_15_MIN",
+                "30min": "CANDLE_INTERVAL_30_MIN", "1hour": "CANDLE_INTERVAL_HOUR",
+                "2hour": "CANDLE_INTERVAL_2_HOUR", "4hour": "CANDLE_INTERVAL_4_HOUR",
+                "1day": "CANDLE_INTERVAL_DAY", "1week": "CANDLE_INTERVAL_WEEK",
+                "1month": "CANDLE_INTERVAL_MONTH",
+            },
+            ExchangeType.BYBIT: {
+                "1min": "1", "3min": "3", "5min": "5", "15min": "15", "30min": "30", "1hour": "60",
+                "2hour": "120", "4hour": "240", "6hour": "360", "12hour": "720", "1day": "D",
+                "1week": "W", "1month": "M",
+            }
+        }
+
+    @property
+    def EXCHANGE_SPECIFIC_CONFIG(self) -> Dict[str, Dict[str, Any]]:
+        return {
+            ExchangeType.TINKOFF: {
+                "SHARPE_ANNUALIZATION_FACTOR": 252,
+                "SESSION_START_UTC": "06:50",
+                "SESSION_END_UTC": "15:30",
+                "DEFAULT_CLASS_CODE": "TQBR",
+            },
+            ExchangeType.BYBIT: {
+                "SHARPE_ANNUALIZATION_FACTOR": 365,
+                "SESSION_START_UTC": None,
+                "SESSION_END_UTC": None,
+            }
+        }
+
     # --- Pydantic Config ---
     model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        extra="ignore"  # Игнорировать лишние переменные в .env
+        env_file=".env",            # 1. Откуда читать
+        env_file_encoding="utf-8",  # 2. В какой кодировке
+        extra="ignore"              # 3. Что делать с лишним
     )
 
 
 # Инициализация объекта настроек
-settings = Settings()
-
-# --- 6. Сложные словари (Константы) ---
-# Их сложно запихнуть в .env, поэтому оставляем как константы Python,
-# но они лежат здесь, в settings.py
-
-EXCHANGE_INTERVAL_MAPS = {
-    ExchangeType.TINKOFF: {
-        "1min": "CANDLE_INTERVAL_1_MIN", "2min": "CANDLE_INTERVAL_2_MIN",
-        "3min": "CANDLE_INTERVAL_3_MIN", "5min": "CANDLE_INTERVAL_5_MIN",
-        "10min": "CANDLE_INTERVAL_10_MIN", "15min": "CANDLE_INTERVAL_15_MIN",
-        "30min": "CANDLE_INTERVAL_30_MIN", "1hour": "CANDLE_INTERVAL_HOUR",
-        "2hour": "CANDLE_INTERVAL_2_HOUR", "4hour": "CANDLE_INTERVAL_4_HOUR",
-        "1day": "CANDLE_INTERVAL_DAY", "1week": "CANDLE_INTERVAL_WEEK",
-        "1month": "CANDLE_INTERVAL_MONTH",
-    },
-    ExchangeType.BYBIT: {
-        "1min": "1", "3min": "3", "5min": "5", "15min": "15", "30min": "30", "1hour": "60",
-        "2hour": "120", "4hour": "240", "6hour": "360", "12hour": "720", "1day": "D",
-        "1week": "W", "1month": "M",
-    }
-}
-
-EXCHANGE_SPECIFIC_CONFIG = {
-    ExchangeType.TINKOFF: {
-        "SHARPE_ANNUALIZATION_FACTOR": 252,
-        "SESSION_START_UTC": "06:50",
-        "SESSION_END_UTC": "15:30",
-        "DEFAULT_CLASS_CODE": "TQBR",
-    },
-    ExchangeType.BYBIT: {
-        "SHARPE_ANNUALIZATION_FACTOR": 365,
-        "SESSION_START_UTC": None,
-        "SESSION_END_UTC": None,
-    }
-}
+config = AppConfig()

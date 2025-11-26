@@ -1,14 +1,3 @@
-"""
-Модуль-оркестратор для всех операций по управлению данными.
-
-Этот "flow" отвечает за:
-1. Обновление списков ликвидных инструментов.
-2. Скачивание исторических свечей и метаданных по инструментам.
-
-Функции в этом модуле являются точками входа для UI (лаунчера) и
-скриптов командной строки, обеспечивая единую, централизованную логику.
-"""
-
 import os
 import logging
 import json
@@ -16,29 +5,9 @@ import time
 from typing import Dict, Any, Tuple
 
 from app.core.interfaces import BaseDataClient
-from app.infrastructure.exchanges.tinkoff import TinkoffHandler
-from app.infrastructure.exchanges.bybit import BybitHandler
-from app.shared.primitives import ExchangeType
-from app.shared.settings import settings
+from app.shared.config import config
 
-# Получаем логгер для текущего модуля
 logger = logging.getLogger(__name__)
-
-
-# --- Вспомогательные (приватные) функции, используемые внутри этого модуля ---
-
-def _get_client(exchange: str) -> BaseDataClient:
-    """Создает и возвращает экземпляр клиента для указанной биржи."""
-    if exchange == ExchangeType.TINKOFF:
-        # Для публичных данных и скачивания достаточно токена "только для чтения",
-        # который используется по умолчанию в конструкторе.
-        return TinkoffHandler()
-    elif exchange == ExchangeType.BYBIT:
-        # Для публичных данных (списки, тикеры, история) можно использовать
-        # режим REAL без ключей API.
-        return BybitHandler(trade_mode="REAL")
-    else:
-        raise ValueError(f"Неизвестная биржа: {exchange}")
 
 
 def _fetch_and_save_candles(client: BaseDataClient, exchange: str, instrument: str, interval: str, days: int,
@@ -63,23 +32,17 @@ def _fetch_and_save_instrument_info(client: BaseDataClient, instrument: str, cat
     else:
         logger.warning(f"Не получено метаданных для {instrument.upper()}. Файл не создан.")
 
-def update_lists_flow(dl_settings: Dict[str, Any]) -> Tuple[bool, str]:
-    """
-    Основная функция для команды 'update'.
-    Обновляет список топ-N ликвидных инструментов и возвращает результат.
 
-    :param settings: Словарь настроек. Ожидаемый ключ: 'exchange'.
-    :return: Кортеж (успех: bool, сообщение: str).
-    """
-    exchange = dl_settings["exchange"]
+def update_lists_flow(args_settings: Dict[str, Any], client: BaseDataClient) -> Tuple[bool, str]:
+    exchange = args_settings["exchange"]
     logger.info(f"--- Запуск потока обновления списка ликвидных инструментов для биржи: {exchange.upper()} ---")
 
-    datalists_dir = settings.DATALISTS_DIR
+    datalists_dir = config.DATALISTS_DIR
     os.makedirs(datalists_dir, exist_ok=True)
-    expected_count = settings.DATA_LOADER_CONFIG["LIQUID_INSTRUMENTS_COUNT"]
+
+    expected_count = config.DATA_LOADER_CONFIG["LIQUID_INSTRUMENTS_COUNT"]
 
     try:
-        client = _get_client(exchange)
         tickers = client.get_top_liquid_by_turnover(count=expected_count)
 
         if not tickers:
@@ -109,21 +72,12 @@ def update_lists_flow(dl_settings: Dict[str, Any]) -> Tuple[bool, str]:
         return False, message
 
 
-def download_data_flow(dl_settings: Dict[str, Any]):
-    """
-    Основная функция для команды 'download'.
-    Загружает исторические данные и метаданные для списка инструментов.
-
-    :param dl_settings: Словарь настроек. Ожидаемые ключи:
-                     'exchange', 'interval', 'days', 'category' (опционально),
-                     и либо 'instrument' (list), либо 'list' (str).
-    """
+def download_data_flow(args_settings: Dict[str, Any], client: BaseDataClient):
     instrument_list = []
-    # Определяем список инструментов для скачивания
-    if dl_settings.get("instrument"):
-        instrument_list = dl_settings["instrument"]
-    elif dl_settings.get("list"):
-        list_path = os.path.join(settings.DATALISTS_DIR, dl_settings["list"])
+    if args_settings.get("instrument"):
+        instrument_list = args_settings["instrument"]
+    elif args_settings.get("list"):
+        list_path = os.path.join(config.DATALISTS_DIR, args_settings["list"])
         try:
             with open(list_path, 'r', encoding='utf-8') as f:
                 instrument_list = [line.strip() for line in f if line.strip()]
@@ -136,17 +90,15 @@ def download_data_flow(dl_settings: Dict[str, Any]):
         logger.error("Список инструментов для скачивания пуст.")
         return
 
-    exchange = dl_settings["exchange"]
-    interval = dl_settings["interval"]
-    days = dl_settings.get("days", settings.DATA_LOADER_CONFIG["DAYS_TO_LOAD"])
-    category = dl_settings.get("category", "linear")  # По умолчанию 'linear' для Bybit
+    exchange = args_settings["exchange"]
+    interval = args_settings["interval"]
+    days = args_settings.get("days", config.DATA_LOADER_CONFIG["DAYS_TO_LOAD"])
+    category = args_settings.get("category", "linear")
 
     logger.info(
         f"--- Запуск потока загрузки данных с биржи '{exchange.upper()}' за {days} дней для интервала: {interval} ---")
 
-    client = _get_client(exchange)
-
-    data_dir = settings.DATA_DIR
+    data_dir = config.DATA_DIR
     exchange_path = os.path.join(data_dir, exchange, interval)
     os.makedirs(exchange_path, exist_ok=True)
 
@@ -161,4 +113,4 @@ def download_data_flow(dl_settings: Dict[str, Any]):
         _fetch_and_save_instrument_info(client, instrument, category, json_path)
 
         if len(instrument_list) > 1:
-            time.sleep(1)  # Уважительная пауза для API, чтобы избежать бана
+            time.sleep(1)

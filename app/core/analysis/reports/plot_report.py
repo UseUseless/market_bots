@@ -8,7 +8,9 @@ from matplotlib import pyplot as plt
 
 from app.core.analysis.constants import METRIC_CONFIG
 from app.shared.primitives import ExchangeType
-from config import EXCHANGE_SPECIFIC_CONFIG
+from app.shared.config import config
+
+EXCHANGE_INTERVAL_MAPPING = config.EXCHANGE_SPECIFIC_CONFIG
 
 logger = logging.getLogger(__name__)
 

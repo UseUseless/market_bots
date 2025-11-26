@@ -6,8 +6,8 @@ from typing import Dict, Any
 
 import pandas as pd
 
-from config import PATH_CONFIG
-
+from app.shared.config import config
+PATH_CONFIG = config.PATH_CONFIG
 
 def load_trades_from_file(file_path: str) -> pd.DataFrame:
     """Загружает сделки из файла, поддерживая .jsonl формат."""

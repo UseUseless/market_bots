@@ -15,7 +15,7 @@ from tinkoff.invest.utils import now, quotation_to_decimal
 
 from app.core.interfaces import TradeModeType, BaseDataClient, BaseTradeClient
 from app.shared.primitives import TradeDirection, ExchangeType
-from app.shared.settings import settings
+from app.shared.config import config
 
 logger = logging.getLogger(__name__)
 
@@ -27,19 +27,19 @@ class TinkoffHandler(BaseDataClient, BaseTradeClient):
     """
 
     def __init__(self, trade_mode: TradeModeType = "SANDBOX"):
-        self.read_token = settings.TINKOFF_TOKEN_READONLY
+        self.read_token = config.TINKOFF_TOKEN_READONLY
         self.trade_mode = trade_mode.upper()
         self.trade_token: str | None = None
 
         # Единое хранилище ID счета (и для Real, и для Sandbox)
-        self.account_id: str | None = settings.TINKOFF_ACCOUNT_ID
+        self.account_id: str | None = config.TINKOFF_ACCOUNT_ID
 
         # Проверка токенов
         if not self.read_token or "Your" in self.read_token:
             raise ConnectionError("Токен только для чтения (TOKEN_READONLY) не задан в .env.")
 
         if self.trade_mode == "REAL":
-            self.trade_token = settings.TINKOFF_TOKEN_FULL_ACCESS
+            self.trade_token = config.TINKOFF_TOKEN_FULL_ACCESS
             if not self.trade_token or "Your" in self.trade_token:
                 raise ConnectionError("Токен с полным доступом (TOKEN_FULL_ACCESS) не задан в .env.")
 
@@ -49,7 +49,7 @@ class TinkoffHandler(BaseDataClient, BaseTradeClient):
                 self.account_id = self._get_first_account_id(sandbox=False)
 
         elif self.trade_mode == "SANDBOX":
-            self.trade_token = settings.TINKOFF_TOKEN_SANDBOX
+            self.trade_token = config.TINKOFF_TOKEN_SANDBOX
             if not self.trade_token or "Your" in self.trade_token:
                 raise ConnectionError("Токен песочницы (TOKEN_SANDBOX) не задан в .env.")
 
@@ -114,7 +114,7 @@ class TinkoffHandler(BaseDataClient, BaseTradeClient):
                     raise ValueError(f"Инструмент '{instrument}' не найден через API.")
 
                 instrument_upper = instrument.upper()
-                class_code = settings.EXCHANGE_SPECIFIC_CONFIG[ExchangeType.TINKOFF]['DEFAULT_CLASS_CODE']
+                class_code = config.EXCHANGE_SPECIFIC_CONFIG[ExchangeType.TINKOFF]['DEFAULT_CLASS_CODE']
 
                 # 1. Строгий поиск
                 strict_match = next((
@@ -148,7 +148,7 @@ class TinkoffHandler(BaseDataClient, BaseTradeClient):
             logging.error(f"FIGI error for '{instrument}': {e}")
             return pd.DataFrame()
 
-        interval_name = settings.EXCHANGE_INTERVAL_MAPS[ExchangeType.TINKOFF].get(interval)
+        interval_name = config.EXCHANGE_INTERVAL_MAPS[ExchangeType.TINKOFF].get(interval)
         if not interval_name:
             logging.error(f"Неподдерживаемый интервал: {interval}")
             return pd.DataFrame()

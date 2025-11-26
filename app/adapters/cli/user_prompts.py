@@ -8,8 +8,10 @@ from app.strategies.base_strategy import BaseStrategy
 from docs.help_texts import HELP_TOPICS
 from app.core.analysis.constants import METRIC_CONFIG
 from app.shared.primitives import ExchangeType
-from config import PATH_CONFIG, EXCHANGE_INTERVAL_MAPS
+from app.shared.config import config
 
+PATH_CONFIG = config.PATH_CONFIG
+EXCHANGE_INTERVAL_MAPS = config.EXCHANGE_INTERVAL_MAPS
 
 class UserCancelledError(Exception):
     """Используется, когда пользователь отменяет ввод (нажимает Ctrl+C или 'Назад')."""
