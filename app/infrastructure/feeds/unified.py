@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import threading
 import pandas as pd
 from typing import Optional, List, Dict
 
@@ -16,6 +17,10 @@ logger = logging.getLogger(__name__)
 class UnifiedDataFeed(IDataFeed):
     """
     Унифицированный фид данных для Live-режима.
+
+    Исправления v2:
+    1. Thread-Safety: Добавлен threading.RLock для защиты данных между asyncio-лупом и потоком стратегии.
+    2. Performance: Данные хранятся сразу в DataFrame, убрана лишняя конвертация в dict.
     """
 
     def __init__(self,
@@ -36,31 +41,44 @@ class UnifiedDataFeed(IDataFeed):
         self.required_indicators = required_indicators
         self.max_buffer_size = max_buffer_size
 
-        self._buffer: List[dict] = []
-        self._df_cache: Optional[pd.DataFrame] = None
-        self._df_dirty = True
+        # RLock позволяет одному и тому же потоку захватывать лок несколько раз (рекурсивно),
+        # что удобно, если один метод вызывает другой внутри класса.
+        self._lock = threading.RLock()
+
+        # Храним данные сразу в DataFrame, чтобы не конвертировать list<->df на каждом тике.
+        self._df: pd.DataFrame = pd.DataFrame()
 
         self.stream_handler: Optional[BaseStreamDataHandler] = None
-        self._new_candle_event = asyncio.Event()
 
     async def warm_up(self, days: int = 3, category: str = "linear"):
-        """Загрузка истории для инициализации индикаторов."""
+        """
+        Загрузка истории для инициализации индикаторов.
+        Выполняется 1 раз при старте.
+        """
         logger.info(f"DataFeed: Загрузка истории за {days} дней для {self.instrument}...")
 
         loop = asyncio.get_running_loop()
-        # Используем self._interval вместо self.interval
+
+        # Запрос к API выполняется в executor'е, чтобы не блокировать loop
         history_df = await loop.run_in_executor(
             None,
             lambda: self.client.get_historical_data(self.instrument, self._interval, days, category=category)
         )
 
-        if history_df.empty:
-            logger.warning("DataFeed: История пуста! Индикаторы будут считаться с нуля.")
-            return
+        with self._lock:
+            if history_df.empty:
+                logger.warning("DataFeed: История пуста! Индикаторы будут считаться с нуля.")
+                self._df = pd.DataFrame()
+                return
 
-        self._buffer = history_df.tail(self.max_buffer_size).to_dict('records')
-        self._recalc_indicators()
-        logger.info(f"DataFeed: Разогрев завершен. Загружено {len(self._buffer)} свечей.")
+            # Оставляем только нужный хвост
+            self._df = history_df.tail(self.max_buffer_size).copy()
+            self._ensure_numeric_types()
+
+            # Первичный расчет индикаторов
+            self._recalc_indicators()
+
+            logger.info(f"DataFeed: Разогрев завершен. В памяти {len(self._df)} свечей.")
 
     def start_stream(self, event_queue: asyncio.Queue, loop: asyncio.AbstractEventLoop, **kwargs):
         """Инициализирует подключение к вебсокету."""
@@ -77,47 +95,79 @@ class UnifiedDataFeed(IDataFeed):
         return self.stream_handler.stream_data()
 
     async def process_candle(self, candle_data: pd.Series) -> bool:
-        if self._buffer and candle_data['time'] <= self._buffer[-1]['time']:
-            return False
+        """
+        Принимает новую свечу из стрима, обновляет DataFrame и пересчитывает индикаторы.
+        Возвращает True, если свеча была добавлена (новая).
+        """
+        # Превращаем Series в DataFrame с одной строкой и правильными типами
+        new_candle_df = candle_data.to_frame().T
+        new_candle_df = new_candle_df.infer_objects()
 
-        self._buffer.append(candle_data.to_dict())
+        with self._lock:
+            # Проверка на дубликаты (по времени)
+            if not self._df.empty:
+                last_time = self._df.iloc[-1]['time']
+                new_time = new_candle_df.iloc[0]['time']
 
-        if len(self._buffer) > self.max_buffer_size:
-            self._buffer.pop(0)
+                if new_time <= last_time:
+                    return False
 
-        self._df_dirty = True
-        self._recalc_indicators()
-        return True
+            # Добавляем новую свечу через concat (это быстрее, чем append в список и пересоздание DF)
+            self._df = pd.concat([self._df, new_candle_df], ignore_index=True)
 
-    def _recalc_indicators(self):
-        if len(self._buffer) < 50:
-            return
+            # Контроль размера буфера
+            if len(self._df) > self.max_buffer_size:
+                # Отрезаем лишнее сверху. iloc эффективен.
+                self._df = self._df.iloc[-self.max_buffer_size:].copy()
 
-        df = pd.DataFrame(self._buffer)
+            # Пересчет индикаторов
+            self._recalc_indicators()
 
+            return True
+
+    def _ensure_numeric_types(self):
+        """Принудительное приведение типов для корректной работы индикаторов."""
         cols_to_float = ['open', 'high', 'low', 'close', 'volume']
         for col in cols_to_float:
-            if col in df.columns:
-                df[col] = df[col].astype(float)
+            if col in self._df.columns:
+                self._df[col] = self._df[col].astype(float)
 
-        self.feature_engine.add_required_features(df, self.required_indicators)
-        self._buffer = df.to_dict('records')
-        self._df_dirty = False
+    def _recalc_indicators(self):
+        """
+        Расчет индикаторов на текущем DataFrame.
+        Вызывается внутри блока `with self._lock`.
+        """
+        if len(self._df) < 2:
+            return
+
+        # FeatureEngine модифицирует DF in-place (добавляет колонки)
+        # Мы работаем с self._df напрямую.
+        self.feature_engine.add_required_features(self._df, self.required_indicators)
 
     # --- Реализация интерфейса IDataFeed ---
 
     def get_history(self, length: int = 0) -> pd.DataFrame:
-        df = pd.DataFrame(self._buffer)
-        if length > 0:
-            return df.tail(length)
-        return df
+        """
+        Возвращает копию исторических данных.
+        Критически важно использовать .copy(), чтобы стратегия в другом потоке
+        не сломалась, если self._df изменится во время чтения.
+        """
+        with self._lock:
+            if self._df.empty:
+                return pd.DataFrame()
+
+            if length > 0:
+                return self._df.tail(length).copy()
+
+            return self._df.copy()
 
     def get_current_candle(self) -> pd.Series:
-        if not self._buffer:
-            return pd.Series()
-        return pd.Series(self._buffer[-1])
+        """Возвращает последнюю свечу."""
+        with self._lock:
+            if self._df.empty:
+                return pd.Series()
+            return self._df.iloc[-1].copy()
 
     @property
     def interval(self) -> str:
-        # ИСПРАВЛЕНИЕ: Возвращаем защищенную переменную
         return self._interval
