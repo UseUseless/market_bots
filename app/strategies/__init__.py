@@ -1,47 +1,57 @@
 import os
 import importlib
 import inspect
+import logging
 from typing import Dict, Type
 
 from app.strategies.base_strategy import BaseStrategy
 
+logger = logging.getLogger(__name__)
+
+
 def _discover_strategies() -> Dict[str, Type[BaseStrategy]]:
     """
-    Динамически находит и загружает все классы стратегий из текущей директории.
-    Ключом словаря является имя файла (без .py), значением - сам класс стратегии.
+    Динамически находит и загружает классы стратегий из подпапки 'logic'.
     """
     strategies_dict = {}
+
+    # Определяем пути
     current_dir = os.path.dirname(__file__)
+    logic_dir = os.path.join(current_dir, "logic")
+
+    # Имя пакета для импорта (например, app.strategies)
     current_package = __package__
 
-    for filename in os.listdir(current_dir):
-        # Пропускаем служебные файлы и базовый класс
-        if filename.endswith(".py") and not filename.startswith("_") and "base_strategy" not in filename:
+    if not os.path.exists(logic_dir):
+        logger.warning(f"Папка со стратегиями не найдена: {logic_dir}")
+        return {}
 
-            # 1. Формируем имя модуля для импорта (например, 'strategies.triple_filter')
-            module_name = f"{current_package}.{filename[:-3]}"
+    for filename in os.listdir(logic_dir):
+        # Пропускаем служебные файлы
+        if filename.endswith(".py") and not filename.startswith("_"):
+
+            # Формируем путь для импорта: app.strategies.logic.simple_sma_cross
+            module_name = f"{current_package}.logic.{filename[:-3]}"
 
             try:
-                # 2. Динамически импортируем модуль
                 strategy_module = importlib.import_module(module_name)
 
-                # 3. Ищем внутри модуля классы, которые являются наследниками BaseStrategy
+                # Ищем классы-наследники BaseStrategy
                 for name, cls in inspect.getmembers(strategy_module, inspect.isclass):
                     if issubclass(cls, BaseStrategy) and cls is not BaseStrategy:
-                        # 4. Нашли! Добавляем в словарь.
-                        strategy_key = filename[:-3]  # 'triple_filter.py' -> 'triple_filter'
+                        # Ключ - имя файла (как id стратегии)
+                        strategy_key = filename[:-3]
                         strategies_dict[strategy_key] = cls
-                        break  # Предполагаем, что в одном файле одна стратегия
+                        # logger.debug(f"Загружена стратегия: {strategy_key} -> {cls.__name__}")
+                        break
             except ImportError as e:
-                print(f"Предупреждение: Не удалось импортировать стратегию из файла {filename}: {e}")
+                logger.error(f"Ошибка импорта стратегии {filename}: {e}")
+            except Exception as e:
+                logger.error(f"Ошибка при загрузке {filename}: {e}")
 
     return strategies_dict
 
 
-# --- ГЛАВНАЯ ЧАСТЬ ---
-# Вызываем функцию при импорте пакета и сохраняем результат в переменную,
-# доступную на уровне всего пакета.
+# Экспортируем словарь доступных стратегий и базовый класс
 AVAILABLE_STRATEGIES = _discover_strategies()
-
-# Добавляем __all__, чтобы было понятно, что именно экспортирует этот пакет
 __all__ = ["AVAILABLE_STRATEGIES", "BaseStrategy"]

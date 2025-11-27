@@ -2,9 +2,9 @@ import pandas as pd
 import pytest
 from types import SimpleNamespace
 
-from app.core import FixedRiskManager, AtrRiskManager
-from app.core import FixedRiskSizer
-from app.analyzers import SingleRunAnalyzer
+from app.core.risk_engine.risk_manager import FixedRiskManager, AtrRiskManager
+from app.core.risk_engine.sizer import FixedRiskSizer
+from app.services.analytics import SingleRunAnalyzer
 
 # --- Тесты для RiskManager ---
 

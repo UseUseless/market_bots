@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
-from app.core.risk.risk_manager import TradeRiskProfile
+from app.shared.primitives import TradeRiskProfile
+
 
 class BasePositionSizer(ABC):
     """
@@ -29,7 +30,7 @@ class FixedRiskSizer(BasePositionSizer):
         # (Общая сумма, которой я готов рискнуть) / (Сумма, которую я теряю на 1 акции)
         # = (Количество акций, которое я могу купить).
         # Вся логика по расчету этих двух величин инкапсулирована в RiskManager
-        quantity = risk_profile.risk_amount / risk_profile.risk_per_share # (1) пояснение в risk_manager.py
+        quantity = risk_profile.risk_amount / risk_profile.risk_per_share # (1) пояснение в manager.py
 
         # Возвращаем количество. Оно может быть дробным (float),
         # т.к. округление до целого - это ответственность Portfolio,

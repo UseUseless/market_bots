@@ -175,7 +175,7 @@ def test_dashboard_smoke(tmp_path):
         {'time': [pd.Timestamp('2023-01-02 10:05:00')], 'open': [100], 'high': [100], 'low': [100], 'close': [100]})
     fake_data_df.to_parquet(data_dir / "tinkoff" / "5min" / "FAKE.parquet")
 
-    required_files = ["main.py", "search_space.py", "single_run_analyzer.py", "comparative_analyzer.py"]
+    required_files = ["main.py", "search_space.py", "single_run_analyzer.py", "comparative.py"]
     for f in required_files:
         if os.path.exists(f):
             shutil.copy(f, test_workdir)

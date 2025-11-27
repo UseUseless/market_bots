@@ -1,16 +1,13 @@
-# market_bots/scripts/manage_data.py
-
 import argparse
 import logging
 
-# 1. Импортируем "flows" - функции, содержащие реальную логику из `app`.
-from app.core.data.flows.management import update_lists_flow, download_data_flow
-from app.utils.logging_setup import setup_global_logging
-from config import DATA_LOADER_CONFIG
+from app.infrastructure.storage.data_manager import update_lists_flow, download_data_flow
+from app.shared.logging_setup import setup_global_logging
+from app.bootstrap.container import container
+from app.shared.primitives import ExchangeType
+from app.shared.config import config
 
-# 2. Константы для значений по умолчанию в argparse остаются здесь.
-DEFAULT_DAYS_TO_LOAD = DATA_LOADER_CONFIG["DAYS_TO_LOAD"]
-
+DEFAULT_DAYS_TO_LOAD = config.DATA_LOADER_CONFIG["DAYS_TO_LOAD"]
 
 def main():
     """
@@ -72,15 +69,31 @@ def main():
     args = parser.parse_args()
 
     # Конвертируем Namespace от argparse в обычный словарь
-    settings = vars(args)
+    args_settings = vars(args)
 
-    # Вызываем привязанную функцию (либо update_lists_flow, либо download_data_flow)
-    # и передаем ей словарь с настройками.
+    # --- НОВАЯ ЛОГИКА СБОРКИ ---
+
+    # 1. Определяем, какой клиент нужен, прямо здесь
+    exchange = args_settings.get("exchange")
+
+    # Логика выбора режима (Tinkoff=SANDBOX / Bybit=REAL) переехала сюда
+    # Это делает скрипт более явным в своих намерениях
+    mode = "SANDBOX" if exchange == ExchangeType.TINKOFF else "REAL"
+
     try:
-        settings['func'](settings)
+        # 2. Достаем клиента из контейнера
+        client = container.get_exchange_client(exchange, mode=mode)
+
+        command = args_settings.get('command')
+
+        if command == 'update':
+            update_lists_flow(args_settings, client)
+        elif command == 'download':
+            download_data_flow(args_settings, client)
+
     except Exception as e:
         logging.getLogger(__name__).critical(
-            f"Произошла критическая ошибка при выполнении команды '{settings.get('command')}': {e}", exc_info=True)
+            f"Критическая ошибка: {e}", exc_info=True)
 
 
 if __name__ == "__main__":

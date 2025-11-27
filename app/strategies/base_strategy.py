@@ -2,34 +2,44 @@ from queue import Queue
 import pandas as pd
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional
-import asyncio
 
-from app.core.models.event import MarketEvent
-from app.core.services.feature_engine import FeatureEngine
-from app.core.interfaces.abstract_feed import IDataFeed
-from app.core.interfaces.abstract_publisher import IPublisher
+from app.core.calculations.indicators import FeatureEngine
+from app.core.interfaces import IDataFeed
+from app.shared.schemas import StrategyConfigModel
 
 
 class BaseStrategy(ABC):
     """
     Абстрактный базовый класс для всех торговых стратегий.
-    Реализует принцип Open/Closed и гарантирует расчет кастомных фичей в Live.
+    Теперь работает со строгой конфигурацией StrategyConfigModel.
     """
     params_config: Dict[str, Dict[str, Any]] = {}
     required_indicators: List[Dict[str, Any]] = []
     min_history_needed: int = 1
 
-    def __init__(self, events_queue: Queue, instrument: str, params: Dict[str, Any],
+    def __init__(self,
+                 events_queue: Queue,
                  feature_engine: FeatureEngine,
-                 risk_manager_type: str = "FIXED", risk_manager_params: Optional[Dict[str, Any]] = None):
+                 config: StrategyConfigModel):
 
         self.events_queue = events_queue
-        self.instrument: str = instrument
-        self.name: str = self.__class__.__name__
-        self.params = params
         self.feature_engine = feature_engine
+
+        # Сохраняем полный конфиг
+        self.config = config
+
+        # Для обратной совместимости и удобства распаковываем часто используемые поля
+        self.instrument: str = config.instrument
+        self.params: Dict[str, Any] = config.params
+        self.name: str = config.strategy_name
+
         self._prev_candle_cache: Optional[pd.Series] = None
-        self._add_risk_manager_requirements(risk_manager_type, risk_manager_params)
+
+        # Инициализация риск-менеджера из конфига
+        self._add_risk_manager_requirements(
+            config.risk_manager_type,
+            config.risk_manager_params
+        )
 
     @classmethod
     def get_default_params(cls) -> Dict[str, Any]:
@@ -39,15 +49,13 @@ class BaseStrategy(ABC):
                 config.update(base_class.params_config)
         return {name: p_config['default'] for name, p_config in config.items()}
 
-    def _add_risk_manager_requirements(self, risk_manager_type: str, risk_manager_params: Optional[Dict[str, Any]]):
+    def _add_risk_manager_requirements(self, risk_manager_type: str, risk_manager_params: Dict[str, Any]):
         if risk_manager_type == "ATR":
-            _rm_params = risk_manager_params if risk_manager_params is not None else {}
-            atr_period = _rm_params.get("atr_period", 14)
+            atr_period = risk_manager_params.get("atr_period", 14)
             atr_requirement = {"name": "atr", "params": {"period": atr_period}}
 
             current_requirements = list(self.required_indicators)
-            if not any(
-                    req.get('name') == 'atr' and req['params']['period'] == atr_period for req in current_requirements):
+            if not any(req.get('name') == 'atr' and req['params']['period'] == atr_period for req in current_requirements):
                 current_requirements.append(atr_requirement)
             self.required_indicators = current_requirements
 
@@ -78,72 +86,35 @@ class BaseStrategy(ABC):
         """Метод-заглушка для уникальных индикаторов (Z-Score и т.д.)."""
         return data
 
-    def on_market_event(self, event: MarketEvent):
+    def on_candle(self, feed: IDataFeed):
         """
-        Обрабатывает приход данных.
-        Умеет работать и с Series (Бэктест), и с DataFrame (Live, хотя Live идет через on_candle).
+        Единая точка входа для Бэктеста и Лайва.
+        Стратегия сама запрашивает нужную ей историю у фида.
         """
-        data = event.data
+        # 1. Запрашиваем историю (Current + History)
+        # Нам нужно минимум 2 свечи (предыдущая и текущая) для большинства стратегий
+        history_needed = max(self.min_history_needed, 2)
+        history_df = feed.get_history(length=history_needed)
 
-        # --- ВАРИАНТ 1: БЭКТЕСТ (Приходит одна строка pd.Series) ---
-        if isinstance(data, pd.Series):
-            # Если это первая свеча, просто запоминаем её и выходим
-            if self._prev_candle_cache is None:
-                self._prev_candle_cache = data
-                return
-
-            # Если есть предыдущая, считаем сигналы
-            current_candle = data
-            prev_candle = self._prev_candle_cache
-
-            self._calculate_signals(prev_candle, current_candle, event.timestamp)
-
-            # Обновляем кэш для следующего шага
-            self._prev_candle_cache = current_candle
+        # Если данных маловато (например, старт бэктеста), пропускаем
+        if len(history_df) < 2:
             return
 
-        # --- ВАРИАНТ 2: LIVE / WINDOW (Приходит pd.DataFrame) ---
-        # (Этот блок может использоваться, если мы изменим логику Live,
-        # но сейчас Live идет через on_candle -> thread -> _calculate_signals)
-        if isinstance(data, pd.DataFrame) and len(data) >= 2:
-            # Если нужно, считаем кастомные фичи здесь
-            data = self._prepare_custom_features(data)
-            prev_candle = data.iloc[-2]
-            last_candle = data.iloc[-1]
-            self._calculate_signals(prev_candle, last_candle, event.timestamp)
+        # 2. Извлекаем свечи
+        # iloc[-1] - это "текущая" закрытая свеча (на которой мы принимаем решение)
+        # iloc[-2] - это предыдущая свеча
+        last_candle = history_df.iloc[-1]
+        prev_candle = history_df.iloc[-2]
+
+        # Timestamp берем из текущей свечи
+        # В BacktestFeed это поле 'time', в Live тоже.
+        timestamp = last_candle.get('time', last_candle.name)
+
+        # 3. Запускаем логику сигналов
+        # (В Live это будет обернуто в run_in_executor снаружи,
+        #  но сам метод стратегии должен быть синхронным и чистым)
+        self._calculate_signals(prev_candle, last_candle, timestamp)
 
     @abstractmethod
     def _calculate_signals(self, prev_candle: pd.Series, last_candle: pd.Series, timestamp: pd.Timestamp):
         raise NotImplementedError("Метод _calculate_signals должен быть реализован.")
-
-    async def on_candle(self, feed: IDataFeed):
-        """
-        Асинхронная точка входа для Live-режима.
-        Передает вычисления в ThreadPool, чтобы не блокировать основной цикл.
-        """
-        # 1. Легкая операция: берем данные (можно в основном потоке)
-        history_df = feed.get_history(length=self.min_history_needed + 5)
-
-        if len(history_df) < 2:
-            return
-
-        prev_candle = history_df.iloc[-2]
-        last_candle = history_df.iloc[-1]
-
-        # В Live-данных timestamp обычно в колонке или атрибуте,
-        # в зависимости от того, как feed отдает get_history.
-        # Если get_history возвращает DF, то time обычно колонка.
-        # Для надежности берем .get, если это словарь, или обращение к столбцу
-        timestamp = last_candle['time'] if 'time' in last_candle else last_candle.name
-
-        # 2. Тяжелая операция: расчет сигналов (в отдельном потоке)
-        loop = asyncio.get_running_loop()
-
-        # None означает "использовать дефолтный ThreadPoolExecutor"
-        await loop.run_in_executor(
-            None,
-            self._calculate_signals,
-            prev_candle,
-            last_candle,
-            timestamp
-        )
