@@ -198,49 +198,78 @@ class TinkoffHandler(BaseDataClient, BaseTradeClient):
             return {}
 
     def get_top_liquid_by_turnover(self, count: int) -> List[str]:
-        """Запрашивает топ-N ликвидных акций MOEX по обороту за 30 дней."""
-        logger.info(f"Tinkoff Client: Запрос топ-{count} ликвидных акций MOEX...")
+        """
+        Запрашивает топ-N ликвидных акций MOEX (TQBR) по обороту за последние 2 дня.
+        """
+        logger.info(f"Tinkoff Client: Анализ ликвидности акций MOEX (TQBR)...")
         try:
             with Client(self.read_token) as client:
+                # 1. Получаем список всех акций
                 all_shares = client.instruments.shares(
-                    instrument_status=InstrumentStatus.INSTRUMENT_STATUS_BASE).instruments
+                    instrument_status=InstrumentStatus.INSTRUMENT_STATUS_BASE
+                ).instruments
 
+                # 2. Фильтруем только Московскую биржу (TQBR) и рублевые активы
+                # Также проверяем, что акция торгуется (flag buy/sell available)
                 tqbr_shares = [
                     s for s in all_shares
-                    if s.class_code == 'TQBR' and s.currency == 'rub'
-                       and s.trading_status != SecurityTradingStatus.SECURITY_TRADING_STATUS_NOT_AVAILABLE_FOR_TRADING
+                    if s.class_code == 'TQBR'
+                       and s.currency == 'rub'
+                       and s.buy_available_flag
+                       and s.api_trade_available_flag
                 ]
 
-                share_data = []
-                # Ограничиваем кол-во запросов для ускорения, если нужно,
-                # но для точности берем все TQBR
-                for share_info in tqdm(tqbr_shares, desc="Анализ оборотов"):
+                logger.info(f"Найдено {len(tqbr_shares)} активных акций TQBR. Начинаем расчет оборота...")
+
+                share_stats = []
+
+                # Берем короткий интервал (вчера + сегодня), чтобы не грузить API
+                # Ликвидность обычно стабильна, 2 дней достаточно
+                interval_start = now() - timedelta(days=5)
+                interval_end = now()
+
+                # Используем прогресс-бар
+                for share in tqdm(tqbr_shares, desc="Сканирование Tinkoff", unit="ticker"):
                     try:
                         candles = client.market_data.get_candles(
-                            figi=share_info.figi,
-                            from_=now() - timedelta(days=30),
-                            to=now(),
+                            figi=share.figi,
+                            from_=interval_start,
+                            to=interval_end,
                             interval=CandleInterval.CANDLE_INTERVAL_DAY
                         ).candles
 
+                        if not candles:
+                            continue
+
+                        # Считаем оборот: Цена закрытия * Объем * Лотность
+                        # Суммируем за найденные дни (обычно 1-2 свечи)
                         total_turnover = sum(
-                            float(quotation_to_decimal(c.close)) * c.volume * share_info.lot
+                            self._cast_money(c.close) * c.volume * share.lot
                             for c in candles
                         )
 
                         if total_turnover > 0:
-                            share_data.append({"ticker": share_info.ticker, "turnover": total_turnover})
+                            share_stats.append({
+                                "ticker": share.ticker,
+                                "turnover": total_turnover
+                            })
 
-                        time.sleep(0.05)  # Лимит рейтов
+                        # Анти-спам для API (лимит около 200-300 запросов в минуту для market-data)
+                        time.sleep(0.1)
 
-                    except RequestError:
+                    except Exception:
+                        # Игнорируем ошибки по конкретному инструменту, идем дальше
                         continue
 
-                sorted_shares = sorted(share_data, key=lambda x: x['turnover'], reverse=True)
-                return [s['ticker'] for s in sorted_shares[:count]]
+                # Сортировка
+                sorted_shares = sorted(share_stats, key=lambda x: x['turnover'], reverse=True)
+                top_result = [s['ticker'] for s in sorted_shares[:count]]
+
+                logger.info(f"Топ-{count} Tinkoff: {top_result}")
+                return top_result
 
         except Exception as e:
-            logger.error(f"Ошибка при поиске ликвидных инструментов: {e}")
+            logger.error(f"Критическая ошибка Tinkoff get_top_liquid: {e}")
             return []
 
     def place_market_order(self, instrument_id: str, quantity: float, direction: str, **kwargs):

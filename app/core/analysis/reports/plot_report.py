@@ -5,12 +5,13 @@ from typing import Dict, Optional, Any
 import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
+import matplotlib.ticker as ticker
 
 from app.core.analysis.constants import METRIC_CONFIG
 from app.shared.primitives import ExchangeType
 from app.shared.config import config
 
-EXCHANGE_INTERVAL_MAPPING = config.EXCHANGE_SPECIFIC_CONFIG
+EXCHANGE_SPECIFIC_CONFIG = config.EXCHANGE_SPECIFIC_CONFIG
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +70,7 @@ class PlotReportGenerator:
         }
 
     def generate(self, wfo_results: Optional[Dict[str, float]] = None):
-        """Создает и сохраняет графический отчет."""
+        """Создает и сохраняет графический отчет с устранением разрывов (Gaps)."""
         display_metrics = self._format_metrics_for_display()
 
         wfo_text_block = ""
@@ -87,13 +88,51 @@ class PlotReportGenerator:
         plt.style.use('seaborn-v0_8-darkgrid')
         fig, ax = plt.subplots(figsize=(15, 7))
 
+        # 1. Берем индекс бенчмарка как "эталонное время" (все свечи периода)
+        # Если бенчмарка нет (ошибка данных), берем индекс стратегии
+        if not self.benchmark_equity_curve.empty:
+            full_time_index = self.benchmark_equity_curve.index
+        else:
+            full_time_index = self.portfolio_equity_curve.index
+
+        # 2. Подготавливаем данные стратегии
         if not self.portfolio_equity_curve.empty:
-            ax.plot(self.portfolio_equity_curve.index, self.portfolio_equity_curve.values,
+            # Переиндексируем кривую стратегии на полный диапазон времени
+            # method='ffill' означает: "если в эту минуту сделки не было, возьми значение капитала из прошлого"
+            aligned_portfolio_curve = self.portfolio_equity_curve.reindex(full_time_index, method='ffill')
+
+            # Если стратегия начала торговать не с первой свечи, заполняем начало начальным капиталом
+            aligned_portfolio_curve = aligned_portfolio_curve.fillna(self.initial_capital)
+
+            portfolio_values = aligned_portfolio_curve.values
+        else:
+            # Если сделок не было вообще, рисуем прямую линию начального капитала
+            portfolio_values = np.full(len(full_time_index), self.initial_capital)
+
+        # 3. Подготавливаем данные бенчмарка
+        if not self.benchmark_equity_curve.empty:
+            benchmark_values = self.benchmark_equity_curve.values
+        else:
+            benchmark_values = np.array([])
+
+        # 4. Рисуем по индексам (0..N), чтобы скрыть выходные
+        x_indices = np.arange(len(full_time_index))
+
+        if len(benchmark_values) > 0:
+            ax.plot(x_indices, benchmark_values, label='Buy & Hold Benchmark',
+                    color='gray', alpha=0.5, lw=1.5)
+
+        if len(portfolio_values) > 0:
+            ax.plot(x_indices, portfolio_values,
                     label='Strategy Equity Curve', color='blue', lw=2)
 
-        if not self.benchmark_equity_curve.empty:
-            ax.plot(self.benchmark_equity_curve.index, self.benchmark_equity_curve.values, label='Buy & Hold Benchmark',
-                    color='gray', alpha=0.5, lw=1.5)
+        # Используем полный индекс времени для подписей
+        def format_date(x, pos=None):
+            thisind = np.clip(int(x + 0.5), 0, len(full_time_index) - 1)
+            return full_time_index[thisind].strftime('%Y-%m-%d')
+
+        ax.xaxis.set_major_formatter(ticker.FuncFormatter(format_date))
+        ax.xaxis.set_major_locator(ticker.MaxNLocator(nbins=10))
 
         ax.set_title(f"Backtest Results: {self.metadata.get('strategy_name', 'N/A')} on {self.report_filename}",
                      fontsize=16)

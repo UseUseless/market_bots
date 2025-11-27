@@ -67,6 +67,7 @@ class AnalysisSession:
             temp_trades['exit_timestamp_utc'] = pd.to_datetime(temp_trades['exit_timestamp_utc'])
             # Устанавливаем время как индекс. Теперь график будет строиться по датам.
             self.portfolio_equity_curve = temp_trades.set_index('exit_timestamp_utc')['equity_curve']
+            self.portfolio_equity_curve = self.portfolio_equity_curve.groupby(level=0).last()
         else:
             self.portfolio_equity_curve = pd.Series()
 
@@ -77,7 +78,7 @@ class AnalysisSession:
             # У бенчмарка индекс сейчас 0, 1, 2... (так как historical_data был сброшен)
             # Нам нужно взять колонку 'time' из данных бенчмарка и сделать её индексом
             temp_bench.index = pd.to_datetime(benchmark_calc.data['time'])
-            self.benchmark_equity_curve = temp_bench
+            self.benchmark_equity_curve = temp_bench.groupby(level=0).last()
         else:
             self.benchmark_equity_curve = pd.Series()
 

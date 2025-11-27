@@ -3,7 +3,7 @@ import datetime
 import sys
 import os
 
-# Добавляем корень проекта в путь, чтобы видеть конфиг
+# Добавляем корень проекта в путь
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.shared.config import config
@@ -22,16 +22,17 @@ def main():
     print(f"🔌 Подключено к БД: {db_path}")
 
     # 1. Выбираем бота
-    cursor.execute("SELECT id, name FROM bot_instances WHERE is_active = 1")
+    cursor.execute("SELECT id, name, is_active FROM bot_instances")
     bots = cursor.fetchall()
 
     if not bots:
-        print("❌ В базе нет активных ботов. Сначала добавьте бота через Лаунчер.")
+        print("❌ В базе вообще нет ботов. Сначала создайте бота через Лаунчер.")
         return
 
-    print("\n--- Доступные боты ---")
+    print("\n--- Список всех ботов ---")
     for b in bots:
-        print(f"ID [{b[0]}]: {b[1]}")
+        status_icon = "✅ ON" if b[2] else "💤 OFF"
+        print(f"ID [{b[0]}]: {b[1]} ({status_icon})")
 
     try:
         bot_id_input = input("\nВведите ID бота, к которому добавить друга: ")
@@ -40,14 +41,15 @@ def main():
         print("Некорректный ID.")
         return
 
-    # Проверка существования бота
+    # Проверка существования бота (просто по ID)
     if bot_id not in [b[0] for b in bots]:
         print("Такого ID нет в списке.")
         return
 
     # 2. Вводим данные друга
     try:
-        friend_chat_id = input("Введите chat_id друга (цифры): ")
+        friend_chat_id = input("Введите chat_id друга (цифры): ").strip()
+        if not friend_chat_id: return
         chat_id = int(friend_chat_id)
     except ValueError:
         print("Chat ID должен состоять только из цифр.")
@@ -57,21 +59,21 @@ def main():
 
     # 3. Добавляем в базу
     try:
-        now = datetime.datetime.utcnow().isoformat()
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
         # Проверяем, нет ли уже такого
         cursor.execute("SELECT id FROM telegram_subscribers WHERE bot_id = ? AND chat_id = ?", (bot_id, chat_id))
         exists = cursor.fetchone()
 
         if exists:
-            print("⚠️ Этот пользователь уже есть в базе! Обновляю статус на Active.")
+            print("⚠️ Этот пользователь уже есть в базе! Обновляю статус на Active (1).")
             cursor.execute("UPDATE telegram_subscribers SET is_active = 1 WHERE id = ?", (exists[0],))
         else:
             cursor.execute("""
                 INSERT INTO telegram_subscribers (bot_id, chat_id, username, is_active, created_at)
                 VALUES (?, ?, ?, 1, ?)
             """, (bot_id, chat_id, friend_username, now))
-            print(f"✅ Пользователь {friend_username} ({chat_id}) успешно добавлен!")
+            print(f"✅ Пользователь {friend_username} ({chat_id}) успешно привязан к боту ID {bot_id}!")
 
         con.commit()
 

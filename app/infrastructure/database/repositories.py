@@ -106,7 +106,7 @@ class BotRepository:
 
     async def get_subscribers_for_strategy(self, strategy_config_id: int) -> List[int]:
         """
-        Магия SQL: Находим бота, к которому привязана стратегия,
+        Находим бота, к которому привязана стратегия,
         и берем всех его активных подписчиков.
         """
         # 1. Находим config

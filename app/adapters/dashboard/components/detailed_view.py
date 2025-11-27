@@ -15,7 +15,9 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import numpy as np
+from datetime import timedelta
 
+from app.shared.time_helper import parse_interval_to_timedelta
 from app.infrastructure.storage.file_io import load_trades_from_file
 from app.core.analysis.metrics import PortfolioMetricsCalculator, BenchmarkMetricsCalculator
 from app.shared.primitives import TradeDirection
@@ -86,25 +88,43 @@ def plot_monthly_pnl(trades_df: pd.DataFrame):
     st.plotly_chart(fig, use_container_width=True)
 
 
-def plot_trades_on_chart(historical_data: pd.DataFrame, trades_df: pd.DataFrame):
-    """Отображает сделки на свечном графике."""
+def plot_trades_on_chart(historical_data: pd.DataFrame, trades_df: pd.DataFrame, interval_str: str):
+    """
+    Отображает сделки на свечном графике.
+
+    Args:
+        historical_data: DataFrame со свечами.
+        trades_df: DataFrame со сделками.
+        interval_str: Строка интервала (например, '5min') для коррекции времени.
+    """
     fig = go.Figure(data=go.Candlestick(
         x=historical_data['time'], open=historical_data['open'], high=historical_data['high'],
         low=historical_data['low'], close=historical_data['close'], name='Свечи'
     ))
 
+    # Преобразуем время в datetime
     trades_df['entry_timestamp_utc'] = pd.to_datetime(trades_df['entry_timestamp_utc'])
     trades_df['exit_timestamp_utc'] = pd.to_datetime(trades_df['exit_timestamp_utc'])
+
+    # --- ИСПРАВЛЕНИЕ: Сдвигаем время сделок назад на величину интервала ---
+    # Чтобы точка входа (Close свечи) визуально совпадала со свечой (Open time)
+    delta = parse_interval_to_timedelta(interval_str)
+
+    # Создаем копии колонок для отображения, чтобы не ломать данные
+    trades_df['plot_entry_time'] = trades_df['entry_timestamp_utc'] - delta
+    trades_df['plot_exit_time'] = trades_df['exit_timestamp_utc'] - delta
+    # ---------------------------------------------------------------------
 
     # Маркеры входа
     long_entries = trades_df[trades_df['direction'] == TradeDirection.BUY]
     short_entries = trades_df[trades_df['direction'] == TradeDirection.SELL]
+
     fig.add_trace(go.Scatter(
-        x=long_entries['entry_timestamp_utc'], y=long_entries['entry_price'], mode='markers',
+        x=long_entries['plot_entry_time'], y=long_entries['entry_price'], mode='markers',
         marker=dict(symbol='triangle-up', color='green', size=12), name='Вход в Лонг'
     ))
     fig.add_trace(go.Scatter(
-        x=short_entries['entry_timestamp_utc'], y=short_entries['entry_price'], mode='markers',
+        x=short_entries['plot_entry_time'], y=short_entries['entry_price'], mode='markers',
         marker=dict(symbol='triangle-down', color='red', size=12), name='Вход в Шорт'
     ))
 
@@ -116,7 +136,7 @@ def plot_trades_on_chart(historical_data: pd.DataFrame, trades_df: pd.DataFrame)
     ]:
         exits = trades_df[trades_df['exit_reason'] == reason]
         fig.add_trace(go.Scatter(
-            x=exits['exit_timestamp_utc'], y=exits['exit_price'], mode='markers',
+            x=exits['plot_exit_time'], y=exits['exit_price'], mode='markers',
             marker=dict(symbol=symbol, color=color, size=10, line=dict(width=2, color='DarkSlateGrey')),
             name=f'Выход ({reason})'
         ))
@@ -185,4 +205,4 @@ def render_detailed_view(filtered_df: pd.DataFrame):
             plot_monthly_pnl(trades_df)
 
         with tab3:
-            plot_trades_on_chart(historical_data, trades_df)
+            plot_trades_on_chart(historical_data, trades_df, row["Interval"])

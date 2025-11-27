@@ -64,6 +64,12 @@ class TelegramBridge:
                 if not config.bot_id:
                     continue
 
+                # Проверяем, жив ли бот в менеджере прямо сейчас
+                if config.bot_id not in self.bot_manager.active_bots:
+                    logger.warning(
+                        f"Signal generated, but Bot ID {config.bot_id} is disabled/offline. Skipping broadcast.")
+                    continue
+
                 # Получаем подписчиков
                 chat_ids = await repo.get_subscribers_for_strategy(config.id)
                 if not chat_ids:

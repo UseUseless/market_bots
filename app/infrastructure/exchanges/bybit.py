@@ -116,62 +116,53 @@ class BybitHandler(BaseDataClient, BaseTradeClient):
 
     def get_top_liquid_by_turnover(self, count: int) -> List[str]:
         """
-        Возвращает топ-N ликвидных БЕССРОЧНЫХ фьючерсов,
-        фильтруя срочные контракты и неторгуемые активы.
+        Возвращает топ-N ликвидных USDT-фьючерсов по обороту за 24 часа.
+        Фильтрует только пары, заканчивающиеся на USDT (исключая USDC и прочее).
         """
-        logging.info(f"Bybit Client: Запрос топ-{count} ликвидных USDT-фьючерсов по обороту...")
+        logging.info(f"Bybit Client: Запрос топ-{count} ликвидных USDT-фьючерсов...")
         try:
-            # Шаг 1: Получаем информацию обо всех инструментах, чтобы надежно отфильтровать нужные.
-            instruments_info_response = self.client.get_instruments_info(category="linear")
-            if instruments_info_response.get("retCode") != 0:
-                logging.error(
-                    f"Ошибка API Bybit при получении информации об инструментах: {instruments_info_response.get('retMsg')}")
-                return []
-
-            # Создаем множество (set) из торгуемых бессрочных контрактов для быстрой проверки.
-            # Это самый надежный способ отфильтровать мусор.
-            tradeable_perpetuals = {
-                instr['symbol']
-                for instr in instruments_info_response.get("result", {}).get("list", [])
-                if instr.get("status") == "Trading" and instr.get("contractType") == "LinearPerpetual"
-            }
-
-            if not tradeable_perpetuals:
-                logging.warning("Не найдено ни одного торгуемого бессрочного контракта.")
-                return []
-            logging.info(f"Найдено {len(tradeable_perpetuals)} торгуемых бессрочных контрактов.")
-
-            # Шаг 2: Получаем данные по оборотам для ВСЕХ тикеров
+            # Получаем тикеры для категории linear (сюда входят USDT и USDC перпы)
             tickers_response = self.client.get_tickers(category="linear")
             if tickers_response.get("retCode") != 0:
-                logging.error(f"Ошибка API Bybit при получении тикеров: {tickers_response.get('retMsg')}")
+                logging.error(f"Ошибка API Bybit: {tickers_response.get('retMsg')}")
                 return []
 
-            all_tickers_data = tickers_response.get("result", {}).get("list", [])
+            all_tickers = tickers_response.get("result", {}).get("list", [])
+            liquid_pairs = []
 
-            # Шаг 3: Фильтруем и собираем данные для сортировки
-            instruments_with_turnover = []
-            for ticker_data in all_tickers_data:
-                symbol = ticker_data.get('symbol')
-                # Проверяем, что инструмент есть в нашем "белом списке"
-                if symbol in tradeable_perpetuals:
-                    try:
-                        turnover = float(ticker_data.get('turnover24h', 0))
-                        if turnover > 0:
-                            instruments_with_turnover.append({"symbol": symbol, "turnover24h": turnover})
-                    except (ValueError, TypeError):
-                        logging.warning(f"Некорректное значение оборота для {symbol}. Пропускаем.")
-                        continue
+            for ticker in all_tickers:
+                symbol = ticker.get('symbol', '')
 
-            # Шаг 4: Сортируем отфильтрованный список
-            sorted_instruments = sorted(instruments_with_turnover, key=lambda x: x['turnover24h'], reverse=True)
+                # 1. Фильтр: Только USDT контракты
+                if not symbol.endswith('USDT'):
+                    continue
 
-            # Шаг 5: Возвращаем топ-N тикеров
-            top_tickers = [instr['symbol'] for instr in sorted_instruments[:count]]
+                # 2. Фильтр: Игнорируем USDC (на всякий случай, если они не отфильтровались выше)
+                if 'USDC' in symbol:
+                    continue
 
-            logging.info(
-                f"Получено {len(top_tickers)} самых ликвидных БЕССРОЧНЫХ тикеров Bybit. Топ-1: {top_tickers[0] if top_tickers else 'N/A'}")
+                try:
+                    # turnover24h - оборот в валюте котировки (USDT)
+                    turnover = float(ticker.get('turnover24h', 0))
+                    liquid_pairs.append({
+                        "symbol": symbol,
+                        "turnover": turnover
+                    })
+                except (ValueError, TypeError):
+                    continue
+
+            # Сортируем по обороту (от большего к меньшему)
+            sorted_pairs = sorted(liquid_pairs, key=lambda x: x['turnover'], reverse=True)
+
+            # Берем топ-N
+            top_tickers = [item['symbol'] for item in sorted_pairs[:count]]
+
+            logging.info(f"Топ-{count} Bybit (USDT): {top_tickers}")
             return top_tickers
+
+        except Exception as e:
+            logging.error(f"Ошибка при поиске ликвидных инструментов Bybit: {e}", exc_info=True)
+            return []
 
         except Exception as e:
             logging.error(f"Ошибка при получении списка ликвидных инструментов Bybit: {e}", exc_info=True)

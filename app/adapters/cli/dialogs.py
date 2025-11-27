@@ -14,6 +14,7 @@ def _initialize_tk():
     root.withdraw()  # Скрываем основное окно
     # Дополнительные настройки, чтобы окно не появлялось на панели задач в некоторых ОС
     root.wm_attributes("-topmost", 1)
+    root.update()
     return root
 
 def select_single_instrument() -> Optional[Dict[str, str]]:
@@ -29,11 +30,13 @@ def select_single_instrument() -> Optional[Dict[str, str]]:
     :return: Словарь с ключами "exchange", "interval", "instrument" в случае успеха,
              иначе None, если пользователь отменил выбор или структура папок некорректна.
     """
-    _initialize_tk()
+    root = _initialize_tk()
     filepath_str = filedialog.askopenfilename(
         title="Выберите .parquet файл с историческими данными",
         filetypes=[("Parquet files", "*.parquet")]
     )
+
+    root.destroy()
 
     if not filepath_str:
         print("\nВыбор файла отменен.")
@@ -81,10 +84,12 @@ def select_instrument_folder() -> Optional[Dict[str, str]]:
     :return: Словарь с ключами "exchange", "interval" в случае успеха,
              иначе None, если пользователь отменил выбор или структура папок некорректна.
     """
-    _initialize_tk()
+    root = _initialize_tk()
     dirpath_str = filedialog.askdirectory(
         title="Выберите папку с данными (например, '.../data/tinkoff/5min')"
     )
+
+    root.destroy()
 
     if not dirpath_str:
         print("\nВыбор папки отменен.")

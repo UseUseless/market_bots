@@ -101,73 +101,85 @@ class BotManager:
         Следит за БД и управляет задачами поллинга.
         """
         logger.info("🤖 Bot Manager Orchestrator started.")
+        try:
+            while True:
+                try:
+                    async with self.session_factory() as session:
+                        repo = BotRepository(session)
+                        # Получаем список ботов, у которых is_active = 1
+                        db_bots = await repo.get_all_active_bots()
 
-        while True:
-            try:
-                async with self.session_factory() as session:
-                    repo = BotRepository(session)
-                    # Получаем список ботов, у которых is_active = 1
-                    db_bots = await repo.get_all_active_bots()
+                    current_ids = set(self.active_bots.keys())
+                    target_ids = {b.id for b in db_bots}
+                    db_bots_map = {b.id: b for b in db_bots}
 
-                current_ids = set(self.active_bots.keys())
-                target_ids = {b.id for b in db_bots}
-                db_bots_map = {b.id: b for b in db_bots}
+                    # 1. Находим новых ботов для запуска
+                    ids_to_add = target_ids - current_ids
+                    # 2. Находим выключенных ботов для остановки
+                    ids_to_remove = current_ids - target_ids
 
-                # 1. Находим новых ботов для запуска
-                ids_to_add = target_ids - current_ids
-                # 2. Находим выключенных ботов для остановки
-                ids_to_remove = current_ids - target_ids
+                    # --- STOPPING ---
+                    for bid in ids_to_remove:
+                        logger.info(f"🛑 Stopping bot ID {bid}...")
 
-                # --- STOPPING ---
-                for bid in ids_to_remove:
-                    logger.info(f"🛑 Stopping bot ID {bid}...")
-
-                    # 1. Прощаемся перед отключением
-                    await self._broadcast(bid,
-                                          "💤 **Бот приостанавливает работу.**\nМониторинг сигналов временно отключен.")
-
-                    # Отменяем задачу поллинга
-                    if bid in self.polling_tasks:
-                        self.polling_tasks[bid].cancel()
-                        try:
-                            await self.polling_tasks[bid]
-                        except asyncio.CancelledError:
-                            pass
-                        del self.polling_tasks[bid]
-
-                    # Закрываем сессию бота
-                    bot = self.active_bots.pop(bid)
-                    await bot.session.close()
-                    logger.info(f"Bot ID {bid} stopped.")
-
-                # --- STARTING ---
-                for bid in ids_to_add:
-                    bot_data = db_bots_map[bid]
-                    try:
-                        logger.info(f"🆕 Starting bot ID {bid}: {bot_data.name}")
-                        bot = Bot(token=bot_data.token)
-
-                        # Проверка токена
-                        bot_user = await bot.get_me()
-                        logger.info(f"   Authorized as @{bot_user.username}")
-
-                        self.active_bots[bid] = bot
-
-                        # Запускаем поллинг в отдельной задаче
-                        task = asyncio.create_task(self._start_bot_polling(bid, bot))
-                        self.polling_tasks[bid] = task
-
+                        # 1. Прощаемся перед отключением
                         await self._broadcast(bid,
-                                              "🚀 **Бот активирован!**\nСистема мониторинга запущена. Ожидайте сигналов.")
+                                              "💤 **Бот приостанавливает работу.**\nМониторинг сигналов временно отключен.")
 
-                    except Exception as e:
-                        logger.error(f"❌ Failed to start bot {bot_data.name}: {e}")
+                        # Отменяем задачу поллинга
+                        if bid in self.polling_tasks:
+                            self.polling_tasks[bid].cancel()
+                            try:
+                                await self.polling_tasks[bid]
+                            except asyncio.CancelledError:
+                                pass
+                            del self.polling_tasks[bid]
 
-            except Exception as e:
-                logger.error(f"Bot Manager loop error: {e}")
+                        # Закрываем сессию бота
+                        bot = self.active_bots.pop(bid)
+                        await bot.session.close()
+                        logger.info(f"Bot ID {bid} stopped.")
 
-            # Пауза перед следующей проверкой БД
-            await asyncio.sleep(5)
+                    # --- STARTING ---
+                    for bid in ids_to_add:
+                        bot_data = db_bots_map[bid]
+                        try:
+                            logger.info(f"🆕 Starting bot ID {bid}: {bot_data.name}")
+                            bot = Bot(token=bot_data.token)
+
+                            # Проверка токена
+                            bot_user = await bot.get_me()
+                            logger.info(f"   Authorized as @{bot_user.username}")
+
+                            self.active_bots[bid] = bot
+
+                            # Запускаем поллинг в отдельной задаче
+                            task = asyncio.create_task(self._start_bot_polling(bid, bot))
+                            self.polling_tasks[bid] = task
+
+                            await self._broadcast(bid,
+                                                  "🚀 **Бот активирован!**\nСистема мониторинга запущена. Ожидайте сигналов.")
+
+                        except Exception as e:
+                            logger.error(f"❌ Failed to start bot {bot_data.name}: {e}")
+
+
+                except asyncio.CancelledError:
+                    raise  # Пробрасываем наверх, чтобы сработал finally
+
+                except Exception as e:
+                    logger.error(f"Bot Manager loop error: {e}")
+
+                await asyncio.sleep(5)
+
+        except asyncio.CancelledError:
+            logger.info("BotManager shutting down...")
+        finally:
+            logger.info("Closing all bot sessions...")
+            for bid, bot in self.active_bots.items():
+                await bot.session.close()
+            self.active_bots.clear()
+            logger.info("BotManager shutdown complete.")
 
     async def send_message(self, bot_id: int, chat_id: int, text: str):
         """Отправка сообщения (если бот активен)."""
