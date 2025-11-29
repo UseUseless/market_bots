@@ -1,3 +1,11 @@
+"""
+Модуль интерфейсов и абстракций (Ports).
+
+Определяет контракты, которые должны реализовать компоненты инфраструктуры
+(адаптеры бирж, базы данных, исполнители ордеров).
+Это позволяет ядру системы (Core) не зависеть от конкретных библиотек или API.
+"""
+
 from abc import ABC, abstractmethod
 from queue import Queue
 from typing import Literal, Dict, Any, List
@@ -10,61 +18,96 @@ from app.shared.events import OrderEvent, Event
 
 class BaseExecutionHandler(ABC):
     """
-    Абстрактный базовый класс для всех исполнителей ордеров.
-    Определяет единый интерфейс для симулятора и реального исполнителя.
+    Абстракция исполнителя ордеров.
+
+    Отвечает за превращение намерения (OrderEvent) в факт сделки (FillEvent).
+    В режиме бэктеста это симуляция, в режиме лайв — отправка запроса на биржу.
     """
+
     def __init__(self, events_queue: Queue):
+        """
+        Args:
+            events_queue (Queue): Очередь, куда будут помещаться события
+                исполнения (FillEvent) после завершения сделки.
+        """
         self.events_queue = events_queue
 
     @abstractmethod
     def execute_order(self, event: OrderEvent, last_candle: pd.Series = None):
         """
-        Основной метод, который принимает OrderEvent и должен в конечном итоге
-        сгенерировать FillEvent.
+        Выполняет ордер.
 
-        :param event: Событие с деталями ордера.
-        :param last_candle: Последняя доступная свеча. Обязательна для симулятора,
-                            но может не использоваться в live-режиме.
+        Args:
+            event (OrderEvent): Объект ордера с направлением, объемом и тикером.
+            last_candle (pd.Series, optional): Последние рыночные данные.
+                Обязательны для симулятора (для расчета проскальзывания).
+                В Live-режиме могут игнорироваться.
+
+        Returns:
+            None: Результат работы (FillEvent) отправляется в очередь асинхронно.
         """
         raise NotImplementedError("Метод execute_order должен быть реализован.")
 
 
 class IDataFeed(ABC):
     """
-    Интерфейс Поставщика Данных.
-    Гарантирует, что Стратегия и ML-модель получают данные одинаково
-    и в Бэктесте (файлы), и в Лайве (WebSocket).
+    Интерфейс поставщика рыночных данных для стратегии.
+
+    Обеспечивает унифицированный доступ к историческим данным и текущей свече,
+    скрывая источник данных (CSV-файл, память или WebSocket).
     """
 
     @abstractmethod
     def get_history(self, length: int) -> pd.DataFrame:
         """
-        Возвращает N последних свечей (включая текущую только что закрытую).
-        Критически важно для расчета индикаторов (SMA, RSI) и ML-фичей.
+        Возвращает срез исторических данных.
+
+        Args:
+            length (int): Количество последних свечей (включая текущую).
+
+        Returns:
+            pd.DataFrame: DataFrame с колонками OHLCV и индикаторами.
         """
         raise NotImplementedError
 
     @abstractmethod
     def get_current_candle(self) -> pd.Series:
-        """Возвращает последнюю полностью закрытую свечу."""
+        """
+        Возвращает последнюю доступную (полностью закрытую) свечу.
+
+        Returns:
+            pd.Series: Строка данных с ценами и индикаторами.
+        """
         raise NotImplementedError
 
     @property
     @abstractmethod
     def interval(self) -> str:
-        """Таймфрейм потока данных."""
+        """
+        Возвращает таймфрейм потока данных (например, '5min').
+
+        Returns:
+            str: Строковое представление интервала.
+        """
         raise NotImplementedError
 
 
 class IPublisher(ABC):
     """
-    Интерфейс для публикации событий (сигналов).
-    Позволяет стратегии не знать, куда уйдет сигнал (в консоль или Телеграм).
+    Интерфейс для публикации событий (Observer Pattern).
+
+    Позволяет компонентам отправлять сообщения (например, сигналы),
+    не зная, кто их получит (Telegram, логгер или БД).
     """
 
     @abstractmethod
     async def publish(self, event: Event):
-        """Отправляет событие в шину."""
+        """
+        Асинхронно отправляет событие подписчикам.
+
+        Args:
+            event (Event): Объект события (SignalEvent, MarketEvent и т.д.).
+        """
         raise NotImplementedError
 
 
@@ -72,48 +115,102 @@ TradeModeType = Literal["REAL", "SANDBOX"]
 
 
 class BaseDataClient(ABC):
-    """Абстрактный 'контракт' для всех клиентов, поставляющих рыночные данные ИЗВНЕ (через API)."""
+    """
+    Контракт для клиентов, получающих данные от API биржи (Market Data).
+    """
 
     @abstractmethod
     def get_historical_data(self, instrument: str, interval: str, days: int, **kwargs) -> pd.DataFrame:
-        """Загружает исторические свечи."""
+        """
+        Загружает исторические свечи (K-Lines).
+
+        Args:
+            instrument (str): Тикер инструмента.
+            interval (str): Интервал свечей.
+            days (int): Глубина истории в днях.
+            **kwargs: Дополнительные параметры (например, category='linear' для Bybit).
+
+        Returns:
+            pd.DataFrame: DataFrame с колонками ['time', 'open', 'high', 'low', 'close', 'volume'].
+        """
         raise NotImplementedError
 
     @abstractmethod
     def get_instrument_info(self, instrument: str, **kwargs) -> Dict[str, Any]:
-        """Загружает метаданные об инструменте (лот, шаг цены и т.д.)."""
+        """
+        Запрашивает спецификацию инструмента.
+
+        Args:
+            instrument (str): Тикер инструмента.
+
+        Returns:
+            Dict[str, Any]: Словарь с параметрами (min_order_qty, qty_step, lot_size).
+        """
         raise NotImplementedError
 
     @abstractmethod
     def get_top_liquid_by_turnover(self, count: int) -> List[str]:
-        """Возвращает список самых ликвидных инструментов."""
+        """
+        Возвращает список самых ликвидных инструментов по обороту.
+
+        Args:
+            count (int): Количество инструментов в топе.
+
+        Returns:
+            List[str]: Список тикеров.
+        """
         raise NotImplementedError
 
 
 class BaseTradeClient(ABC):
-    """Абстрактный 'контракт' для всех клиентов, исполняющих ордера (через API)."""
+    """
+    Контракт для клиентов, исполняющих торговые операции (Execution).
+    """
 
     @abstractmethod
     def place_market_order(self, instrument_id: str, quantity: float, direction: str, **kwargs):
-        """Размещает рыночный ордер."""
+        """
+        Размещает рыночный ордер через API.
+
+        Args:
+            instrument_id (str): Идентификатор инструмента (FIGI или Ticker).
+            quantity (float): Объем ордера.
+            direction (str): Направление ('BUY' или 'SELL').
+            **kwargs: Дополнительные параметры API.
+
+        Returns:
+            Any: Ответ API биржи (структура зависит от реализации).
+        """
         raise NotImplementedError
 
 
 class IPortfolioRepository(ABC):
     """
-    Интерфейс для сохранения и загрузки состояния портфеля.
-    Позволяет ядру не зависеть от SQLAlchemy.
+    Интерфейс для персистентности (сохранения) состояния портфеля.
+    Позволяет ядру не зависеть от конкретной БД или ORM.
     """
 
     @abstractmethod
     async def save_portfolio_state(self, config_id: int, state: PortfolioState) -> None:
-        """Сохраняет текущее состояние портфеля в БД."""
+        """
+        Сохраняет текущий капитал и открытые позиции в базу данных.
+
+        Args:
+            config_id (int): ID конфигурации стратегии.
+            state (PortfolioState): Объект состояния.
+        """
         raise NotImplementedError
 
     @abstractmethod
     async def load_portfolio_state(self, config_id: int, initial_capital: float) -> PortfolioState:
         """
-        Загружает состояние из БД.
-        Если состояния нет — создает новое (пустое) с initial_capital.
+        Загружает последнее сохраненное состояние портфеля.
+
+        Args:
+            config_id (int): ID конфигурации стратегии.
+            initial_capital (float): Капитал по умолчанию, если записи в БД нет.
+
+        Returns:
+            PortfolioState: Восстановленный объект состояния.
         """
         raise NotImplementedError

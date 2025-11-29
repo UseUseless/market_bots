@@ -75,9 +75,6 @@ class SignalLog(Base):
     price = Column(Float, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
-
-# --- НОВЫЕ МОДЕЛИ ДЛЯ СОХРАНЕНИЯ СОСТОЯНИЯ ---
-
 class PortfolioDB(Base):
     """
     Снимок состояния портфеля для конкретной стратегии.

@@ -1,3 +1,11 @@
+"""
+Модуль мониторинга рисков (Risk Monitor).
+
+Отвечает за "пассивную" защиту позиций. В отличие от стратегии, которая ищет входы,
+этот компонент следит за тем, чтобы цена не вышла за допустимые границы (SL/TP).
+Работает на каждом тике (или обновлении свечи).
+"""
+
 import logging
 from queue import Queue
 from datetime import datetime
@@ -8,34 +16,43 @@ from app.shared.primitives import TradeDirection, TriggerReason, Position
 
 logger = logging.getLogger(__name__)
 
+
 class RiskMonitor:
     """
-    Сервис, отвечающий исключительно за мониторинг рисков по открытым позициям.
+    Сервис автоматического контроля открытых позиций.
 
-    На каждую новую свечу (MarketEvent) он проверяет, не достигли ли цены
-    уровней Stop Loss или Take Profit для каждой активной позиции.
+    При поступлении новых рыночных данных проверяет, не пересекла ли цена
+    уровни Stop Loss или Take Profit. Если пересекла — генерирует ордер на закрытие.
+
+    Attributes:
+        events_queue (Queue): Очередь событий для отправки `OrderEvent`.
     """
 
     def __init__(self, events_queue: Queue):
         """
-        Инициализирует монитор риска.
+        Инициализирует монитор.
 
-        :param events_queue: Ссылка на общую очередь событий для отправки ордеров на закрытие.
+        Args:
+            events_queue (Queue): Ссылка на системную шину/очередь событий.
         """
         self.events_queue = events_queue
 
     def check_positions(self, market_event: MarketEvent, portfolio_state: PortfolioState):
         """
-        Главный метод. Проверяет все открытые позиции на предмет срабатывания SL/TP.
+        Проверяет все открытые позиции по текущему инструменту.
 
-        :param market_event: Событие с данными последней свечи.
-        :param portfolio_state: Текущее состояние портфеля.
+        Вызывается при получении `MarketEvent`.
+
+        Args:
+            market_event (MarketEvent): Событие с данными новой свечи.
+            portfolio_state (PortfolioState): Текущее состояние портфеля с позициями.
         """
         instrument = market_event.instrument
         position = portfolio_state.positions.get(instrument)
 
-        # Проверяем только если по данному инструменту есть открытая позиция
-        # и нет ожидающего исполнения ордера (чтобы не отправлять дублирующие ордера на закрытие)
+        # 1. Если позиции нет — нечего проверять.
+        # 2. Если по инструменту уже висит активный ордер (в pending_orders),
+        #    значит мы уже в процессе выхода или входа. Не вмешиваемся.
         if not position or instrument in portfolio_state.pending_orders:
             return
 
@@ -43,51 +60,75 @@ class RiskMonitor:
 
     def _check_single_position(self, event: MarketEvent, position: Position):
         """
-        Проверяет одну конкретную позицию на срабатывание SL или TP.
-        Используется "правило первого стоп-лосса": проверка SL имеет приоритет.
+        Проверяет условия выхода для конкретной позиции.
+
+        Использует цены High и Low текущей свечи, чтобы определить, было ли
+        касание уровня внутри периода.
+
+        Приоритет проверок (Pessimistic approach):
+        Сначала проверяется Stop Loss. Если в одной свече были задеты и SL, и TP,
+        считается, что сработал SL. Это защищает от завышения результатов в бэктестах.
+
+        Args:
+            event (MarketEvent): Рыночные данные.
+            position (Position): Позиция для проверки.
         """
         candle_high = event.data['high']
         candle_low = event.data['low']
 
-        # --- Проверка для ДЛИННОЙ позиции (BUY) ---
+        # --- Логика для LONG (Покупка) ---
         if position.direction == TradeDirection.BUY:
-            # Приоритетная проверка Stop Loss
+            # 1. Проверка Stop Loss (Цена упала ниже уровня)
             if candle_low <= position.stop_loss:
-                logger.info(f"!!! СРАБОТАЛ STOP LOSS для {position.instrument} по цене {position.stop_loss:.4f}. Генерирую ордер на закрытие.")
+                logger.info(f"!!! СРАБОТАЛ STOP LOSS для {position.instrument} "
+                            f"@{position.stop_loss:.4f} (Low: {candle_low}).")
                 self._generate_exit_order(event.timestamp, position, TriggerReason.STOP_LOSS, position.stop_loss)
-                return  # Выходим, чтобы не проверять TP на этой же свече
+                return  # Важно: прерываем выполнение, чтобы не сработал TP
 
-            # Проверка Take Profit (только если SL не сработал)
+            # 2. Проверка Take Profit (Цена выросла выше уровня)
             if candle_high >= position.take_profit:
-                logger.info(f"!!! СРАБОТАЛ TAKE PROFIT для {position.instrument} по цене {position.take_profit:.4f}. Генерирую ордер на закрытие.")
+                logger.info(f"!!! СРАБОТАЛ TAKE PROFIT для {position.instrument} "
+                            f"@{position.take_profit:.4f} (High: {candle_high}).")
                 self._generate_exit_order(event.timestamp, position, TriggerReason.TAKE_PROFIT, position.take_profit)
                 return
 
-        # --- Проверка для КОРОТКОЙ позиции (SELL) ---
+        # --- Логика для SHORT (Продажа) ---
         elif position.direction == TradeDirection.SELL:
-            # Приоритетная проверка Stop Loss
+            # 1. Проверка Stop Loss (Цена выросла выше уровня)
             if candle_high >= position.stop_loss:
-                logger.info(f"!!! СРАБОТАЛ STOP LOSS для {position.instrument} по цене {position.stop_loss:.4f}. Генерирую ордер на закрытие.")
+                logger.info(f"!!! СРАБОТАЛ STOP LOSS для {position.instrument} "
+                            f"@{position.stop_loss:.4f} (High: {candle_high}).")
                 self._generate_exit_order(event.timestamp, position, TriggerReason.STOP_LOSS, position.stop_loss)
                 return
 
-            # Проверка Take Profit (только если SL не сработал)
+            # 2. Проверка Take Profit (Цена упала ниже уровня)
             if candle_low <= position.take_profit:
-                logger.info(f"!!! СРАБОТАЛ TAKE PROFIT для {position.instrument} по цене {position.take_profit:.4f}. Генерирую ордер на закрытие.")
+                logger.info(f"!!! СРАБОТАЛ TAKE PROFIT для {position.instrument} "
+                            f"@{position.take_profit:.4f} (Low: {candle_low}).")
                 self._generate_exit_order(event.timestamp, position, TriggerReason.TAKE_PROFIT, position.take_profit)
                 return
 
-    def _generate_exit_order(self, timestamp: datetime, position: Position, reason: TriggerReason, execution_price: float):
+    def _generate_exit_order(self, timestamp: datetime, position: Position, reason: TriggerReason,
+                             execution_price: float):
         """
-        Создает и отправляет в очередь событие OrderEvent на закрытие позиции.
+        Создает ордер на закрытие позиции.
+
+        Args:
+            timestamp (datetime): Время генерации сигнала.
+            position (Position): Позиция, которую нужно закрыть.
+            reason (TriggerReason): Причина (SL или TP).
+            execution_price (float): Цена, по которой должен исполниться ордер
+                (уровень SL или TP). Передается как `price_hint` для симулятора.
         """
+        # Закрытие = сделка в противоположном направлении
         exit_direction = TradeDirection.SELL if position.direction == TradeDirection.BUY else TradeDirection.BUY
+
         order = OrderEvent(
             timestamp=timestamp,
             instrument=position.instrument,
-            quantity=position.quantity,
+            quantity=position.quantity,  # Закрываем полный объем
             direction=exit_direction,
             trigger_reason=reason,
-            price_hint=execution_price
+            price_hint=execution_price  # Подсказка симулятору: "исполни по этой цене"
         )
         self.events_queue.put(order)

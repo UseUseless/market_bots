@@ -1,3 +1,10 @@
+"""
+Стратегия пересечения цены и скользящей средней (Price/SMA Crossover).
+
+Классическая трендовая стратегия. Генерирует сигналы, когда цена пересекает
+линию простой скользящей средней (SMA).
+"""
+
 from queue import Queue
 import pandas as pd
 
@@ -10,10 +17,17 @@ from app.shared.primitives import TradeDirection
 
 class SimpleSMACrossStrategy(BaseStrategy):
     """
-    Простая стратегия на пересечении ценой скользящей средней.
-    Параметры считываются из переданного конфига.
+    Реализация стратегии Simple SMA Crossover.
+
+    Логика сигналов:
+    - **BUY (Long):** Цена закрытия пересекает SMA снизу вверх.
+    - **SELL (Short/Close):** Цена закрытия пересекает SMA сверху вниз.
+
+    Attributes:
+        params_config (dict): Определение параметров для UI и оптимизатора.
     """
 
+    # Конфигурация параметров для динамического создания UI и оптимизации
     params_config = {
         "sma_period": {
             "type": "int",
@@ -36,26 +50,66 @@ class SimpleSMACrossStrategy(BaseStrategy):
                  events_queue: Queue,
                  feature_engine: FeatureEngine,
                  config: StrategyConfigModel):
+        """
+        Инициализация стратегии и настройка индикаторов.
 
-        # 1. Сначала достаем параметры из конфига для настройки индикаторов
+        Args:
+            events_queue: Очередь для отправки сигналов.
+            feature_engine: Движок расчета индикаторов.
+            config: Параметры запуска (период SMA, инструмент и т.д.).
+        """
+        # 1. Извлекаем параметры из конфига
         self.sma_period = config.params["sma_period"]
 
-        # 2. Настраиваем индикаторы
+        # 2. Формируем требования к данным
+        # Нам нужно истории минимум на длину SMA + 1 свеча (для кроссовера)
         self.min_history_needed = self.sma_period + 1
+
+        # Сообщаем FeatureEngine, что нам нужен расчет SMA
         self.required_indicators = [{"name": "sma", "params": {"period": self.sma_period}}]
+
+        # Кэшируем имя колонки, которое создаст FeatureEngine (например, "SMA_50")
         self.sma_name = f"SMA_{self.sma_period}"
 
-        # 3. Инициализируем базовый класс
+        # 3. Инициализируем родительский класс
         super().__init__(events_queue, feature_engine, config)
 
     def _calculate_signals(self, prev_candle: pd.Series, last_candle: pd.Series, timestamp: pd.Timestamp):
         """
-        Генерирует сигнал, если цена закрытия пересекла SMA.
-        """
-        # Сигнал на покупку: цена пересекла SMA снизу вверх
-        if prev_candle['close'] < prev_candle[self.sma_name] and last_candle['close'] > last_candle[self.sma_name]:
-            self.events_queue.put(SignalEvent(timestamp, self.instrument, TradeDirection.BUY, self.name))
+        Анализирует две последние свечи на предмет пересечения SMA.
 
-        # Сигнал на продажу (закрытие лонга): цена пересекла SMA сверху вниз
-        elif prev_candle['close'] > prev_candle[self.sma_name] and last_candle['close'] < last_candle[self.sma_name]:
-            self.events_queue.put(SignalEvent(timestamp, self.instrument, TradeDirection.SELL, self.name))
+        Args:
+            prev_candle (pd.Series): Предыдущая свеча (t-1).
+            last_candle (pd.Series): Текущая закрытая свеча (t).
+            timestamp (pd.Timestamp): Время закрытия текущей свечи.
+        """
+        # Получаем значения цены и индикатора
+        prev_close = prev_candle['close']
+        curr_close = last_candle['close']
+
+        prev_sma = prev_candle[self.sma_name]
+        curr_sma = last_candle[self.sma_name]
+
+        # Логика входа в LONG (Золотое пересечение цены)
+        # Было ниже SMA, стало выше SMA
+        if prev_close < prev_sma and curr_close > curr_sma:
+            self.events_queue.put(SignalEvent(
+                timestamp=timestamp,
+                instrument=self.instrument,
+                direction=TradeDirection.BUY,
+                strategy_id=self.name,
+                price=curr_close,
+                interval=self.config.interval
+            ))
+
+        # Логика входа в SHORT или закрытия LONG (Смертельное пересечение)
+        # Было выше SMA, стало ниже SMA
+        elif prev_close > prev_sma and curr_close < curr_sma:
+            self.events_queue.put(SignalEvent(
+                timestamp=timestamp,
+                instrument=self.instrument,
+                direction=TradeDirection.SELL,
+                strategy_id=self.name,
+                price=curr_close,
+                interval=self.config.interval
+            ))
