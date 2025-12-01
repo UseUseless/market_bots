@@ -20,6 +20,7 @@ from typing import Dict, Callable, Awaitable, List
 from app.shared.events import SignalEvent
 from app.core.interfaces import IPublisher, IDataFeed
 from app.strategies.base_strategy import BaseStrategy
+from app.core.portfolio.state import PortfolioState
 from app.shared.time_helper import parse_interval_to_timedelta
 from app.shared.config import config
 
@@ -44,7 +45,7 @@ class SignalEngine:
         self._active_tasks: Dict[int, asyncio.Task] = {}
         self._running = False
 
-    async def _strategy_wrapper(self, config_id: int, feed: IDataFeed, strategy: BaseStrategy):
+    async def _strategy_wrapper(self, config_id: int, feed: IDataFeed, strategy: BaseStrategy, state: PortfolioState):
         """
         Рабочая обертка (Wrapper) для одной торговой пары.
 
@@ -60,6 +61,7 @@ class SignalEngine:
             config_id (int): ID конфигурации из БД (для логирования).
             feed (IDataFeed): Инициализированный поток данных.
             strategy (BaseStrategy): Инициализированная стратегия.
+            state (PortfolioState): Хранилище динамического состояния портфеля.
         """
         stream_task = None
         try:
@@ -88,7 +90,10 @@ class SignalEngine:
             # Если wrapper будет отменен, мы должны будем отменить и эту задачу.
             stream_task = loop.create_task(feed.start_stream(stream_queue, loop))
 
-            logger.info(f"✅ [Engine] Started strategy #{config_id}: {strategy.name} on {feed.instrument}")
+            logger.info(
+                f"✅ [Engine] Started strategy #{config_id}: {strategy.name} on {feed.instrument}. "
+                f"Positions restored: {len(state.positions)}"
+            )
 
             # --- 3. Главный цикл обработки ---
             while True:
@@ -112,6 +117,10 @@ class SignalEngine:
                         while True:
                             signal = strategy.events_queue.get_nowait()
                             if isinstance(signal, SignalEvent):
+                                # ВАЖНО: Тут мы пока просто логируем сигнал.
+                                # В будущем здесь будет логика OrderManager, использующая 'state'.
+                                # Например: if signal.direction == BUY and instrument in state.positions: ignore
+
                                 logger.info(f"🔥 SIGNAL: {signal.direction} {signal.instrument} ({strategy.name})")
                                 await self.bus.publish(signal)
                             strategy.events_queue.task_done()
@@ -132,8 +141,8 @@ class SignalEngine:
 
         except Exception as e:
             logger.error(f"⚠️ [Engine] Error in strategy #{config_id}: {e}", exc_info=True)
-            # Небольшая пауза перед перезапуском (если оркестратор решит перезапустить)
-            await asyncio.sleep(5)
+            # Падаем, чтобы оркестратор заметил это.
+            raise  # Пробрасываем ошибку, чтобы таск завершился статусом done()
 
     async def run_orchestrator(self,
                                config_loader_func: Callable[[], Awaitable[List]],
@@ -146,7 +155,7 @@ class SignalEngine:
 
         Args:
             config_loader_func: Асинхронная функция, возвращающая список активных конфигов из БД.
-            pair_builder_func: Асинхронная фабрика, возвращающая пару (Feed, Strategy).
+            pair_builder_func: Асинхронная фабрика, возвращающая триплет (Feed, Strategy, State).
         """
         self._running = True
         # Интервал проверки обновлений в БД (секунды)
@@ -156,6 +165,26 @@ class SignalEngine:
 
         while self._running:
             try:
+                # Проверка мертвых задач (Health Check)
+                dead_ids = []
+                for cid, task in list(self._active_tasks.items()):
+                    if task.done():
+                        try:
+                            # Получаем исключение, если оно было
+                            exc = task.exception()
+                            if exc:
+                                logger.error(f"💀 Strategy #{cid} crashed: {exc}")
+                            else:
+                                logger.warning(f"💀 Strategy #{cid} exited unexpectedly (no error).")
+                        except asyncio.CancelledError:
+                            pass  # Это норма при остановке
+                        dead_ids.append(cid)
+
+                for cid in dead_ids:
+                    self._active_tasks.pop(cid)
+                    logger.info(f"🔄 Removed dead task #{cid}. Will restart on next iteration.")
+
+                # --- Стандартная логика синхронизации ---
                 # 1. Получаем актуальный список задач из БД
                 db_configs = await config_loader_func()
                 db_config_map = {cfg.id: cfg for cfg in db_configs}
@@ -172,7 +201,7 @@ class SignalEngine:
                     logger.info(f"Stopping strategy #{cid} (Removed from DB/Disabled)...")
                     task = self._active_tasks.pop(cid)
                     task.cancel()
-                    # Ждем фактической остановки, чтобы освободить ресурсы
+                    # Ждем фактической остановки
                     try:
                         await task
                     except asyncio.CancelledError:
@@ -184,10 +213,12 @@ class SignalEngine:
                     strat_config = db_config_map[cid]
                     try:
                         logger.info(f"🛠️ Building strategy #{cid} ({strat_config.instrument})...")
-                        feed, strategy = await pair_builder_func(strat_config)
+
+                        # [FIXED] Распаковываем 3 элемента и передаем state
+                        feed, strategy, state = await pair_builder_func(strat_config)
 
                         # Создаем Task и сохраняем ссылку
-                        task = asyncio.create_task(self._strategy_wrapper(cid, feed, strategy))
+                        task = asyncio.create_task(self._strategy_wrapper(cid, feed, strategy, state))
                         self._active_tasks[cid] = task
                     except Exception as e:
                         logger.error(f"❌ Failed to start strategy #{cid}: {e}", exc_info=True)

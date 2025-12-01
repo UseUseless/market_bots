@@ -150,7 +150,7 @@ class VolatilityBreakoutStrategy(BaseStrategy):
         # --- Состояние 2: Ожидание подтверждения ---
         if self.state["waiting_for_confirmation"]:
             direction = self.state["breakout_direction"]
-            donchian_len = self.params.get("donchian_len", 20)
+            donchian_len = self.params.get("adx_donchian_len", 20)
             donchian_upper = prev_candle[f'DCU_{donchian_len}_{donchian_len}']
             donchian_lower = prev_candle[f'DCL_{donchian_len}_{donchian_len}']
 

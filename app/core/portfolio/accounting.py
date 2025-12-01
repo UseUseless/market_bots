@@ -24,7 +24,7 @@ class FillProcessor:
     Выполняет две основные функции:
     1.  **Управление состоянием:** Создает объекты `Position` при входе и удаляет их при выходе.
     2.  **Финансовый учет:** Рассчитывает PnL (Profit and Loss), учитывает комиссии
-        и обновляет баланс (`current_capital`) портфеля.
+        и обновляет баланс (`current_capital`) портфеля по модели Cash-Based.
 
     Attributes:
         trade_log_file (Optional[str]): Путь к файлу для сохранения истории сделок (csv/jsonl).
@@ -93,12 +93,19 @@ class FillProcessor:
         Регистрирует открытие новой позиции.
 
         Создает объект `Position` и сохраняет его в стейт.
-        Комиссия за вход сохраняется внутри позиции, чтобы учесть её позже при расчете PnL.
+        Списывает полную стоимость входа из свободного капитала (Cash-Based Accounting).
 
         Args:
             event (FillEvent): Событие входа.
             state (PortfolioState): Состояние портфеля.
         """
+        # 1. Рассчитываем полную стоимость входа (Cost Basis)
+        # Для Spot/Linear: Цена * Кол-во + Комиссия
+        entry_cost = (event.price * event.quantity) + event.commission
+
+        # 2. Вычитаем из баланса ("замораживаем" деньги в активе)
+        state.current_capital -= entry_cost
+
         new_position = Position(
             instrument=event.instrument,
             quantity=event.quantity,
@@ -114,17 +121,15 @@ class FillProcessor:
 
         logger.info(
             f"Позиция ОТКРЫТА: {event.direction} {event.quantity} {event.instrument} "
-            f"@ {event.price:.4f} | SL: {new_position.stop_loss:.4f}, TP: {new_position.take_profit:.4f}"
+            f"@ {event.price:.4f}. Cost: {entry_cost:.2f}. New Balance: {state.current_capital:.2f}"
         )
 
     def _handle_fill_close(self, event: FillEvent, state: PortfolioState, position: Position):
         """
         Регистрирует закрытие позиции и фиксирует финансовый результат.
 
-        Алгоритм PnL (для линейного рынка/Spot):
-        1.  Gross PnL: Разница цен * Количество.
-        2.  Net PnL: Gross PnL - Комиссия входа - Комиссия выхода.
-        3.  Update Capital: Капитал += Net PnL.
+        Рассчитывает PnL, возвращает средства (тело + прибыль) на баланс
+        и сохраняет статистику в лог.
 
         Args:
             event (FillEvent): Событие выхода.
@@ -144,11 +149,16 @@ class FillProcessor:
         commission_exit = event.commission
         commission_entry = position.entry_commission
 
-        # Чистая прибыль
+        # Чистая прибыль (Net PnL)
         pnl = gross_pnl - commission_entry - commission_exit
 
-        # Обновляем "живые" деньги в портфеле
-        state.current_capital += pnl
+        # 3. Рассчитываем выручку (Proceeds) для возврата на баланс.
+        # Мы должны вернуть: Изначальную стоимость позиции (без комиссии) + Gross PnL - Exit Commission.
+        # Это эквивалентно сумме, которую биржа начисляет на счет после сделки.
+        proceeds = (position.entry_price * position.quantity) + gross_pnl - commission_exit
+
+        # Обновляем капитал (возврат средств)
+        state.current_capital += proceeds
 
         # Сохраняем статистику
         save_trade_log(
@@ -179,6 +189,6 @@ class FillProcessor:
 
         logger.info(
             f"Позиция ЗАКРЫТА ({event.trigger_reason}): {event.instrument}. "
-            f"PnL: {pnl:.2f} (Gross: {gross_pnl:.2f}, Comm: {commission_entry + commission_exit:.2f}). "
+            f"PnL: {pnl:.2f}. Proceeds: {proceeds:.2f}. "
             f"Equity: {state.current_capital:.2f}"
         )

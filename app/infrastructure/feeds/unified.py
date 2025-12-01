@@ -73,33 +73,21 @@ class UnifiedDataFeed(IDataFeed):
         self.required_indicators = required_indicators
         self.max_buffer_size = max_buffer_size
 
-        # RLock (Reentrant Lock) позволяет потоку-владельцу захватывать блокировку
-        # повторно, что удобно, если один защищенный метод вызывает другой.
-        # Защищает self._df от одновременной записи (WS) и чтения (Strategy).
+        # RLock защищает self._df от одновременной записи (WS) и чтения (Strategy).
         self._lock = threading.RLock()
 
-        # Основное хранилище данных. Инициализируется пустым.
         self._df: pd.DataFrame = pd.DataFrame()
-
         self.stream_handler: Optional[BaseStreamDataHandler] = None
 
     async def warm_up(self, days: int = 3, category: str = "linear"):
         """
         Первичная загрузка истории ("разогрев").
-
-        Выполняется перед запуском стратегии, чтобы у индикаторов (SMA, EMA)
-        было достаточно данных для корректного расчета.
-
-        Args:
-            days (int): За сколько дней загружать историю.
-            category (str): Категория рынка (для Bybit).
         """
         logger.info(f"DataFeed: Загрузка истории за {days} дней для {self.instrument}...")
 
         loop = asyncio.get_running_loop()
 
-        # Запрос к API выполняется в executor'е (отдельном потоке),
-        # чтобы блокирующий HTTP-запрос не заморозил asyncio loop.
+        # Запрос к API выполняется в executor'е
         history_df = await loop.run_in_executor(
             None,
             lambda: self.client.get_historical_data(self.instrument, self._interval, days, category=category)
@@ -112,7 +100,11 @@ class UnifiedDataFeed(IDataFeed):
                 return
 
             # Оставляем только последние N свечей согласно лимиту буфера
-            self._df = history_df.tail(self.max_buffer_size).copy()
+            if len(history_df) > self.max_buffer_size:
+                self._df = history_df.tail(self.max_buffer_size).reset_index(drop=True)
+            else:
+                self._df = history_df.copy()
+
             self._ensure_numeric_types()
 
             # Рассчитываем индикаторы на исторических данных
@@ -123,17 +115,6 @@ class UnifiedDataFeed(IDataFeed):
     def start_stream(self, event_queue: asyncio.Queue, loop: asyncio.AbstractEventLoop, **kwargs):
         """
         Фабричный метод для запуска соответствующего WebSocket/gRPC стрима.
-
-        Args:
-            event_queue (asyncio.Queue): Очередь для отправки событий.
-            loop (asyncio.AbstractEventLoop): Главный цикл событий.
-            **kwargs: Дополнительные параметры (например, category).
-
-        Returns:
-            Coroutine: Задача стриминга данных.
-
-        Raises:
-            ValueError: Если биржа не поддерживается.
         """
         if self.exchange == ExchangeType.TINKOFF:
             self.stream_handler = TinkoffStreamDataHandler(event_queue, self.instrument, self._interval)
@@ -150,18 +131,7 @@ class UnifiedDataFeed(IDataFeed):
     async def process_candle(self, candle_data: pd.Series) -> bool:
         """
         Обрабатывает новую свечу, пришедшую из стрима.
-
-        Алгоритм:
-        1. Проверяет время свечи (защита от дублей и старых данных).
-        2. Добавляет свечу в DataFrame.
-        3. Обрезает DataFrame, если превышен размер буфера.
-        4. Пересчитывает индикаторы для новой свечи.
-
-        Args:
-            candle_data (pd.Series): Данные новой свечи.
-
-        Returns:
-            bool: True, если свеча была успешно добавлена и обработана.
+        ОБНОВЛЕНО: Оптимизированная работа с памятью при обрезке буфера.
         """
         # Превращаем Series в DataFrame с одной строкой
         new_candle_df = candle_data.to_frame().T
@@ -178,12 +148,16 @@ class UnifiedDataFeed(IDataFeed):
                     return False
 
             # Добавляем новую свечу
-            # pd.concat эффективнее append для DataFrame
             self._df = pd.concat([self._df, new_candle_df], ignore_index=True)
 
-            # Контроль размера буфера (FIFO)
+            # --- ОПТИМИЗАЦИЯ ПАМЯТИ ---
+            # Удаляем старые строки только при превышении лимита.
+            # reset_index(drop=True) перестраивает индекс, но работает эффективнее
+            # полного deep copy при правильном использовании.
             if len(self._df) > self.max_buffer_size:
-                self._df = self._df.iloc[-self.max_buffer_size:].copy()
+                rows_to_drop = len(self._df) - self.max_buffer_size
+                # Берем срез от N до конца
+                self._df = self._df.iloc[rows_to_drop:].reset_index(drop=True)
 
             # Пересчет индикаторов
             self._recalc_indicators()
@@ -193,7 +167,6 @@ class UnifiedDataFeed(IDataFeed):
     def _ensure_numeric_types(self):
         """
         Принудительно приводит колонки цен к float.
-        Необходимо, так как иногда данные могут приходить как object/string.
         """
         cols_to_float = ['open', 'high', 'low', 'close', 'volume']
         for col in cols_to_float:
@@ -203,13 +176,11 @@ class UnifiedDataFeed(IDataFeed):
     def _recalc_indicators(self):
         """
         Вызывает FeatureEngine для расчета индикаторов.
-        Метод выполняется внутри блокировки self._lock.
         """
         if len(self._df) < 2:
             return
 
         # FeatureEngine модифицирует DF in-place (добавляет колонки)
-        # Мы работаем с self._df напрямую.
         self.feature_engine.add_required_features(self._df, self.required_indicators)
 
     # --- Реализация интерфейса IDataFeed ---
@@ -217,16 +188,7 @@ class UnifiedDataFeed(IDataFeed):
     def get_history(self, length: int = 0) -> pd.DataFrame:
         """
         Возвращает исторические данные для стратегии.
-
-        ВНИМАНИЕ: Возвращает глубокую копию (.copy()), чтобы стратегия
-        не могла случайно изменить данные в буфере фида и чтобы избежать
-        ошибок конкурентного доступа при чтении.
-
-        Args:
-            length (int): Сколько последних свечей вернуть. 0 = все.
-
-        Returns:
-            pd.DataFrame: Копия данных.
+        Возвращает копию для безопасности потоков.
         """
         with self._lock:
             if self._df.empty:
@@ -240,9 +202,6 @@ class UnifiedDataFeed(IDataFeed):
     def get_current_candle(self) -> pd.Series:
         """
         Возвращает последнюю (текущую закрытую) свечу.
-
-        Returns:
-            pd.Series: Последняя строка данных.
         """
         with self._lock:
             if self._df.empty:

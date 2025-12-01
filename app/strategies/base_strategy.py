@@ -8,7 +8,8 @@
 
 from abc import ABC, abstractmethod
 from queue import Queue
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
+import logging
 
 import pandas as pd
 
@@ -16,6 +17,7 @@ from app.core.calculations.indicators import FeatureEngine
 from app.core.interfaces import IDataFeed
 from app.shared.schemas import StrategyConfigModel
 
+logger = logging.getLogger(__name__)
 
 class BaseStrategy(ABC):
     """
@@ -129,7 +131,29 @@ class BaseStrategy(ABC):
         new_columns = list(current_columns - original_columns)
 
         if new_columns:
-            final_data.dropna(subset=new_columns, inplace=True)
+            # Проверяем колонки на полную пустоту (failed calculation)
+            failed_columns = []
+            valid_subset = []
+
+            for col in new_columns:
+                if final_data[col].isna().all():
+                    failed_columns.append(col)
+                else:
+                    valid_subset.append(col)
+
+            # Если есть битые индикаторы, предупреждаем, но не даем им удалить все данные
+            if failed_columns:
+                logger.warning(
+                    f"Strategy {self.name}: Индикаторы {failed_columns} содержат ТОЛЬКО NaN. "
+                    "Они исключены из фильтрации dropna, но могут вызвать ошибки в логике."
+                )
+
+            # Удаляем строки только на основе тех индикаторов, которые реально посчитались
+            if valid_subset:
+                final_data.dropna(subset=valid_subset, inplace=True)
+
+            # Если valid_subset пуст (все индикаторы упали), мы ничего не удаляем,
+            # чтобы движок не крашнулся сразу, а выдал осмысленную ошибку позже.
 
         final_data.reset_index(drop=True, inplace=True)
 

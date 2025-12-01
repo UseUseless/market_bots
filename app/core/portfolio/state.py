@@ -62,15 +62,28 @@ class PortfolioState:
     @property
     def available_capital(self) -> float:
         """
-        Рассчитывает свободный капитал (Buying Power).
+        Доступные средства для открытия новых позиций.
 
-        Используется Риск-менеджером для проверки, хватает ли денег
-        на открытие новой позиции.
+        Так как мы используем Cash-Based учет, current_capital уже уменьшен
+        на сумму открытых позиций (в Accounting._handle_fill_open).
+        Поэтому available равен current.
 
         Returns:
-            float: Текущий капитал минус стоимость открытых позиций.
+            float: Текущее количество денег на счету
         """
-        return self.current_capital - self.frozen_capital
+        return self.current_capital
+
+    @property
+    def total_equity(self) -> float:
+        """
+        Полная стоимость портфеля (Кэш + Стоимость позиций).
+        Полезно для расчета метрик просадки.
+
+        Returns:
+            float: Текущее количество денег на счету+стоимость купленных инструментов
+        """
+        # Это упрощенная оценка (по цене входа), для точности нужно Mark-to-Market
+        return self.current_capital + self.frozen_capital
 
     def to_dict(self) -> Dict[str, Any]:
         """
@@ -85,9 +98,11 @@ class PortfolioState:
             Dict[str, Any]: Словарь с ключевыми метриками портфеля.
         """
         return {
-            "current_capital": self.current_capital,
-            "positions_count": len(self.positions),
-            "frozen_capital": self.frozen_capital,
+            "initial_capital": self.initial_capital,
+            "current_capital": self.current_capital,  # Чистый кэш
             "available_capital": self.available_capital,
+            "frozen_capital": self.frozen_capital,  # Деньги в позициях
+            "total_equity": self.total_equity,  # Общая стоимость (Cash + Frozen)
+            "positions_count": len(self.positions),
             "pending_orders": list(self.pending_orders)
         }

@@ -12,13 +12,13 @@
 """
 
 import asyncio
-import queue
 import logging
 from typing import Tuple, Any, List
 
+# Импорты БД
 from app.shared.schemas import StrategyConfigModel
 from app.infrastructure.database.session import async_session_factory
-from app.infrastructure.database.repositories import ConfigRepository
+from app.infrastructure.database.repositories import ConfigRepository, PortfolioRepository
 from app.infrastructure.database.models import StrategyConfig
 
 from app.bootstrap.container import container
@@ -31,6 +31,9 @@ from app.adapters.telegram.publisher import TelegramBridge
 from app.strategies import AVAILABLE_STRATEGIES
 from app.shared.logging_setup import setup_global_logging
 from app.shared.primitives import ExchangeType
+# Импорт стейта
+from app.core.portfolio.state import PortfolioState
+from app.shared.config import config as app_config
 
 logger = logging.getLogger(__name__)
 
@@ -47,12 +50,10 @@ async def _config_loader() -> List[StrategyConfig]:
     """
     async with async_session_factory() as session:
         repo = ConfigRepository(session)
-        # Получаем конфиги вместе с привязанными ботами (eager load)
         configs = await repo.get_active_strategies()
         return configs
 
-
-async def _pair_builder(config: StrategyConfig) -> Tuple[UnifiedDataFeed, Any]:
+async def _pair_builder(config: StrategyConfig) -> Tuple[UnifiedDataFeed, Any, PortfolioState]:
     """
     Функция-фабрика (Factory Callback).
 
@@ -63,30 +64,24 @@ async def _pair_builder(config: StrategyConfig) -> Tuple[UnifiedDataFeed, Any]:
         config (StrategyConfig): ORM-объект конфигурации стратегии.
 
     Returns:
-        Tuple[UnifiedDataFeed, BaseStrategy]: Готовая пара для запуска в движке.
+        Tuple[UnifiedDataFeed, BaseStrategy, PortfolioState]: Готовая пара для запуска в движке.
 
     Raises:
         ValueError: Если указанная в конфиге стратегия не найдена в коде.
     """
-    # 1. Определяем режим работы клиента биржи.
-    # Логика: Tinkoff используем в Sandbox (безопасно), Bybit — Real (для данных).
-    # В будущем это можно вынести в настройки самой стратегии.
+    # 1. Режим работы (Sandbox/Real)
     trade_mode = "SANDBOX" if config.exchange == ExchangeType.TINKOFF else "REAL"
-
-    # Получаем клиент из DI-контейнера (он кэшируется внутри контейнера)
     client = container.get_exchange_client(config.exchange, mode=trade_mode)
 
-    # 2. Ищем класс стратегии в реестре
+    # 2. Инициализация стратегии
     StrategyClass = AVAILABLE_STRATEGIES.get(config.strategy_name)
     if not StrategyClass:
         raise ValueError(f"Strategy class '{config.strategy_name}' not found")
 
-    # 3. Собираем параметры (дефолтные + переопределенные в БД)
     strategy_params = StrategyClass.get_default_params()
     if config.parameters:
         strategy_params.update(config.parameters)
 
-    # 4. Создаем Pydantic модель для строгой валидации
     pydantic_config = StrategyConfigModel(
         strategy_name=config.strategy_name,
         instrument=config.instrument,
@@ -97,16 +92,14 @@ async def _pair_builder(config: StrategyConfig) -> Tuple[UnifiedDataFeed, Any]:
         risk_manager_params={}
     )
 
-    # 5. Инициализируем стратегию
-    # ВАЖНО: FeatureEngine берется из контейнера (Singleton), чтобы не плодить инстансы
     strategy = StrategyClass(
-        events_queue=queue.Queue(),
+        events_queue=asyncio.Queue(),  # В Live используем Async Queue
         feature_engine=container.feature_engine,
         config=pydantic_config
     )
     strategy.name = config.strategy_name
 
-    # 6. Инициализируем поток данных (Feed)
+    # 3. Инициализация фида
     feed = UnifiedDataFeed(
         client=client,
         exchange=config.exchange,
@@ -116,7 +109,24 @@ async def _pair_builder(config: StrategyConfig) -> Tuple[UnifiedDataFeed, Any]:
         required_indicators=strategy.required_indicators
     )
 
-    return feed, strategy
+    # 4. ВОССТАНОВЛЕНИЕ СОСТОЯНИЯ (State Recovery)
+    # Загружаем из БД или создаем новое
+    async with async_session_factory() as session:
+        repo = PortfolioRepository(session)
+
+        # Определяем стартовый капитал (из конфига стратегии или глобальный дефолт)
+        initial_cap = strategy_params.get("initial_capital", app_config.BACKTEST_CONFIG["INITIAL_CAPITAL"])
+
+        portfolio_state = await repo.load_portfolio_state(
+            config_id=config.id,
+            initial_capital=float(initial_cap)
+        )
+
+        if portfolio_state.positions:
+            logger.info(
+                f"♻️ Восстановлено состояние для {config.instrument}: {len(portfolio_state.positions)} позиций.")
+
+    return feed, strategy, portfolio_state
 
 
 async def _async_main():
@@ -161,8 +171,12 @@ async def _async_main():
 
         logger.info("🚀 Система запущена. Ожидание событий...")
 
-        # Ожидаем выполнения всех задач (бесконечно, пока не будет ошибки или отмены)
-        await asyncio.gather(*tasks)
+        # Используем return_exceptions=True, чтобы падение одной задачи не крашило всё
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        for res in results:
+            if isinstance(res, Exception):
+                logger.error(f"Task failed with error: {res}", exc_info=res)
 
     except asyncio.CancelledError:
         logger.info("Остановка системы (KeyboardInterrupt)...")
@@ -173,7 +187,8 @@ async def _async_main():
         # Корректное завершение всех задач при выходе
         logger.info("Завершение всех фоновых задач...")
         for t in tasks:
-            t.cancel()
+            if not t.done():
+                t.cancel()
         # Ждем фактической отмены, игнорируя ошибки отмены
         await asyncio.gather(*tasks, return_exceptions=True)
 

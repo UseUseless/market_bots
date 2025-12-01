@@ -22,7 +22,8 @@ class RiskMonitor:
     Сервис автоматического контроля открытых позиций.
 
     При поступлении новых рыночных данных проверяет, не пересекла ли цена
-    уровни Stop Loss или Take Profit. Если пересекла — генерирует ордер на закрытие.
+    уровни Stop Loss или Take Profit. Если пересекла — генерирует ордер на закрытие
+    и НЕМЕДЛЕННО блокирует инструмент флагом pending_orders.
 
     Attributes:
         events_queue (Queue): Очередь событий для отправки `OrderEvent`.
@@ -56,9 +57,9 @@ class RiskMonitor:
         if not position or instrument in portfolio_state.pending_orders:
             return
 
-        self._check_single_position(market_event, position)
+        self._check_single_position(market_event, position, portfolio_state)
 
-    def _check_single_position(self, event: MarketEvent, position: Position):
+    def _check_single_position(self, event: MarketEvent, position: Position, state: PortfolioState):
         """
         Проверяет условия выхода для конкретной позиции.
 
@@ -72,6 +73,7 @@ class RiskMonitor:
         Args:
             event (MarketEvent): Рыночные данные.
             position (Position): Позиция для проверки.
+            state (PortfolioState): Состояние портфеля для блокировки инструмента.
         """
         candle_high = event.data['high']
         candle_low = event.data['low']
@@ -82,14 +84,18 @@ class RiskMonitor:
             if candle_low <= position.stop_loss:
                 logger.info(f"!!! СРАБОТАЛ STOP LOSS для {position.instrument} "
                             f"@{position.stop_loss:.4f} (Low: {candle_low}).")
-                self._generate_exit_order(event.timestamp, position, TriggerReason.STOP_LOSS, position.stop_loss)
+                self._generate_exit_order(
+                    event.timestamp, position, TriggerReason.STOP_LOSS, position.stop_loss, state
+                )
                 return  # Важно: прерываем выполнение, чтобы не сработал TP
 
             # 2. Проверка Take Profit (Цена выросла выше уровня)
             if candle_high >= position.take_profit:
                 logger.info(f"!!! СРАБОТАЛ TAKE PROFIT для {position.instrument} "
                             f"@{position.take_profit:.4f} (High: {candle_high}).")
-                self._generate_exit_order(event.timestamp, position, TriggerReason.TAKE_PROFIT, position.take_profit)
+                self._generate_exit_order(
+                    event.timestamp, position, TriggerReason.TAKE_PROFIT, position.take_profit, state
+                )
                 return
 
         # --- Логика для SHORT (Продажа) ---
@@ -98,18 +104,22 @@ class RiskMonitor:
             if candle_high >= position.stop_loss:
                 logger.info(f"!!! СРАБОТАЛ STOP LOSS для {position.instrument} "
                             f"@{position.stop_loss:.4f} (High: {candle_high}).")
-                self._generate_exit_order(event.timestamp, position, TriggerReason.STOP_LOSS, position.stop_loss)
+                self._generate_exit_order(
+                    event.timestamp, position, TriggerReason.STOP_LOSS, position.stop_loss, state
+                )
                 return
 
             # 2. Проверка Take Profit (Цена упала ниже уровня)
             if candle_low <= position.take_profit:
                 logger.info(f"!!! СРАБОТАЛ TAKE PROFIT для {position.instrument} "
                             f"@{position.take_profit:.4f} (Low: {candle_low}).")
-                self._generate_exit_order(event.timestamp, position, TriggerReason.TAKE_PROFIT, position.take_profit)
+                self._generate_exit_order(
+                    event.timestamp, position, TriggerReason.TAKE_PROFIT, position.take_profit, state
+                )
                 return
 
     def _generate_exit_order(self, timestamp: datetime, position: Position, reason: TriggerReason,
-                             execution_price: float):
+                             execution_price: float, state: PortfolioState):
         """
         Создает ордер на закрытие позиции.
 
@@ -119,6 +129,7 @@ class RiskMonitor:
             reason (TriggerReason): Причина (SL или TP).
             execution_price (float): Цена, по которой должен исполниться ордер
                 (уровень SL или TP). Передается как `price_hint` для симулятора.
+            state (PortfolioState): Состояние портфеля.
         """
         # Закрытие = сделка в противоположном направлении
         exit_direction = TradeDirection.SELL if position.direction == TradeDirection.BUY else TradeDirection.BUY
@@ -132,3 +143,11 @@ class RiskMonitor:
             price_hint=execution_price  # Подсказка симулятору: "исполни по этой цене"
         )
         self.events_queue.put(order)
+
+        # Добавляем инструмент в pending_orders.
+        # Это предотвратит:
+        # 1. Повторное срабатывание RiskMonitor на этом же тике/свече.
+        # 2. Срабатывание стратегии (OrderManager), если она тоже захочет закрыть позицию.
+        state.pending_orders.add(position.instrument)
+
+        logger.debug(f"RiskMonitor: Sent {reason} order for {position.instrument}. Added to pending_orders.")
