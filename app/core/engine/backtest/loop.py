@@ -1,3 +1,11 @@
+"""
+Модуль основного цикла бэктеста (Backtest Engine).
+
+Отвечает за оркестрацию процесса тестирования одной стратегии на одном инструменте.
+Этот класс собирает все компоненты (Стратегия, Портфель, Риск-менеджер, Исполнение)
+и запускает цикл обработки исторических данных свеча за свечой.
+"""
+
 import queue
 import logging
 import pandas as pd
@@ -27,30 +35,46 @@ logger = logging.getLogger('backtester')
 
 class BacktestEngine:
     """
-    Оркестратор для запуска одной сессии бэктеста.
-    Инкапсулирует всю логику инициализации компонентов, подготовки данных
-    и запуска основного цикла обработки событий.
+    Движок одиночного бэктеста.
+
+    Управляет жизненным циклом симуляции:
+    1.  Загрузка данных.
+    2.  Инициализация компонентов (Dependency Injection).
+    3.  Запуск событийного цикла (Event Loop).
+    4.  Сбор результатов.
+
+    Attributes:
+        settings (Dict): Конфигурация запуска (инструмент, таймфрейм, стратегия).
+        events_queue (queue.Queue): Очередь событий для коммуникации компонентов.
+        feature_engine (FeatureEngine): Сервис для расчета индикаторов.
+        components (Dict): Реестр созданных объектов (portfolio, strategy и т.д.).
+        pending_strategy_order (Optional[OrderEvent]): Буфер для отложенного исполнения
+            рыночного ордера (симуляция задержки исполнения на 1 тик).
     """
 
     def __init__(self, settings: Dict[str, Any], events_queue: queue.Queue, feature_engine: FeatureEngine):
         """
-        Инициализирует движок с заданной конфигурацией.
+        Создает экземпляр движка.
 
-        :param settings: Настройки бэктеста.
-        :param events_queue: Очередь событий.
-        :param feature_engine: Сервис для расчета индикаторов (DI).
+        Args:
+            settings (Dict[str, Any]): Словарь с параметрами теста.
+            events_queue (queue.Queue): Очередь событий.
+            feature_engine (FeatureEngine): Инстанс движка индикаторов.
         """
         self.settings = settings
         self.events_queue = events_queue
         self.feature_engine = feature_engine
 
         self.components: Dict[str, Any] = {}
+        # Ордер, сгенерированный стратегией на свече T, исполняется на открытии T+1
         self.pending_strategy_order: Optional[Any] = None
 
     def _initialize_components(self) -> None:
         """
-        Приватный метод для инициализации и сборки всех компонентов системы.
-        Реализует принцип Dependency Injection.
+        Собирает архитектуру приложения (Composition Root).
+
+        Создает экземпляры всех необходимых классов (Strategy, Portfolio, RiskManager и т.д.)
+        и связывает их друг с другом через внедрение зависимостей (DI).
         """
         logger.info("Инициализация компонентов бэктеста...")
         events_queue = self.events_queue
@@ -58,6 +82,7 @@ class BacktestEngine:
 
         data_dir = self.settings.get("data_dir", config.PATH_CONFIG["DATA_DIR"])
 
+        # Загрузка метаданных инструмента (шаг цены, лотность)
         instrument_info = load_instrument_info(
             exchange=self.settings["exchange"],
             instrument=self.settings["instrument"],
@@ -65,8 +90,10 @@ class BacktestEngine:
             data_dir=data_dir
         )
 
+        # Инициализация стратегии
         strategy_class = self.settings["strategy_class"]
         strategy_params = self.settings.get("strategy_params") or strategy_class.get_default_params()
+
         strategy_config = StrategyConfigModel(
             strategy_name=strategy_class.__name__,
             instrument=self.settings["instrument"],
@@ -84,6 +111,7 @@ class BacktestEngine:
         )
         self.components['strategy'] = strategy
 
+        # Инициализация компонентов портфеля
         rm_class = AVAILABLE_RISK_MANAGERS[self.settings["risk_manager_type"]]
         rm_params = self.settings.get("risk_manager_params") or rm_class.get_default_params()
         risk_manager = rm_class(params=rm_params)
@@ -112,6 +140,7 @@ class BacktestEngine:
 
         portfolio_state = PortfolioState(initial_capital=self.settings["initial_capital"])
 
+        # Сборка фасада портфеля
         portfolio = Portfolio(
             events_queue=events_queue,
             portfolio_state=portfolio_state,
@@ -122,9 +151,20 @@ class BacktestEngine:
         self.components['portfolio'] = portfolio
 
     def _prepare_data(self) -> pd.DataFrame | None:
-        """Подготавливает исторические данные, делегируя расчеты стратегии."""
+        """
+        Загружает и подготавливает исторические данные.
+
+        1. Загружает сырые данные из файла или принимает срез (для WFO).
+        2. Запускает `strategy.process_data` для векторного расчета индикаторов.
+        3. Проверяет достаточность длины истории.
+
+        Returns:
+            pd.DataFrame: Обогащенные данные, готовые к симуляции.
+        """
         logger.info("Начало этапа подготовки данных...")
         strategy: BaseStrategy = self.components['strategy']
+
+        # Если передан готовый срез данных (например, из оптимизатора), используем его
         data_slice = self.settings.get("data_slice")
 
         if data_slice is not None:
@@ -144,6 +184,7 @@ class BacktestEngine:
             logger.error(f"Не удалось получить данные для бэктеста по инструменту {self.settings['instrument']}.")
             return None
 
+        # Векторный расчет индикаторов (оптимизация скорости)
         enriched_data = strategy.process_data(raw_data.copy())
 
         if len(enriched_data) < strategy.min_history_needed:
@@ -156,9 +197,13 @@ class BacktestEngine:
 
     def _process_queue(self, current_candle: pd.Series, phase: str):
         """
-        Вспомогательный метод для обработки очереди событий.
+        Разбирает очередь событий до полного опустошения.
 
-        :param phase: 'EXECUTION' (начало бара) или 'STRATEGY' (конец бара).
+        Маршрутизирует события соответствующим обработчикам.
+
+        Args:
+            current_candle (pd.Series): Текущие рыночные данные.
+            phase (str): Текущая фаза цикла (для отладки).
         """
         events_queue = self.components['events_queue']
         portfolio = self.components['portfolio']
@@ -174,9 +219,11 @@ class BacktestEngine:
                 portfolio.on_signal(event)
 
             elif isinstance(event, OrderEvent):
+                # Если это рыночный ордер от стратегии, откладываем его до открытия следующей свечи
                 if event.trigger_reason == 'SIGNAL':
                     self.pending_strategy_order = event
                 else:
+                    # Стоп-ордера исполняются немедленно (внутри этой же свечи)
                     execution_handler.execute_order(event, current_candle)
 
             elif isinstance(event, FillEvent):
@@ -184,8 +231,17 @@ class BacktestEngine:
 
     def _run_event_loop(self, enriched_data: pd.DataFrame) -> None:
         """
-        Главный цикл симуляции.
-        Использует BacktestDataFeed для эмуляции потока данных.
+        Основной цикл симуляции (Event Loop).
+
+        Итерируется по историческим данным, эмулируя ход времени.
+
+        Последовательность действий на каждой свече:
+        1.  **Phase 1 (Open):** Исполнение отложенных ордеров (вход по Open).
+        2.  **Phase 2 (High/Low):** Проверка рисков (SL/TP внутри свечи).
+        3.  **Phase 3 (Close):** Анализ стратегии (генерация сигналов по Close).
+
+        Args:
+            enriched_data (pd.DataFrame): Подготовленные данные.
         """
         logger.info("Запуск основного цикла обработки событий...")
 
@@ -194,36 +250,41 @@ class BacktestEngine:
         execution_handler = self.components['execution_handler']
         instrument = self.settings['instrument']
 
-        # 1. Инициализируем Фид
+        # Инициализация фида данных
         feed = BacktestDataFeed(data=enriched_data, interval=self.settings['interval'])
 
-        # 2. Крутим цикл, пока есть данные
         while feed.next():
             current_candle = feed.get_current_candle()
 
-            # Создаем событие рынка для Портфеля и Риск-менеджера
+            # Создаем MarketEvent для обновления состояния портфеля
             market_event = MarketEvent(
                 timestamp=current_candle['time'],
                 instrument=instrument,
                 data=current_candle
             )
 
+            # Обновляем время в логгере
             backtest_time_filter.set_sim_time(market_event.timestamp)
 
-            # ФАЗА 1: ИСПОЛНЕНИЕ ОТЛОЖЕННЫХ ОРДЕРОВ (Начало свечи, цена Open)
+            # --- ФАЗА 1: ИСПОЛНЕНИЕ (Начало бара) ---
+            # Исполняем ордера, сгенерированные на закрытии ПРОШЛОЙ свечи.
+            # Цена исполнения будет Open ТЕКУЩЕЙ свечи.
             if self.pending_strategy_order:
                 execution_handler.execute_order(self.pending_strategy_order, current_candle)
                 self.pending_strategy_order = None
                 self._process_queue(current_candle, phase='EXECUTION')
 
-            # ФАЗА 2: ПРОВЕРКА РИСКОВ (Внутри свечи, цены High/Low)
+            # --- ФАЗА 2: РИСКИ (Внутри бара) ---
+            # Обновляем цену в портфеле и проверяем, не задеты ли SL/TP ценами High/Low.
             portfolio.update_market_price(market_event)
-            self._process_queue(current_candle, phase='EXECUTION')
+            self._process_queue(current_candle, phase='RISK')
 
-            # ФАЗА 3: АНАЛИЗ СТРАТЕГИИ (Конец свечи, цена Close)
+            # --- ФАЗА 3: СТРАТЕГИЯ (Конец бара) ---
+            # Анализируем данные по цене Close.
             strategy.on_candle(feed)
 
-            # Если стратегия дала сигнал, он попадет в очередь.
+            # Если стратегия сгенерировала сигнал, он попадет в pending_strategy_order
+            # после обработки очереди в _process_queue
             self._process_queue(current_candle, phase='STRATEGY')
 
         backtest_time_filter.reset_sim_time()
@@ -231,8 +292,14 @@ class BacktestEngine:
 
     def run(self) -> Dict[str, Any]:
         """
-        Запускает одну полную сессию бэктеста и возвращает результаты.
-        :return: Словарь с результатами, включая DataFrame сделок, финальный капитал и обогащенные данные.
+        Запускает процесс бэктеста от начала до конца.
+
+        Returns:
+            Dict[str, Any]: Результаты теста.
+                - status: "success" / "error"
+                - trades_df: Список сделок.
+                - final_capital: Итоговый капитал.
+                - enriched_data: Использованные данные (для отрисовки графиков).
         """
         try:
             self._initialize_components()

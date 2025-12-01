@@ -1,3 +1,14 @@
+"""
+Модуль генерации графических отчетов (Plotting).
+
+Отвечает за визуализацию кривой капитала (Equity Curve) стратегии в сравнении
+с эталонной стратегией Buy & Hold. Генерирует файл `.png` с графиком и ключевыми метриками.
+
+Особенности визуализации:
+Используется отрисовка по целочисленным индексам вместо дат, чтобы скрыть "дырки"
+в данных (выходные дни, ночи), делая график непрерывным и удобным для анализа.
+"""
+
 import logging
 import os
 from typing import Dict, Optional, Any
@@ -18,8 +29,16 @@ logger = logging.getLogger(__name__)
 
 class PlotReportGenerator:
     """
-    Отвечает исключительно за создание и сохранение графического отчета (.png)
-    на основе УЖЕ РАССЧИТАННЫХ метрик и данных.
+    Генератор графиков Matplotlib.
+
+    Строит линейный график доходности, накладывает на него статистику
+    и сохраняет результат в файл.
+
+    Attributes:
+        portfolio_equity_curve (pd.Series): Ряд капитала стратегии.
+        benchmark_equity_curve (pd.Series): Ряд капитала бенчмарка.
+        report_filename (str): Имя файла для сохранения.
+        report_dir (str): Папка для сохранения.
     """
 
     def __init__(self,
@@ -31,7 +50,19 @@ class PlotReportGenerator:
                  report_filename: str,
                  report_dir: str,
                  metadata: Dict[str, str]):
+        """
+        Инициализирует генератор.
 
+        Args:
+            portfolio_metrics (Dict): Рассчитанные метрики стратегии.
+            benchmark_metrics (Dict): Рассчитанные метрики бенчмарка.
+            portfolio_equity_curve (pd.Series): Временной ряд капитала стратегии.
+            benchmark_equity_curve (pd.Series): Временной ряд капитала бенчмарка.
+            initial_capital (float): Стартовый капитал (для масштабирования).
+            report_filename (str): Базовое имя файла.
+            report_dir (str): Папка назначения.
+            metadata (Dict): Инфо о стратегии и инструменте.
+        """
         self.portfolio_metrics = portfolio_metrics
         self.benchmark_metrics = benchmark_metrics
         self.portfolio_equity_curve = portfolio_equity_curve
@@ -40,10 +71,17 @@ class PlotReportGenerator:
         self.report_filename = report_filename
         self.report_dir = report_dir
         self.metadata = metadata
+
+        # Гарантируем существование директории
         os.makedirs(self.report_dir, exist_ok=True)
 
     def _format_metrics_for_display(self) -> Dict[str, str]:
-        """Форматирует числовые метрики в строки для красивого вывода на графике."""
+        """
+        Форматирует метрики для отображения в текстовом блоке на графике.
+
+        Returns:
+            Dict[str, str]: Словарь {Метрика: Красивое_Значение}.
+        """
         pnl_abs = self.portfolio_metrics.get('pnl_abs', 0)
         pnl_pct = self.portfolio_metrics.get('pnl_pct', 0)
         pnl_bh_abs = self.benchmark_metrics.get('pnl_abs', 0)
@@ -70,9 +108,19 @@ class PlotReportGenerator:
         }
 
     def generate(self, wfo_results: Optional[Dict[str, float]] = None):
-        """Создает и сохраняет графический отчет с устранением разрывов (Gaps)."""
+        """
+        Строит и сохраняет график.
+
+        Использует технику "Index-based plotting" для устранения разрывов во времени
+        (выходные дни, неторговые часы). Вместо оси времени используется ось индексов (0..N),
+        а даты подставляются через `FuncFormatter`.
+
+        Args:
+            wfo_results (Optional[Dict]): Результаты WFO (если применимо) для отображения на графике.
+        """
         display_metrics = self._format_metrics_for_display()
 
+        # Формирование блока текста с результатами WFO (если есть)
         wfo_text_block = ""
         if wfo_results:
             target_metric = next(iter(wfo_results.keys()), None)
@@ -88,34 +136,31 @@ class PlotReportGenerator:
         plt.style.use('seaborn-v0_8-darkgrid')
         fig, ax = plt.subplots(figsize=(15, 7))
 
-        # 1. Берем индекс бенчмарка как "эталонное время" (все свечи периода)
-        # Если бенчмарка нет (ошибка данных), берем индекс стратегии
+        # 1. Выравнивание индексов
+        # Используем индекс бенчмарка как эталонный (он содержит все свечи периода)
         if not self.benchmark_equity_curve.empty:
             full_time_index = self.benchmark_equity_curve.index
         else:
             full_time_index = self.portfolio_equity_curve.index
 
-        # 2. Подготавливаем данные стратегии
+        # 2. Подготовка данных стратегии
         if not self.portfolio_equity_curve.empty:
-            # Переиндексируем кривую стратегии на полный диапазон времени
-            # method='ffill' означает: "если в эту минуту сделки не было, возьми значение капитала из прошлого"
+            # Растягиваем кривую стратегии на полный диапазон времени (forward fill)
             aligned_portfolio_curve = self.portfolio_equity_curve.reindex(full_time_index, method='ffill')
-
-            # Если стратегия начала торговать не с первой свечи, заполняем начало начальным капиталом
+            # Заполняем начало (до первой сделки) стартовым капиталом
             aligned_portfolio_curve = aligned_portfolio_curve.fillna(self.initial_capital)
-
             portfolio_values = aligned_portfolio_curve.values
         else:
-            # Если сделок не было вообще, рисуем прямую линию начального капитала
+            # Если сделок не было — прямая линия
             portfolio_values = np.full(len(full_time_index), self.initial_capital)
 
-        # 3. Подготавливаем данные бенчмарка
+        # 3. Подготовка данных бенчмарка
         if not self.benchmark_equity_curve.empty:
             benchmark_values = self.benchmark_equity_curve.values
         else:
             benchmark_values = np.array([])
 
-        # 4. Рисуем по индексам (0..N), чтобы скрыть выходные
+        # 4. Отрисовка по целочисленным индексам (скрываем выходные)
         x_indices = np.arange(len(full_time_index))
 
         if len(benchmark_values) > 0:
@@ -126,7 +171,7 @@ class PlotReportGenerator:
             ax.plot(x_indices, portfolio_values,
                     label='Strategy Equity Curve', color='blue', lw=2)
 
-        # Используем полный индекс времени для подписей
+        # 5. Форматирование оси X (индексы -> даты)
         def format_date(x, pos=None):
             thisind = np.clip(int(x + 0.5), 0, len(full_time_index) - 1)
             return full_time_index[thisind].strftime('%Y-%m-%d')
@@ -141,6 +186,7 @@ class PlotReportGenerator:
         ax.set_ylabel("Capital")
         ax.legend()
 
+        # 6. Добавление текстового блока с метриками
         report_text = "\n".join([f"{key}: {value}" for key, value in display_metrics.items()])
         full_report_text = report_text + wfo_text_block
 
@@ -148,6 +194,7 @@ class PlotReportGenerator:
                 verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5),
                 fontfamily='monospace')
 
+        # Сохранение и закрытие
         full_path = os.path.join(self.report_dir, f"{self.report_filename}.png")
         plt.savefig(full_path)
         plt.close(fig)

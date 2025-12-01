@@ -1,14 +1,23 @@
+"""
+Клиент для взаимодействия с Tinkoff Invest API.
+
+Этот модуль реализует интерфейсы для получения исторических данных,
+информации об инструментах и исполнения торговых ордеров на Московской бирже (через Тинькофф).
+Поддерживает работу в Песочнице (Sandbox) и на реальном счете.
+
+Использует библиотеку `tinkoff.invest`.
+"""
+
 import logging
 import time
 from datetime import timedelta
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from tqdm import tqdm
 import pandas as pd
 
 from tinkoff.invest import (
     Client, RequestError,
     CandleInterval, InstrumentStatus,
-    SecurityTradingStatus,
     OrderDirection, OrderType
 )
 from tinkoff.invest.utils import now, quotation_to_decimal
@@ -22,75 +31,90 @@ logger = logging.getLogger(__name__)
 
 class TinkoffHandler(BaseDataClient, BaseTradeClient):
     """
-    Единый клиент для работы с Tinkoff Invest API.
-    Реализует интерфейсы для получения данных и для торговли.
+    Адаптер для биржи Tinkoff Invest.
+
+    Объединяет функциональность Data Client (история) и Trade Client (исполнение).
     """
 
     def __init__(self, trade_mode: TradeModeType = "SANDBOX"):
+        """
+        Инициализирует клиента Tinkoff.
+
+        Автоматически выбирает нужный токен (ReadOnly, FullAccess или Sandbox)
+        в зависимости от режима работы. Если в режиме Sandbox нет открытых счетов,
+        клиент попытается открыть новый.
+
+        Args:
+            trade_mode (TradeModeType): Режим работы ('SANDBOX' или 'REAL').
+        """
         self.read_token = config.TINKOFF_TOKEN_READONLY
         self.trade_mode = trade_mode.upper()
-        self.trade_token: str | None = None
+        self.trade_token: Optional[str] = None
 
         # Единое хранилище ID счета (и для Real, и для Sandbox)
-        self.account_id: str | None = config.TINKOFF_ACCOUNT_ID
+        self.account_id: Optional[str] = config.TINKOFF_ACCOUNT_ID
 
-        # Проверка токенов
+        # 1. Проверка токена для чтения (обязателен всегда)
         if not self.read_token or "Your" in self.read_token:
             raise ConnectionError("Токен только для чтения (TOKEN_READONLY) не задан в .env.")
 
+        # 2. Настройка торгового токена и счета
         if self.trade_mode == "REAL":
             self.trade_token = config.TINKOFF_TOKEN_FULL_ACCESS
             if not self.trade_token or "Your" in self.trade_token:
                 raise ConnectionError("Токен с полным доступом (TOKEN_FULL_ACCESS) не задан в .env.")
 
-            # Инициализация счета для Real
-            if not self.account_id:
-                logging.info("ID реального счета не указан, будет использован первый доступный.")
-                self.account_id = self._get_first_account_id(sandbox=False)
+            is_sandbox = False
 
         elif self.trade_mode == "SANDBOX":
             self.trade_token = config.TINKOFF_TOKEN_SANDBOX
             if not self.trade_token or "Your" in self.trade_token:
                 raise ConnectionError("Токен песочницы (TOKEN_SANDBOX) не задан в .env.")
 
-            # Инициализация счета для Sandbox (всегда берем, т.к. в .env обычно реальный ID)
-            # Либо можно добавить TINKOFF_SANDBOX_ACCOUNT_ID в конфиг, но проще найти авто.
-            self.account_id = self._get_first_account_id(sandbox=True)
-            logging.info(f"Используется счет песочницы: {self.account_id}")
-
+            is_sandbox = True
         else:
             raise ValueError(f"Неподдерживаемый торговый режим: {trade_mode}")
 
-        logging.info(
-            f"Торговый клиент Tinkoff инициализирован в режиме '{self.trade_mode}'. Account ID: {self.account_id}")
+        # 3. Автоматический поиск или создание счета, если ID не задан явно
+        if not self.account_id:
+            logging.info(f"ID счета не указан в конфиге. Поиск первого доступного счета ({self.trade_mode})...")
+            self.account_id = self._get_first_account_id(sandbox=is_sandbox)
+            logging.info(f"Выбран счет: {self.account_id}")
+
+        logging.info(f"Торговый клиент Tinkoff инициализирован ({self.trade_mode}).")
         self._check_token()
 
     def _check_token(self) -> bool:
+        """Проверяет валидность токена ReadOnly простым запросом."""
         try:
             with Client(self.read_token) as client:
                 client.users.get_accounts()
-            logging.info("Токен Tinkoff 'только для чтения' успешно прошел проверку.")
+            logging.info("Токен Tinkoff 'только для чтения' валиден.")
             return True
         except RequestError as e:
             logging.critical(f"Ошибка проверки токена Tinkoff: {e}")
             raise ConnectionAbortedError(f"Невалидный токен Tinkoff: {e.details}")
 
     def _get_first_account_id(self, sandbox: bool = False) -> str:
-        """Получает ID первого доступного счета (Real или Sandbox)."""
+        """
+        Получает ID первого доступного счета.
+        В режиме Sandbox создает новый счет, если список пуст.
+        """
         try:
             with Client(self.trade_token) as client:
                 if sandbox:
-                    accounts = client.sandbox.get_sandbox_accounts().accounts
+                    service = client.sandbox
+                    accounts = service.get_sandbox_accounts().accounts
                 else:
-                    accounts = client.users.get_accounts().accounts
+                    service = client.users
+                    accounts = service.get_accounts().accounts
 
                 if not accounts:
-                    # Если в песочнице нет счетов, создадим один
                     if sandbox:
                         logging.info("Счета в песочнице не найдены. Открываем новый...")
-                        client.sandbox.open_sandbox_account()
-                        # Повторный запрос
-                        accounts = client.sandbox.get_sandbox_accounts().accounts
+                        service.open_sandbox_account()
+                        # Повторный запрос после открытия
+                        accounts = service.get_sandbox_accounts().accounts
 
                     if not accounts:
                         raise ConnectionError(f"Не найдено счетов в режиме {'SANDBOX' if sandbox else 'REAL'}.")
@@ -101,7 +125,20 @@ class TinkoffHandler(BaseDataClient, BaseTradeClient):
             raise
 
     def _resolve_figi(self, instrument: str) -> str:
-        """Поиск FIGI по тикеру."""
+        """
+        Находит уникальный идентификатор (FIGI) по тикеру инструмента.
+
+        Использует двухступенчатый поиск:
+        1. Строгий поиск: Тикер + Класс (например, TQBR для акций).
+        2. Мягкий поиск: Первый попавшийся инструмент с таким тикером.
+
+        Args:
+            instrument (str): Тикер (например, SBER).
+
+        Returns:
+            str: FIGI инструмента.
+        """
+        # Если передан уже FIGI (начинается с BBG), возвращаем как есть
         if instrument.startswith("BBG"):
             return instrument
 
@@ -116,7 +153,7 @@ class TinkoffHandler(BaseDataClient, BaseTradeClient):
                 instrument_upper = instrument.upper()
                 class_code = config.EXCHANGE_SPECIFIC_CONFIG[ExchangeType.TINKOFF]['DEFAULT_CLASS_CODE']
 
-                # 1. Строгий поиск
+                # 1. Строгий поиск по классу (акции на Мосбирже)
                 strict_match = next((
                     instr for instr in found.instruments
                     if instr.ticker == instrument_upper and instr.class_code == class_code
@@ -125,9 +162,11 @@ class TinkoffHandler(BaseDataClient, BaseTradeClient):
                 if strict_match:
                     target_instrument = strict_match
                 else:
-                    # 2. Мягкий поиск
-                    logger.warning(f"Строгое совпадение для '{instrument_upper}' не найдено. Ищем по тикеру.")
+                    # 2. Мягкий поиск (любое совпадение по тикеру)
+                    logger.warning(
+                        f"Строгое совпадение для '{instrument_upper}' (class={class_code}) не найдено. Ищем по тикеру.")
                     exact_match = next((instr for instr in found.instruments if instr.ticker == instrument_upper), None)
+                    # Если совсем ничего похожего, берем первый результат поиска
                     target_instrument = exact_match if exact_match else found.instruments[0]
 
                 logger.info(f"Выбран: '{target_instrument.name}' (FIGI: {target_instrument.figi})")
@@ -139,9 +178,21 @@ class TinkoffHandler(BaseDataClient, BaseTradeClient):
 
     @staticmethod
     def _cast_money(money_value) -> float:
+        """Конвертирует структуру MoneyValue/Quotation в float."""
         return money_value.units + money_value.nano / 1e9
 
     def get_historical_data(self, instrument: str, interval: str, days: int, **kwargs) -> pd.DataFrame:
+        """
+        Скачивает исторические свечи.
+
+        Args:
+            instrument (str): Тикер инструмента.
+            interval (str): Интервал (1min, 5min, 1hour, etc).
+            days (int): Глубина истории.
+
+        Returns:
+            pd.DataFrame: DataFrame с колонками time, open, high, low, close, volume.
+        """
         try:
             figi = self._resolve_figi(instrument)
         except (ValueError, RequestError) as e:
@@ -152,6 +203,8 @@ class TinkoffHandler(BaseDataClient, BaseTradeClient):
         if not interval_name:
             logging.error(f"Неподдерживаемый интервал: {interval}")
             return pd.DataFrame()
+
+        # Получаем Enum значение интервала из библиотеки tinkoff
         api_interval = getattr(CandleInterval, interval_name)
 
         all_candles = []
@@ -160,10 +213,13 @@ class TinkoffHandler(BaseDataClient, BaseTradeClient):
 
         try:
             with Client(self.read_token) as c, tqdm(total=days, desc="Загрузка", unit="дн.") as pbar:
+                # Метод get_all_candles сам обрабатывает пагинацию
                 for candle in c.get_all_candles(figi=figi, from_=start_date, interval=api_interval):
-                    # Обновление прогресса (приблизительно)
+
+                    # Обновление прогресс-бара
                     current_progress_days = (candle.time.date() - start_date.date()).days
-                    if current_progress_days > pbar.n: pbar.update(current_progress_days - pbar.n)
+                    if current_progress_days > pbar.n:
+                        pbar.update(current_progress_days - pbar.n)
 
                     all_candles.append({
                         "time": candle.time,
@@ -173,7 +229,11 @@ class TinkoffHandler(BaseDataClient, BaseTradeClient):
                         "close": self._cast_money(candle.close),
                         "volume": candle.volume
                     })
-                if pbar.n < days: pbar.update(days - pbar.n)
+
+                # Добиваем прогресс бар до конца
+                if pbar.n < days:
+                    pbar.update(days - pbar.n)
+
         except RequestError as e:
             logging.error(f"Ошибка API при получении данных: {e.details}")
             return pd.DataFrame()
@@ -184,6 +244,9 @@ class TinkoffHandler(BaseDataClient, BaseTradeClient):
         return df
 
     def get_instrument_info(self, instrument: str, **kwargs) -> Dict[str, Any]:
+        """
+        Получает параметры инструмента (шаг цены, лотность).
+        """
         try:
             figi = self._resolve_figi(instrument)
             with Client(self.read_token) as client:
@@ -199,18 +262,18 @@ class TinkoffHandler(BaseDataClient, BaseTradeClient):
 
     def get_top_liquid_by_turnover(self, count: int) -> List[str]:
         """
-        Запрашивает топ-N ликвидных акций MOEX (TQBR) по обороту за последние 2 дня.
+        Возвращает список самых ликвидных акций (TQBR) по обороту за последние дни.
+        Используется для формирования списков для скринера.
         """
         logger.info(f"Tinkoff Client: Анализ ликвидности акций MOEX (TQBR)...")
         try:
             with Client(self.read_token) as client:
-                # 1. Получаем список всех акций
+                # 1. Получаем список всех доступных акций
                 all_shares = client.instruments.shares(
                     instrument_status=InstrumentStatus.INSTRUMENT_STATUS_BASE
                 ).instruments
 
-                # 2. Фильтруем только Московскую биржу (TQBR) и рублевые активы
-                # Также проверяем, что акция торгуется (flag buy/sell available)
+                # 2. Фильтруем: только TQBR (Мосбиржа), рубли и доступные для торгов
                 tqbr_shares = [
                     s for s in all_shares
                     if s.class_code == 'TQBR'
@@ -219,16 +282,12 @@ class TinkoffHandler(BaseDataClient, BaseTradeClient):
                        and s.api_trade_available_flag
                 ]
 
-                logger.info(f"Найдено {len(tqbr_shares)} активных акций TQBR. Начинаем расчет оборота...")
+                logger.info(f"Найдено {len(tqbr_shares)} активных акций TQBR. Расчет оборота...")
 
                 share_stats = []
-
-                # Берем короткий интервал (вчера + сегодня), чтобы не грузить API
-                # Ликвидность обычно стабильна, 2 дней достаточно
-                interval_start = now() - timedelta(days=5)
+                interval_start = now() - timedelta(days=2)  # Берем последние 2 дня
                 interval_end = now()
 
-                # Используем прогресс-бар
                 for share in tqdm(tqbr_shares, desc="Сканирование Tinkoff", unit="ticker"):
                     try:
                         candles = client.market_data.get_candles(
@@ -241,8 +300,7 @@ class TinkoffHandler(BaseDataClient, BaseTradeClient):
                         if not candles:
                             continue
 
-                        # Считаем оборот: Цена закрытия * Объем * Лотность
-                        # Суммируем за найденные дни (обычно 1-2 свечи)
+                        # Расчет оборота: сумма (Close * Volume * Lot) по всем свечам
                         total_turnover = sum(
                             self._cast_money(c.close) * c.volume * share.lot
                             for c in candles
@@ -254,14 +312,17 @@ class TinkoffHandler(BaseDataClient, BaseTradeClient):
                                 "turnover": total_turnover
                             })
 
-                        # Анти-спам для API (лимит около 200-300 запросов в минуту для market-data)
+                        # Небольшая задержка, чтобы не превысить лимиты API
                         time.sleep(0.1)
 
-                    except Exception:
-                        # Игнорируем ошибки по конкретному инструменту, идем дальше
+                    except RequestError:
+                        continue  # Игнорируем ошибки по конкретному тикеру
+                    except Exception as e:
+                        # Ловим только технические ошибки, но не прерываем весь цикл
+                        logger.debug(f"Ошибка обработки {share.ticker}: {e}")
                         continue
 
-                # Сортировка
+                # Сортировка по убыванию оборота
                 sorted_shares = sorted(share_stats, key=lambda x: x['turnover'], reverse=True)
                 top_result = [s['ticker'] for s in sorted_shares[:count]]
 
@@ -272,39 +333,42 @@ class TinkoffHandler(BaseDataClient, BaseTradeClient):
             logger.error(f"Критическая ошибка Tinkoff get_top_liquid: {e}")
             return []
 
-    def place_market_order(self, instrument_id: str, quantity: float, direction: str, **kwargs):
+    def place_market_order(self, instrument_id: str, quantity: float, direction: str, **kwargs) -> Optional[Any]:
         """
         Размещает рыночный ордер.
-        :param instrument_id: FIGI инструмента
-        :param quantity: Количество ЛОТОВ (int)
-        :param direction: 'BUY' или 'SELL' (или TradeDirection Enum)
+
+        Args:
+            instrument_id (str): FIGI инструмента (Tinkoff использует FIGI, не тикеры).
+            quantity (float): Количество лотов.
+            direction (str): Направление ('BUY' или 'SELL').
+
+        Returns:
+            Optional[Any]: Объект ответа API (PostOrderResponse) или None в случае ошибки.
         """
-        # Маппинг наших констант на константы Тинькофф
         direction_map = {
             TradeDirection.BUY: OrderDirection.ORDER_DIRECTION_BUY,
             TradeDirection.SELL: OrderDirection.ORDER_DIRECTION_SELL
         }
 
-        # Приводим входной direction (str или Enum) к Enum для поиска в мапе
-        # Если пришла строка "BUY", StrEnum позволяет сравнение, но для словаря лучше явный ключ
-        dir_key = str(direction).upper()  # "BUY"
-
-        # Пытаемся найти по ключу (если direction это строка) или по значению (если Enum)
+        # Приведение к верхнему регистру для надежности
+        dir_key = str(direction).upper()
         tinkoff_direction = direction_map.get(dir_key)
 
         if not tinkoff_direction:
             logging.error(f"Неверное направление сделки: {direction}")
             return None
 
+        # Tinkoff API ожидает int для лотов
         order_quantity = int(quantity)
 
         try:
             with Client(self.trade_token) as client:
+                # В SDK методы для Sandbox и Real отличаются неймспейсами (sandbox vs orders)
                 if self.trade_mode == "SANDBOX":
                     order = client.sandbox.post_sandbox_order(
                         figi=instrument_id,
                         quantity=order_quantity,
-                        order_id=str(now().timestamp()),
+                        order_id=str(now().timestamp()),  # Уникальный ID запроса (идемпотентность)
                         direction=tinkoff_direction,
                         account_id=self.account_id,
                         order_type=OrderType.ORDER_TYPE_MARKET,

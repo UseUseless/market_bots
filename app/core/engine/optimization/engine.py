@@ -1,8 +1,23 @@
-import os
-import pandas as pd
-import logging
-from typing import Dict, Any
+"""
+Модуль движка оптимизации (Optimization Engine).
 
+Этот класс является "сердцем" процесса Walk-Forward Optimization (WFO).
+Он координирует работу специализированных компонентов, выполняя процесс шаг за шагом.
+
+Алгоритм работы:
+1.  **Подготовка**: `WFODataPreparer` загружает данные и разбивает их на N периодов.
+2.  **Цикл WFO**: Движок проходит по периодам с помощью скользящего окна.
+    -   Формирует выборку In-Sample (Train) для обучения.
+    -   Формирует выборку Out-of-Sample (Test) для проверки.
+    -   Запускает `WFOStepRunner` для выполнения оптимизации Optuna на этом шаге.
+3.  **Отчетность**: `OptimizationReporter` собирает результаты всех шагов и строит графики.
+"""
+
+import os
+import logging
+from typing import Dict, Any, List
+
+import pandas as pd
 import optuna
 
 from app.core.engine.optimization.preparer import WFODataPreparer
@@ -15,88 +30,129 @@ logger = logging.getLogger(__name__)
 
 class OptimizationEngine:
     """
-    Высокоуровневый оркестратор для запуска процесса Walk-Forward Optimization.
+    Оркестратор процесса Walk-Forward Optimization.
 
-    Этот класс не содержит сложной логики. Его задачи:
-    1. Подготовить настройки.
-    2. Вызвать WFODataPreparer для загрузки и нарезки данных.
-    3. В цикле вызывать WFOStepRunner для каждого шага WFO.
-    4. Вызвать OptimizationReporter для генерации итоговых отчетов.
+    Управляет жизненным циклом оптимизации, но не содержит низкоуровневой
+    логики работы с Optuna или данными.
+
+    Attributes:
+        settings (Dict): Полная конфигурация запуска.
+        feature_engine (FeatureEngine): Сервис для расчета индикаторов (DI).
     """
 
     def __init__(self, settings: Dict[str, Any], feature_engine: FeatureEngine):
         """
-        Инициализирует движок оптимизации.
+        Инициализирует движок.
 
-        :param settings: Словарь с настройками, полученный из UI-слоя.
+        Args:
+            settings (Dict[str, Any]): Настройки из Runner'а.
+            feature_engine (FeatureEngine): Инстанс калькулятора индикаторов.
         """
         self.settings = self._prepare_settings(settings)
         self.feature_engine = feature_engine
 
     def _prepare_settings(self, settings: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Дополняет словарь настроек ключами, которые нужны внутренним компонентам.
-        В частности, формирует список инструментов для портфеля.
+        Валидирует и дополняет настройки перед запуском.
+
+        Определяет список инструментов:
+        - Если передан `portfolio_path`, сканирует папку на наличие .parquet файлов.
+        - Если передан `instrument`, создает список из одного элемента.
+
+        Args:
+            settings (Dict[str, Any]): Исходные настройки.
+
+        Returns:
+            Dict[str, Any]: Обновленные настройки с ключом `instrument_list`.
         """
         # Если указан путь к портфелю, сканируем его и формируем список инструментов
-        if "portfolio_path" in settings and settings["portfolio_path"]:
+        if settings.get("portfolio_path"):
             path = settings["portfolio_path"]
-            try:
-                settings["instrument_list"] = sorted(
-                    [f.replace('.parquet', '') for f in os.listdir(path) if f.endswith('.parquet')]
-                )
-            except FileNotFoundError:
+            if not os.path.exists(path):
+                # Логируем здесь, но ошибка всплывет в Preparer'е
                 logger.error(f"Директория портфеля не найдена: {path}")
                 settings["instrument_list"] = []
+            else:
+                try:
+                    # Ищем все .parquet файлы и убираем расширение, чтобы получить тикеры
+                    settings["instrument_list"] = sorted(
+                        [f.replace('.parquet', '') for f in os.listdir(path) if f.endswith('.parquet')]
+                    )
+                except Exception as e:
+                    logger.error(f"Ошибка при сканировании портфеля: {e}")
+                    settings["instrument_list"] = []
         else:
-            # Если указан один инструмент, создаем список из одного элемента
+            # Режим одного инструмента
             settings["instrument_list"] = [settings["instrument"]]
 
         return settings
 
     def run(self):
         """
-        Запускает полный процесс Walk-Forward Optimization от начала до конца.
+        Запускает основной цикл Walk-Forward Optimization.
+
+        Метод не перехватывает исключения. Ошибки должны всплывать в `runner.py`,
+        чтобы обеспечить корректное завершение программы и сброс логов.
+
+        Raises:
+            FileNotFoundError: Если нет данных для инструментов.
+            ValueError: Если параметры WFO (периоды) некорректны.
         """
-        try:
-            # --- Шаг 1: Подготовка данных ---
-            preparer = WFODataPreparer(self.settings)
-            all_instrument_periods, num_steps = preparer.prepare()
+        # --- Шаг 1: Подготовка данных ---
+        # Загружаем данные и режем их на равные куски (Periods)
+        preparer = WFODataPreparer(self.settings)
+        all_instrument_periods, num_steps = preparer.prepare()
 
-            # --- Шаг 2: Цикл WFO ---
-            all_oos_trades, step_results = [], []
-            last_study: optuna.Study | None = None
+        logger.info(f"Данные подготовлены. Всего шагов WFO: {num_steps}")
 
-            for step_num in range(1, num_steps + 1):
-                # Определяем срезы данных для текущего шага
-                train_start, train_end = step_num - 1, step_num - 1 + self.settings["train_periods"]
-                test_start, test_end = train_end, train_end + self.settings["test_periods"]
+        # --- Шаг 2: Цикл WFO (Rolling Window) ---
+        all_oos_trades: List[pd.DataFrame] = []
+        step_results: List[Dict] = []
+        last_study: optuna.Study | None = None
 
-                train_slices = {i: pd.concat(p[train_start:train_end]) for i, p in all_instrument_periods.items()}
-                test_slices = {i: pd.concat(p[test_start:test_end]) for i, p in all_instrument_periods.items()}
+        for step_num in range(1, num_steps + 1):
+            # Рассчитываем индексы скользящего окна
+            # Train: [start ... end]
+            train_start = step_num - 1
+            train_end = train_start + self.settings["train_periods"]
 
-                # Запускаем один шаг
-                step_runner = WFOStepRunner(
-                    self.settings,
-                    step_num,
-                    train_slices,
-                    test_slices,
-                    feature_engine=self.feature_engine
-                )
-                oos_trades_df, step_summary, study = step_runner.run()
+            # Test: [train_end ... end] (идет сразу за обучением)
+            test_start = train_end
+            test_end = test_start + self.settings["test_periods"]
 
-                # Собираем результаты
-                if not oos_trades_df.empty:
-                    all_oos_trades.append(oos_trades_df)
-                if step_summary:
-                    step_results.append(step_summary)
-                last_study = study
+            # Собираем данные для всех инструментов на этом шаге
+            # pd.concat склеивает список периодов (DataFrame-ов) в один большой DF
+            train_slices = {
+                instr: pd.concat(periods[train_start:train_end])
+                for instr, periods in all_instrument_periods.items()
+            }
+            test_slices = {
+                instr: pd.concat(periods[test_start:test_end])
+                for instr, periods in all_instrument_periods.items()
+            }
 
-            # --- Шаг 3: Генерация отчетов ---
-            reporter = OptimizationReporter(self.settings, all_oos_trades, step_results, last_study)
-            reporter.generate_all_reports()
+            # Инициализируем и запускаем раннер для конкретного шага
+            step_runner = WFOStepRunner(
+                self.settings,
+                step_num,
+                train_slices,
+                test_slices,
+                feature_engine=self.feature_engine
+            )
 
-        except (FileNotFoundError, ValueError) as e:
-            logger.error(f"Ошибка подготовки или выполнения WFO: {e}")
-        except Exception:
-            logger.critical("Произошла непредвиденная ошибка в процессе WFO!", exc_info=True)
+            # Запуск оптимизации (Optuna) и теста на OOS
+            oos_trades_df, step_summary, study = step_runner.run()
+
+            # Сохраняем результаты
+            if not oos_trades_df.empty:
+                all_oos_trades.append(oos_trades_df)
+
+            if step_summary:
+                step_results.append(step_summary)
+
+            last_study = study
+
+        # --- Шаг 3: Генерация итоговых отчетов ---
+        # Передаем накопленные сделки со всех OOS-периодов
+        reporter = OptimizationReporter(self.settings, all_oos_trades, step_results, last_study)
+        reporter.generate_all_reports()

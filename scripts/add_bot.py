@@ -11,6 +11,11 @@
 
 import asyncio
 import sys
+import os
+
+# Это позволяет видеть пакет 'app', даже если скрипт запущен напрямую из папки scripts
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import questionary
 from sqlalchemy import select
 

@@ -1,60 +1,92 @@
-import sqlite3
+"""
+Скрипт администрирования для удаления подписчиков из базы данных.
+
+Позволяет найти пользователя по Telegram chat_id, просмотреть все его активные
+подписки (на разных ботов) и принудительно удалить их из базы.
+
+Используется для ручной чистки базы от неактуальных пользователей или
+тестовых аккаунтов.
+
+Запуск:
+    python scripts/delete_sub.py
+"""
+
+import asyncio
 import sys
 import os
 
-# Магия для импорта конфига из корня
+# Добавляем корень проекта в путь поиска модулей, чтобы видеть пакет app
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from app.shared.config import config
+
+from sqlalchemy import select, delete
+from sqlalchemy.orm import selectinload
+
+from app.infrastructure.database.session import async_session_factory
+from app.infrastructure.database.models import TelegramSubscriber
 
 
-def main():
-    db_path = config.DB_PATH
-    if not db_path.exists():
-        print(f"❌ БД не найдена: {db_path}")
-        return
+async def main() -> None:
+    """
+    Асинхронная точка входа.
 
-    con = sqlite3.connect(db_path)
-    cursor = con.cursor()
-
+    Алгоритм работы:
+    1. Запрашивает chat_id у администратора.
+    2. Выполняет поиск всех подписок с этим chat_id через ORM.
+    3. Выводит список найденных подписок (имена ботов, юзернеймы).
+    4. После подтверждения выполняет удаление записей.
+    """
     print("🗑️  МАСТЕР УДАЛЕНИЯ ПОДПИСЧИКОВ\n")
 
-    # 1. Ввод ID
-    target_id = input("Введите chat_id пользователя для удаления: ").strip()
-    if not target_id.isdigit():
-        print("Ошибка: chat_id должен быть числом.")
+    # 1. Ввод и валидация ID
+    target_id_str = input("Введите chat_id пользователя для удаления: ").strip()
+    if not target_id_str.isdigit():
+        print("Ошибка: chat_id должен состоять только из цифр.")
         return
 
-    # 2. Поиск жертвы
-    cursor.execute("""
-        SELECT t.id, t.username, t.first_name, b.name 
-        FROM telegram_subscribers t
-        JOIN bot_instances b ON t.bot_id = b.id
-        WHERE t.chat_id = ?
-    """, (target_id,))
+    target_id = int(target_id_str)
 
-    rows = cursor.fetchall()
+    async with async_session_factory() as session:
+        # 2. Поиск подписок
+        # Используем selectinload для подгрузки связанного объекта бота,
+        # чтобы показать его имя в консоли.
+        query = (
+            select(TelegramSubscriber)
+            .options(selectinload(TelegramSubscriber.bot))
+            .where(TelegramSubscriber.chat_id == target_id)
+        )
+        result = await session.execute(query)
+        subscribers = result.scalars().all()
 
-    if not rows:
-        print(f"🤷‍♂️ Пользователь с chat_id {target_id} не найден в базе.")
-        return
+        if not subscribers:
+            print(f"🤷‍♂️ Пользователь с chat_id {target_id} не найден в базе.")
+            return
 
-    # 3. Подтверждение
-    print(f"\nНайдено {len(rows)} подписок для этого ID:")
-    for row in rows:
-        print(f" - ID записи: {row[0]} | Юзер: {row[1]} | Бот: {row[3]}")
+        # 3. Вывод информации и подтверждение
+        print(f"\nНайдено {len(subscribers)} подписок для этого ID:")
+        for sub in subscribers:
+            bot_name = sub.bot.name if sub.bot else "Unknown Bot"
+            print(f" - ID записи: {sub.id} | Юзер: {sub.username} | Бот: {bot_name}")
 
-    confirm = input("\nВы уверены, что хотите УДАЛИТЬ их из базы? (y/n): ").lower()
+        confirm = input("\nВы уверены, что хотите УДАЛИТЬ их из базы? (y/n): ").lower()
 
-    if confirm == 'y':
-        # 4. Удаление
-        cursor.execute("DELETE FROM telegram_subscribers WHERE chat_id = ?", (target_id,))
-        con.commit()
-        print(f"✅ Успешно удалено {cursor.rowcount} записей.")
-    else:
-        print("Операция отменена.")
+        if confirm == 'y':
+            # 4. Удаление
+            # Используем bulk delete запрос для эффективности
+            stmt = delete(TelegramSubscriber).where(TelegramSubscriber.chat_id == target_id)
+            result = await session.execute(stmt)
+            await session.commit()
 
-    con.close()
+            print(f"✅ Успешно удалено {result.rowcount} записей.")
+        else:
+            print("Операция отменена.")
 
 
 if __name__ == "__main__":
-    main()
+    # Настройка для корректной работы asyncio в Windows
+    if sys.platform == 'win32':
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\nПрограмма остановлена пользователем.")

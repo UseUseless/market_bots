@@ -1,55 +1,70 @@
+"""
+Константы и конфигурация модуля аналитики.
+
+Этот файл содержит реестр всех доступных метрик производительности,
+которые используются в системе. Реестр служит "меню" для выбора целей
+оптимизации (WFO) и отображения результатов в отчетах.
+
+Каждая метрика описывается словарем с метаданными:
+- **name**: Человекочитаемое название.
+- **direction**: Направление оптимизации ('maximize' или 'minimize').
+- **description**: Краткое пояснение сути метрики.
+"""
+
 from typing import Dict, Any
 
+# Реестр метрик.
+# Ключ словаря должен совпадать с именем метода в `PortfolioMetricsCalculator`.
 METRIC_CONFIG: Dict[str, Dict[str, Any]] = {
     "calmar_ratio": {
         "name": "Calmar Ratio",
         "direction": "maximize",
-        "description": "Годовая доходность / Макс. просадка. Идеально для минимизации просадок."
+        "description": "Среднегодовая доходность / Макс. просадка. Лучший выбор для стабильного роста."
     },
     "sharpe_ratio": {
         "name": "Sharpe Ratio",
         "direction": "maximize",
-        "description": "Доходность / Волатильность. Классический универсальный выбор."
+        "description": "Доходность с поправкой на риск (волатильность). Классика портфельной теории."
     },
     "sortino_ratio": {
         "name": "Sortino Ratio",
         "direction": "maximize",
-        "description": "Доходность / Волатильность убытков. Улучшенный Шарп."
+        "description": "Улучшенный Шарп: учитывает только волатильность убытков (Downside Risk)."
     },
     "profit_factor": {
         "name": "Profit Factor",
         "direction": "maximize",
-        "description": "Суммарная прибыль / Суммарный убыток. Просто и понятно."
+        "description": "Отношение валовой прибыли к валовому убытку. > 1.5 считается хорошим."
     },
     "pnl_to_drawdown": {
         "name": "PnL / Max Drawdown",
         "direction": "maximize",
-        "description": "Общий PnL / Макс. просадка. Интуитивно понятная метрика."
+        "description": "Простая альтернатива Кальмару: Общий PnL / Макс. просадка."
     },
     "sqn": {
         "name": "SQN (System Quality Number)",
         "direction": "maximize",
-        "description": "Комплексная метрика качества системы от Вана Тарпа."
+        "description": "Метрика качества системы (Ван Тарп). Учитывает матожидание и кол-во сделок."
     },
     "pnl": {
         "name": "Total PnL (Чистая прибыль)",
         "direction": "maximize",
-        "description": "Максимизация итоговой чистой прибыли."
+        "description": "Абсолютная чистая прибыль в валюте депозита."
     },
     "win_rate": {
-        "name": "Win Rate (Процент прибыльных сделок)",
+        "name": "Win Rate (% прибыльных)",
         "direction": "maximize",
-        "description": "Максимизация доли прибыльных сделок."
+        "description": "Процент прибыльных сделок. Важен для психологии трейдера."
     },
     "max_drawdown": {
         "name": "Max Drawdown (Макс. просадка)",
         "direction": "minimize",
-        "description": "Минимизация максимальной просадки капитала."
+        "description": "Максимальное падение капитала в процентах от пика."
     },
-    # КАСТОМНАЯ МЕТРИКА
+    # Экспериментальные / Кастомные метрики
     "custom_metric": {
         "name": "Custom (PF * WR / MDD)",
         "direction": "maximize",
-        "description": "Наша уникальная функция: (Profit Factor * Win Rate) / Max Drawdown."
+        "description": "Комплексная метрика: баланс между прибыльностью, точностью и безопасностью."
     }
 }

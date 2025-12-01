@@ -1,3 +1,12 @@
+"""
+Модуль генерации Excel-отчетов.
+
+Отвечает за создание подробных таблиц с результатами пакетных тестов (Batch Backtest).
+Генерирует файл `.xlsx` с двумя листами:
+1.  **Сводка**: Общие показатели (средний PnL, лучший/худший инструмент).
+2.  **Детализация**: Полная таблица по всем инструментам с сортировкой и цветовой разметкой.
+"""
+
 import pandas as pd
 import numpy as np
 from datetime import datetime
@@ -9,7 +18,18 @@ logger = logging.getLogger(__name__)
 
 class ExcelReportGenerator:
     """
-    Генерирует детальные отчеты по результатам пакетного тестирования в формате Excel.
+    Генератор отчетов в формате Excel (XLSX).
+
+    Использует библиотеку `xlsxwriter` для создания форматированных таблиц
+    с условным форматированием (цветовые шкалы для PnL).
+
+    Attributes:
+        results_df (pd.DataFrame): Таблица с метриками по каждому инструменту.
+        strategy_name (str): Имя стратегии (для заголовка).
+        interval (str): Таймфрейм (для заголовка).
+        risk_manager_type (str): Тип РМ (для заголовка).
+        strategy_params (Dict): Параметры стратегии (для сохранения конфига в отчет).
+        rm_params (Dict): Параметры РМ (для сохранения конфига).
     """
 
     def __init__(self,
@@ -19,6 +39,20 @@ class ExcelReportGenerator:
                  risk_manager_type: str,
                  strategy_params: Optional[Dict[str, Any]] = None,
                  rm_params: Optional[Dict[str, Any]] = None):
+        """
+        Инициализирует генератор.
+
+        Args:
+            results_df (pd.DataFrame): DataFrame с результатами тестов.
+            strategy_name (str): Название стратегии.
+            interval (str): Таймфрейм.
+            risk_manager_type (str): Название риск-менеджера.
+            strategy_params (Optional[Dict]): Словарь параметров стратегии.
+            rm_params (Optional[Dict]): Словарь параметров риск-менеджера.
+
+        Raises:
+            ValueError: Если передан пустой DataFrame результатов.
+        """
         if results_df.empty:
             raise ValueError("DataFrame с результатами для Excel-отчета не может быть пустым.")
 
@@ -30,15 +64,21 @@ class ExcelReportGenerator:
         self.rm_params = rm_params or {}
 
     def _calculate_summary_metrics(self) -> pd.DataFrame:
-        """Рассчитывает сводные метрики по всему портфелю инструментов."""
+        """
+        Рассчитывает агрегированные метрики по всему портфелю инструментов.
 
-        # Фильтруем бесконечные значения для корректного расчета среднего
+        Returns:
+            pd.DataFrame: Таблица "Параметр - Значение" для листа "Сводка".
+        """
+        # Фильтруем бесконечные значения PF для корректного среднего
         finite_pf = self.results_df[np.isfinite(self.results_df['profit_factor'])]['profit_factor']
         avg_profit_factor = finite_pf.mean() if not finite_pf.empty else 0.0
 
-        # Находим лучший и худший инструменты
-        best_instrument = self.results_df.loc[self.results_df['pnl_pct'].idxmax()]
-        worst_instrument = self.results_df.loc[self.results_df['pnl_pct'].idxmin()]
+        # Находим экстремумы
+        best_idx = self.results_df['pnl_pct'].idxmax()
+        worst_idx = self.results_df['pnl_pct'].idxmin()
+        best_instrument = self.results_df.loc[best_idx]
+        worst_instrument = self.results_df.loc[worst_idx]
 
         summary_data = {
             "Параметр": [
@@ -61,7 +101,7 @@ class ExcelReportGenerator:
             "Значение": [
                 len(self.results_df),
                 "---",
-                self.results_df['pnl_abs'].sum(),  # Сумма денег со всех ботов
+                self.results_df['pnl_abs'].sum(),
                 self.results_df['pnl_pct'].mean(),
                 self.results_df['pnl_bh_pct'].mean(),
                 "---",
@@ -79,19 +119,27 @@ class ExcelReportGenerator:
         return pd.DataFrame(summary_data)
 
     def generate(self, output_path: str):
-        """Создает и сохраняет Excel-отчет с двумя листами."""
+        """
+        Создает .xlsx файл отчета.
+
+        Args:
+            output_path (str): Полный путь к выходному файлу.
+        """
         try:
+            # Используем движок xlsxwriter для расширенного форматирования
             with pd.ExcelWriter(output_path, engine='xlsxwriter') as writer:
                 workbook = writer.book
 
-                # --- Стили ---
+                # --- Определение стилей ---
                 header_format = workbook.add_format({'bold': True, 'font_size': 14, 'bg_color': '#DDEBF7', 'border': 1})
                 subheader_format = workbook.add_format({'bold': True, 'bg_color': '#F2F2F2', 'border': 1})
+
+                # Форматы чисел
                 default_format = workbook.add_format({'num_format': '#,##0.00'})
                 percent_format = workbook.add_format({'num_format': '0.00"%"'})
                 int_format = workbook.add_format({'num_format': '0'})
 
-                # Стили для условного форматирования (Зеленый / Красный текст)
+                # Цвета для условного форматирования (Зеленый / Красный)
                 green_fmt = workbook.add_format({'bg_color': '#C6EFCE', 'font_color': '#006100'})
                 red_fmt = workbook.add_format({'bg_color': '#FFC7CE', 'font_color': '#9C0006'})
 
@@ -101,11 +149,12 @@ class ExcelReportGenerator:
                 summary_df = self._calculate_summary_metrics()
                 summary_sheet = workbook.add_worksheet('Сводка')
 
+                # Заголовки
                 summary_sheet.write('A1', f"Сводный отчет: {self.strategy_name}", header_format)
                 summary_sheet.merge_range('A2:C2', f"Интервал: {self.interval} | RM: {self.risk_manager_type}")
                 summary_sheet.merge_range('A3:C3', f"Дата: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
-                # Параметры запуска
+                # Вывод параметров запуска
                 curr_row = 5
                 summary_sheet.write(f'A{curr_row}', "Параметры стратегии:", subheader_format)
                 for key, val in self.strategy_params.items():
@@ -120,14 +169,14 @@ class ExcelReportGenerator:
                     summary_sheet.write(curr_row, 2, str(val))
                     curr_row += 1
 
-                # Таблица метрик
+                # Вывод таблицы метрик
                 curr_row += 2
                 summary_sheet.write(f'A{curr_row}', "Ключевые показатели", subheader_format)
 
-                # Пишем таблицу сводки вручную или через pandas (через pandas проще)
+                # Записываем данные через Pandas, но без заголовков (они уже есть в DF)
                 summary_df.to_excel(writer, sheet_name='Сводка', index=False, startrow=curr_row, header=False)
 
-                # Форматирование колонок сводки
+                # Настройка ширины колонок
                 summary_sheet.set_column('A:A', 35)
                 summary_sheet.set_column('B:C', 20)
 
@@ -135,16 +184,14 @@ class ExcelReportGenerator:
                 # ЛИСТ 2: ДЕТАЛИЗАЦИЯ (Detailed)
                 # ==========================================
 
-                # 1. Подготовка данных
                 df_export = self.results_df.copy()
 
-                # Добавляем полезную метрику: Средний PnL на сделку
-                # (защита от деления на ноль)
+                # Добавляем расчетную метрику для анализа
                 df_export['avg_trade_pnl'] = df_export.apply(
                     lambda x: x['pnl_abs'] / x['total_trades'] if x['total_trades'] > 0 else 0, axis=1
                 )
 
-                # Переименование для красоты
+                # Маппинг имен колонок (технические -> читаемые)
                 rename_map = {
                     'instrument': 'Инструмент',
                     'pnl_pct': 'PnL (%)',
@@ -160,48 +207,47 @@ class ExcelReportGenerator:
                 }
                 df_export.rename(columns=rename_map, inplace=True)
 
-                # 2. ЖЕСТКИЙ ПОРЯДОК КОЛОНОК (Инструмент - ПЕРВЫЙ)
+                # Определяем порядок колонок
                 cols_order = [
                     'Инструмент',
                     'PnL (%)', 'PnL (абс.)', 'B&H (%)',
                     'Ср. PnL сделки', 'Сделок', 'Win Rate', 'PF', 'Max DD (%)',
                     'Sharpe', 'Calmar'
                 ]
-                # Оставляем только те, что есть в наличии (на всякий случай)
                 final_cols = [c for c in cols_order if c in df_export.columns]
                 df_export = df_export[final_cols]
 
-                # 3. Сортировка по PnL % (от лучших к худшим)
+                # Сортировка: лучшие результаты сверху
                 df_export.sort_values(by='PnL (%)', ascending=False, inplace=True)
 
-                # 4. Запись в Excel
+                # Запись на лист
                 df_export.to_excel(writer, sheet_name='Детализация', index=False)
                 details_sheet = writer.sheets['Детализация']
 
-                # 5. Форматирование колонок
-                # Заголовки
+                # Форматирование заголовков
                 for col_num, value in enumerate(df_export.columns.values):
                     details_sheet.write(0, col_num, value, subheader_format)
 
-                # Ширина
+                # Настройка ширины и формата данных колонок
                 details_sheet.set_column('A:A', 15, None)  # Инструмент
-                details_sheet.set_column('B:E', 12, default_format)  # PnL и деньги
-                details_sheet.set_column('F:F', 8, int_format)  # Сделки
-                details_sheet.set_column('G:G', 10, percent_format)  # WinRate
-                details_sheet.set_column('H:K', 10, default_format)  # PF, DD, Ratios
+                details_sheet.set_column('B:E', 12, default_format)  # Деньги и PnL
+                details_sheet.set_column('F:F', 8, int_format)  # Кол-во сделок
+                details_sheet.set_column('G:G', 10, percent_format)  # Win Rate
+                details_sheet.set_column('H:K', 10, default_format)  # Коэффициенты
 
-                # Спец. форматы для процентов
-                # PnL % (Col B, индекс 1) и B&H % (Col D, индекс 3) и Max DD (Col I, индекс 8)
+                # Переопределение формата процентов для конкретных колонок
+                # PnL % (B), B&H % (D), Max DD (I)
                 details_sheet.set_column(1, 1, 12, percent_format)
                 details_sheet.set_column(3, 3, 12, percent_format)
-                details_sheet.set_column(6, 6, 10, percent_format)  # Winrate
+                details_sheet.set_column(6, 6, 10, percent_format)  # Win Rate
                 details_sheet.set_column(8, 8, 10, percent_format)  # Max DD
 
-                # Условное форматирование (Зеленый/Красный) для PnL % (Колонка B)
-                # B2:B1000
-                details_sheet.conditional_format(1, 1, len(df_export), 1,
+                # Условное форматирование для колонки PnL % (Зеленый > 0, Красный < 0)
+                # Применяем ко всем строкам данных (начиная со 2-й строки Excel, индекс 1)
+                last_row = len(df_export)
+                details_sheet.conditional_format(1, 1, last_row, 1,
                                                  {'type': 'cell', 'criteria': '>', 'value': 0, 'format': green_fmt})
-                details_sheet.conditional_format(1, 1, len(df_export), 1,
+                details_sheet.conditional_format(1, 1, last_row, 1,
                                                  {'type': 'cell', 'criteria': '<', 'value': 0, 'format': red_fmt})
 
             logger.info(f"Excel-отчет успешно сохранен в: {output_path}")

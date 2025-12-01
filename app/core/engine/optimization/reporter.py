@@ -1,8 +1,19 @@
+"""
+Модуль генерации отчетов оптимизации (WFO Reporter).
+
+Отвечает за сохранение и визуализацию результатов процесса Walk-Forward Optimization.
+Генерирует комплексный пакет документов:
+1.  **CSV-сводка**: Таблица с лучшими параметрами и метриками для каждого шага WFO.
+2.  **HTML-графики**: Интерактивные визуализации Optuna (история поиска, фронт Парето) для последнего шага.
+3.  **Итоговый график**: Кривая капитала на OOS-данных (склеенная из всех шагов),
+    показывающая, как стратегия вела бы себя в реальности.
+"""
+
 import os
 import pandas as pd
 import logging
 from datetime import datetime
-from typing import List, Dict
+from typing import List, Dict, Optional, Tuple, Callable
 
 import optuna
 
@@ -19,21 +30,33 @@ logger = logging.getLogger(__name__)
 
 class OptimizationReporter:
     """
-    Собирает результаты всех шагов WFO и генерирует итоговые отчеты:
-    - CSV-файл со сводкой по каждому шагу.
-    - HTML-визуализации от Optuna для последнего шага.
-    - Стандартный графический и консольный отчет по совокупным OOS-сделкам.
+    Генератор отчетов по результатам оптимизации.
+
+    Агрегирует данные из всех шагов WFO и использует различные инструменты
+    визуализации (Pandas, Plotly через Optuna, Matplotlib через AnalysisSession)
+    для создания финальных артефактов.
+
+    Attributes:
+        settings (Dict): Настройки запуска оптимизации.
+        all_oos_trades (List[pd.DataFrame]): Список таблиц сделок с каждого OOS-периода.
+        step_results (List[Dict]): Метаданные лучших решений на каждом шаге.
+        last_study (optuna.Study): Объект исследования Optuna с последнего шага (для детальных графиков).
+        base_filepath (str): Базовый путь и имя файла для сохранения отчетов.
     """
 
-    def __init__(self, settings: Dict, all_oos_trades: List[pd.DataFrame],
-                 step_results: List[Dict], last_study: optuna.Study):
+    def __init__(self,
+                 settings: Dict,
+                 all_oos_trades: List[pd.DataFrame],
+                 step_results: List[Dict],
+                 last_study: Optional[optuna.Study]):
         """
-        Инициализирует генератор отчетов.
+        Инициализирует репортер.
 
-        :param settings: Общие настройки оптимизации.
-        :param all_oos_trades: Список DataFrame'ов, где каждый df - сделки одного OOS-шага.
-        :param step_results: Список словарей со сводной информацией по каждому шагу.
-        :param last_study: Объект Study от Optuna, соответствующий последнему шагу WFO.
+        Args:
+            settings (Dict): Конфигурация.
+            all_oos_trades (List[pd.DataFrame]): Сделки OOS.
+            step_results (List[Dict]): Результаты шагов.
+            last_study (Optional[optuna.Study]): Study последнего шага.
         """
         self.settings = settings
         self.all_oos_trades = all_oos_trades
@@ -42,12 +65,17 @@ class OptimizationReporter:
         self.base_filepath = self._create_base_filepath()
 
     def _create_base_filepath(self) -> str:
-        """Создает базовый путь и имя файла для всех отчетов этого запуска (без расширения)."""
+        """
+        Формирует уникальное имя файла на основе времени и параметров.
+
+        Returns:
+            str: Полный путь без расширения (например, 'reports/opt/20231025_WFO_SMA_BTCUSDT').
+        """
         report_dir = PATH_CONFIG["REPORTS_OPTIMIZATION_DIR"]
         os.makedirs(report_dir, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-        # Определяем, это портфель или один инструмент
+        # Определяем имя цели (тикер или "Portfolio_N")
         instrument_name = (
             f"Portfolio_{len(self.settings['instrument_list'])}"
             if "portfolio_path" in self.settings and self.settings["portfolio_path"]
@@ -58,27 +86,43 @@ class OptimizationReporter:
         return os.path.join(report_dir, filename)
 
     def _create_hover_text(self, trials: List[optuna.trial.FrozenTrial]) -> List[str]:
-        """Создает текст для всплывающих подсказок в графиках Optuna."""
+        """
+        Генерирует HTML-текст для всплывающих подсказок на графиках Plotly.
+        Показывает значения всех параметров при наведении на точку.
+        """
         return ["<br>".join([f"&nbsp;&nbsp;<b>{k}</b>: {v}" for k, v in t.params.items()]) for t in trials]
 
-    def _get_plot_targets(self) -> tuple:
-        """Возвращает цель и имя цели для графиков Optuna."""
-        is_multi = len(self.last_study.directions) > 1
+    def _get_plot_targets(self) -> Tuple[Optional[Callable], str]:
+        """
+        Определяет целевую метрику для оси Y на графиках истории оптимизации.
+
+        Returns:
+            Tuple[Callable, str]: Функция извлечения значения и имя метрики.
+        """
+        # Если оптимизация многокритериальная, берем первую метрику как основную для графика
+        is_multi = self.last_study and len(self.last_study.directions) > 1
+
         if is_multi:
-            # Для мульти-оптимизации берем первую метрику как основную для некоторых графиков
-            return lambda t: t.values[0], METRIC_CONFIG[self.settings["metrics"][0]]['name']
+            metric_key = self.settings["metrics"][0]
+            metric_name = METRIC_CONFIG[metric_key]['name']
+            return lambda t: t.values[0], metric_name
+
         return None, "Objective Value"
 
     def _save_optuna_visualizations(self):
-        """Сохраняет HTML-отчеты от Optuna для последнего шага WFO."""
+        """
+        Генерирует и сохраняет интерактивные HTML-отчеты от Optuna.
+        Строит графики только для последнего шага WFO (так как хранить все study слишком дорого).
+        """
         if not self.last_study:
             return
+
         logger.info("Сохранение HTML-отчетов Optuna для последнего шага WFO...")
 
         target_func, target_name = self._get_plot_targets()
 
         try:
-            # График фронта Парето (только для мульти-оптимизации)
+            # 1. График фронта Парето (только для мульти-оптимизации)
             if len(self.last_study.directions) > 1:
                 fig = optuna.visualization.plot_pareto_front(
                     self.last_study,
@@ -86,10 +130,11 @@ class OptimizationReporter:
                 )
                 fig.write_html(f"{self.base_filepath}_last_step_pareto_front.html")
 
-            # График истории оптимизации
+            # 2. График истории оптимизации (сходимость)
             fig_history = optuna.visualization.plot_optimization_history(
                 self.last_study, target=target_func, target_name=target_name
             )
+            # Добавляем кастомные подсказки с параметрами
             if fig_history.data:
                 fig_history.data[0].customdata = self._create_hover_text(self.last_study.trials)
                 fig_history.data[0].hovertemplate = (
@@ -98,43 +143,60 @@ class OptimizationReporter:
                 )
             fig_history.write_html(f"{self.base_filepath}_last_step_history.html")
 
-            # График важности параметров
-            if len(self.last_study.get_trials(deepcopy=False, states=[optuna.trial.TrialState.COMPLETE])) >= 2:
-                fig_importance = optuna.visualization.plot_param_importances(
-                    self.last_study, target=target_func, target_name=target_name
-                )
-                fig_importance.write_html(f"{self.base_filepath}_last_step_importance.html")
+            # 3. График важности параметров (Feature Importance)
+            # Требует минимум 2 завершенных триала и 2 параметра
+            completed_trials = self.last_study.get_trials(deepcopy=False, states=[optuna.trial.TrialState.COMPLETE])
+            n_params = len(completed_trials[0].params) if completed_trials else 0
+
+            if len(completed_trials) >= 2 and n_params > 1:
+                try:
+                    fig_importance = optuna.visualization.plot_param_importances(
+                        self.last_study, target=target_func, target_name=target_name
+                    )
+                    fig_importance.write_html(f"{self.base_filepath}_last_step_importance.html")
+                except Exception as e:
+                    logger.warning(f"Не удалось построить график важности параметров: {e}")
 
             logger.info("HTML-отчеты Optuna успешно сохранены.")
+
         except (ValueError, ImportError) as e:
-            logger.error(f"Не удалось сохранить HTML-отчеты Optuna: {e}")
+            logger.error(f"Ошибка при генерации отчетов Optuna: {e}")
 
     def generate_all_reports(self):
-        """Главный метод, запускающий генерацию всех отчетов."""
+        """
+        Запускает процесс генерации всех типов отчетов.
+        """
         if not self.all_oos_trades:
             logger.error("Нет сделок на OOS-данных. Отчеты не будут сгенерированы.")
             return
 
         logger.info("\n--- Генерация итоговых отчетов WFO ---")
 
-        # 1. Сохраняем сводку по шагам
+        # 1. Сохраняем таблицу с параметрами каждого шага
         pd.DataFrame(self.step_results).to_csv(f"{self.base_filepath}_steps_summary.csv", index=False)
         logger.info(f"Сводка по шагам WFO сохранена в: {self.base_filepath}_steps_summary.csv")
 
         # 2. Сохраняем визуализации Optuna
         self._save_optuna_visualizations()
 
-        # 3. Собираем все OOS-сделки и запускаем стандартный анализ
+        # 3. Генерируем стандартный отчет (График эквити OOS)
+        # Склеиваем сделки со всех OOS периодов в один DataFrame
         final_trades_df = pd.concat(self.all_oos_trades, ignore_index=True)
 
-        # Для Buy&Hold бенчмарка нам нужен полный набор данных по одному из инструментов
+        # Для корректного бенчмарка (Buy&Hold) нам нужны котировки за ВЕСЬ период.
+        # Берем данные первого инструмента из списка (как прокси для рынка).
+        # В идеале для портфеля нужно строить синтетический индекс, но пока берем первый актив.
         instrument_for_bh = self.settings["instrument_list"][0]
+
         data_handler_bh = HistoricLocalDataHandler(
-            exchange=self.settings["exchange"], instrument_id=instrument_for_bh,
-            interval_str=self.settings["interval"], data_path=PATH_CONFIG["DATA_DIR"]
+            exchange=self.settings["exchange"],
+            instrument_id=instrument_for_bh,
+            interval_str=self.settings["interval"],
+            data_path=PATH_CONFIG["DATA_DIR"]
         )
         full_bh_dataset = data_handler_bh.load_raw_data()
 
+        # Запускаем стандартную сессию анализа
         analysis = AnalysisSession(
             trades_df=final_trades_df,
             historical_data=full_bh_dataset,
@@ -145,6 +207,7 @@ class OptimizationReporter:
             strategy_name=self.settings["strategy"]
         )
 
+        # Сохраняем финальный график и консольный отчет
         analysis.generate_all_reports(
             base_filename=os.path.basename(self.base_filepath),
             report_dir=PATH_CONFIG["REPORTS_OPTIMIZATION_DIR"]

@@ -1,3 +1,12 @@
+"""
+Модуль подготовки данных для оптимизации (Data Preparer).
+
+Отвечает за загрузку исторических данных для списка инструментов и их
+предварительную нарезку на периоды (Periods) согласно настройкам WFO.
+Это позволяет загрузить данные с диска один раз и переиспользовать их
+на каждом шаге оптимизации.
+"""
+
 import pandas as pd
 import logging
 from tqdm import tqdm
@@ -14,33 +23,52 @@ logger = logging.getLogger(__name__)
 
 class WFODataPreparer:
     """
-    Отвечает исключительно за загрузку и нарезку данных для Walk-Forward Optimization.
+    Подготовитель данных для Walk-Forward Optimization.
+
+    Инкапсулирует логику массовой загрузки и валидации данных перед запуском
+    тяжелого процесса оптимизации.
+
+    Attributes:
+        data_settings (Dict[str, Any]): Настройки данных и параметров WFO.
+            Ожидаемые ключи: 'instrument_list', 'exchange', 'interval',
+            'total_periods', 'train_periods', 'test_periods'.
     """
 
     def __init__(self, data_settings: Dict[str, Any]):
         """
-        Инициализирует подготовитель данных с настройками оптимизации.
+        Инициализирует подготовитель.
 
-        :param data_settings: Словарь с настройками, содержащий 'instrument_list',
-                         'exchange', 'interval', 'total_periods', 'train_periods',
-                         'test_periods'.
+        Args:
+            data_settings (Dict[str, Any]): Словарь конфигурации.
         """
         self.data_settings = data_settings
 
     def prepare(self) -> Tuple[Dict[str, List[pd.DataFrame]], int]:
         """
-        Загружает, нарезает данные и проверяет их на достаточность для WFO.
+        Выполняет загрузку и нарезку данных.
 
-        :return: Кортеж, содержащий:
-                 - Словарь, где ключ - инструмент, значение - список его периодов (DataFrame).
-                 - Количество шагов (сдвигов окна), которые можно будет сделать.
-        :raises FileNotFoundError: Если не удалось загрузить данные ни для одного инструмента.
-        :raises ValueError: Если данных недостаточно для проведения WFO с заданными параметрами.
+        Алгоритм:
+        1. Итерируется по списку инструментов (`instrument_list`).
+        2. Загружает историю через `HistoricLocalDataHandler`.
+        3. Разбивает историю на N равных частей (`total_periods`).
+        4. Рассчитывает количество доступных шагов WFO (`num_steps`).
+
+        Returns:
+            Tuple:
+                1. Dict[str, List[pd.DataFrame]]: Словарь {Тикер: [Список_Периодов]}.
+                2. int: Количество возможных шагов WFO (сдвигов окна).
+
+        Raises:
+            FileNotFoundError: Если не удалось загрузить данные ни для одного инструмента.
+            ValueError: Если данных недостаточно для формирования хотя бы одного
+                окна обучения и теста (Train + Test > Total).
         """
         logger.info("--- Предварительная загрузка и нарезка данных ---")
+
         all_instrument_periods = {}
         instrument_list = self.data_settings["instrument_list"]
 
+        # Используем tqdm для отображения прогресса загрузки
         for instrument in tqdm(instrument_list, desc="Подготовка данных"):
             data_handler = HistoricLocalDataHandler(
                 exchange=self.data_settings["exchange"],
@@ -48,12 +76,14 @@ class WFODataPreparer:
                 interval_str=self.data_settings["interval"],
                 data_path=PATH_CONFIG["DATA_DIR"]
             )
+
             full_dataset = data_handler.load_raw_data()
+
             if full_dataset.empty:
                 logger.warning(f"Не удалось загрузить данные для {instrument}. Пропускаем.")
                 continue
 
-            # Делегируем нарезку функции из splitter.py
+            # Нарезка данных на равные части
             all_instrument_periods[instrument] = split_data_by_periods(
                 full_dataset, self.data_settings["total_periods"]
             )
@@ -61,8 +91,11 @@ class WFODataPreparer:
         if not all_instrument_periods:
             raise FileNotFoundError("Не удалось загрузить данные ни для одного инструмента из списка.")
 
-        # Проверяем достаточность данных на примере первого инструмента
+        # Расчет количества шагов на примере первого успешно загруженного инструмента.
+        # Предполагается, что разбиение по количеству частей дает одинаковое
+        # число периодов для всех инструментов (total_periods).
         first_instrument_periods = next(iter(all_instrument_periods.values()))
+
         num_steps = (
                 len(first_instrument_periods)
                 - self.data_settings["train_periods"]

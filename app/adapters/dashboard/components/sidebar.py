@@ -1,39 +1,42 @@
 """
-Модуль для отрисовки боковой панели (sidebar) и фильтрации данных в дашборде.
+Компонент боковой панели (Sidebar Filters).
 
-Этот компонент отвечает за:
-1. Отображение всех доступных фильтров (Биржа, Стратегия, Инструмент, Риск-менеджер).
-2. Получение выбора пользователя из этих фильтров.
-3. Применение фильтров к исходному DataFrame.
-4. Возврат отфильтрованного DataFrame для дальнейшего отображения.
+Этот модуль отвечает за отрисовку элементов управления в левой панели дашборда Streamlit.
+Он позволяет пользователю интерактивно фильтровать массив результатов бэктестов
+по ключевым измерениям: Биржа, Стратегия, Инструмент, Риск-менеджмент.
 """
 
 import streamlit as st
 import pandas as pd
 
+
 def render_sidebar(summary_df: pd.DataFrame) -> pd.DataFrame:
     """
-    Отрисовывает боковую панель с фильтрами и возвращает отфильтрованный DataFrame.
+    Отрисовывает фильтры в сайдбаре и применяет их к данным.
+
+    Создает виджеты `multiselect` для каждого ключевого поля.
+    По умолчанию выбираются все доступные опции.
 
     Args:
-        summary_df (pd.DataFrame): Полный, нефильтрованный DataFrame со сводными
-                                   результатами всех бэктестов.
+        summary_df (pd.DataFrame): Полный DataFrame со сводными результатами
+                                   всех загруженных бэктестов.
 
     Returns:
-        pd.DataFrame: Отфильтрованный DataFrame на основе выбора пользователя в сайдбаре.
+        pd.DataFrame: Новый DataFrame, содержащий только строки, соответствующие
+                      выбранным критериям фильтрации.
     """
     st.sidebar.header("Фильтры")
 
-    # --- Фильтр по Биржам ---
-    # Получаем уникальные значения, сортируем для предсказуемого порядка
+    # --- 1. Фильтр по Биржам ---
+    # Сортировка опций нужна для детерминированного порядка в UI
     exchange_options = sorted(summary_df["Exchange"].unique())
     selected_exchanges = st.sidebar.multiselect(
         "Биржи",
         options=exchange_options,
-        default=exchange_options  # По умолчанию выбраны все
+        default=exchange_options  # По умолчанию выбрано всё
     )
 
-    # --- Фильтр по Стратегиям ---
+    # --- 2. Фильтр по Стратегиям ---
     strategy_options = sorted(summary_df["Strategy"].unique())
     selected_strategies = st.sidebar.multiselect(
         "Стратегии",
@@ -41,7 +44,7 @@ def render_sidebar(summary_df: pd.DataFrame) -> pd.DataFrame:
         default=strategy_options
     )
 
-    # --- Фильтр по Инструментам ---
+    # --- 3. Фильтр по Инструментам ---
     instrument_options = sorted(summary_df["Instrument"].unique())
     selected_instruments = st.sidebar.multiselect(
         "Инструменты",
@@ -49,7 +52,7 @@ def render_sidebar(summary_df: pd.DataFrame) -> pd.DataFrame:
         default=instrument_options
     )
 
-    # --- Фильтр по Риск-менеджерам ---
+    # --- 4. Фильтр по Риск-менеджерам ---
     rm_options = sorted(summary_df["Risk Manager"].unique())
     selected_rms = st.sidebar.multiselect(
         "Риск-менеджеры",
@@ -57,7 +60,8 @@ def render_sidebar(summary_df: pd.DataFrame) -> pd.DataFrame:
         default=rm_options
     )
 
-    # Используем .copy(), чтобы избежать SettingWithCopyWarning от Pandas в будущем
+    # --- Применение фильтров ---
+    # Логическое И (&) между условиями: строка должна удовлетворять всем фильтрам
     filtered_df = summary_df[
         (summary_df["Exchange"].isin(selected_exchanges)) &
         (summary_df["Strategy"].isin(selected_strategies)) &

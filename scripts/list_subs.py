@@ -1,48 +1,83 @@
-import sqlite3
+"""
+Скрипт для просмотра списка подписчиков.
+
+Выводит в консоль сводную таблицу всех пользователей, подписанных на
+телеграм-ботов системы. Использует Pandas для форматирования вывода.
+
+Запуск:
+    python scripts/list_subs.py
+"""
+
+import asyncio
 import sys
 import os
 import pandas as pd
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
-# Добавляем корень проекта в путь
+# Добавляем корень проекта в путь поиска модулей
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from app.shared.config import config
+
+from app.infrastructure.database.session import async_session_factory
+from app.infrastructure.database.models import TelegramSubscriber
 
 
-def main():
-    db_path = config.DB_PATH
-    if not db_path.exists():
-        print(f"❌ База данных не найдена: {db_path}")
-        return
-
-    con = sqlite3.connect(db_path)
-
-    print(f"📂 Чтение базы: {db_path}\n")
-
-    query = """
-    SELECT 
-        b.name as bot_name,
-        t.username,
-        t.first_name,
-        t.chat_id,
-        t.is_active,
-        t.created_at
-    FROM telegram_subscribers t
-    JOIN bot_instances b ON t.bot_id = b.id
+async def main() -> None:
     """
+    Асинхронная точка входа.
 
-    try:
-        df = pd.read_sql(query, con)
-        if df.empty:
+    Алгоритм работы:
+    1. Подключается к БД через SQLAlchemy сессию.
+    2. Загружает всех подписчиков вместе со связанными ботами (Eager Loading).
+    3. Преобразует объекты ORM в список словарей для Pandas.
+    4. Выводит отформатированную таблицу в консоль.
+    """
+    print("📂 Чтение базы данных...\n")
+
+    async with async_session_factory() as session:
+        # Формируем запрос с подгрузкой связанной сущности 'bot',
+        # чтобы получить имя бота без дополнительных запросов.
+        query = (
+            select(TelegramSubscriber)
+            .options(selectinload(TelegramSubscriber.bot))
+            .order_by(TelegramSubscriber.created_at.desc())
+        )
+
+        result = await session.execute(query)
+        subscribers = result.scalars().all()
+
+        if not subscribers:
             print("📭 Список подписчиков пуст.")
-        else:
-            # Красивый вывод таблицы
-            print(df.to_string(index=False))
-            print(f"\nВсего подписчиков: {len(df)}")
-    except Exception as e:
-        print(f"Ошибка: {e}")
-    finally:
-        con.close()
+            return
+
+        # Преобразуем объекты SQLAlchemy в плоский список словарей для DataFrame
+        data = []
+        for sub in subscribers:
+            data.append({
+                "Bot Name": sub.bot.name if sub.bot else "Unknown",
+                "Username": sub.username,
+                "First Name": sub.first_name,
+                "Chat ID": sub.chat_id,
+                "Active": "✅" if sub.is_active else "❌",
+                "Created At": sub.created_at.strftime("%Y-%m-%d %H:%M")
+            })
+
+        # Создаем DataFrame для красивой визуализации
+        df = pd.read_json(pd.Series(data).to_json(orient='records'), orient='records')
+
+        # Или более прямой способ, если версия pandas позволяет:
+        # df = pd.DataFrame(data)
+
+        print(df.to_string(index=False))
+        print(f"\nВсего подписчиков: {len(df)}")
 
 
 if __name__ == "__main__":
-    main()
+    # Настройка для Windows
+    if sys.platform == 'win32':
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\nПросмотр завершен.")

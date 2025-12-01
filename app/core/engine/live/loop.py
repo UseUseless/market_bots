@@ -1,175 +1,212 @@
+"""
+Движок исполнения сигналов (Live Signal Engine).
+
+Этот модуль отвечает за управление жизненным циклом торговых стратегий
+в реальном времени. Он реализует паттерн "Orchestrator", который следит
+за конфигурацией в БД и динамически запускает или останавливает стратегии.
+
+Основные задачи:
+1. **Hot Reload:** Автоматическое обновление списка запущенных ботов без перезагрузки.
+2. **Isolation:** Запуск каждой стратегии в отдельной асинхронной задаче (Task).
+3. **Bridge:** Связывание потока данных (Feed), логики стратегии и шины сигналов (Bus).
+4. **Concurrency:** Безопасное выполнение синхронной математики стратегий в ThreadPoolExecutor.
+"""
+
 import asyncio
 import queue
 import logging
-from typing import Dict, Callable, Awaitable
+from typing import Dict, Callable, Awaitable, List
 
 from app.shared.events import SignalEvent
-from app.core.interfaces import IPublisher
+from app.core.interfaces import IPublisher, IDataFeed
+from app.strategies.base_strategy import BaseStrategy
+from app.shared.time_helper import parse_interval_to_timedelta
+from app.shared.config import config
 
 logger = logging.getLogger(__name__)
 
 
 class SignalEngine:
     """
-    Движок с поддержкой Hot Reload.
-    Управляет жизненным циклом стратегий динамически.
+    Асинхронный движок управления стратегиями.
+
+    Хранит реестр активных задач и периодически синхронизирует его
+    с состоянием базы данных.
+
+    Attributes:
+        bus (IPublisher): Шина событий для отправки сигналов.
+        _active_tasks (Dict[int, asyncio.Task]): Карта {config_id: Task}.
+        _running (bool): Флаг работы главного цикла.
     """
 
     def __init__(self, bus: IPublisher):
         self.bus = bus
-        # Словарь: { strategy_config_id : asyncio.Task }
         self._active_tasks: Dict[int, asyncio.Task] = {}
         self._running = False
 
-    async def _strategy_wrapper(self, config_id: int, feed, strategy):
+    async def _strategy_wrapper(self, config_id: int, feed: IDataFeed, strategy: BaseStrategy):
         """
-        Обертка для запуска одной пары.
-        Содержит цикл обработки свечей.
-        """
-        try:
-            # 1. Разогрев
-            # Рассчитываем, сколько дней истории нужно стратегии
-            # Например, если нужно 200 свечей по 5 минут = 1000 минут ~= 0.7 дня.
-            # Берем с запасом (x2), но минимум 1 день.
+        Рабочая обертка (Wrapper) для одной торговой пары.
 
+        Этот метод выполняется как отдельная `asyncio.Task`. Он инкапсулирует
+        весь жизненный цикл одной стратегии: от загрузки истории до обработки стрима.
+
+        Алгоритм:
+        1. **Warm-up:** Рассчитывает необходимую глубину истории и загружает её.
+        2. **Stream:** Запускает WebSocket-подключение в фоне.
+        3. **Loop:** Бесконечно ждет новые свечи, запускает стратегию и отправляет сигналы.
+
+        Args:
+            config_id (int): ID конфигурации из БД (для логирования).
+            feed (IDataFeed): Инициализированный поток данных.
+            strategy (BaseStrategy): Инициализированная стратегия.
+        """
+        stream_task = None
+        try:
+            # --- 1. Разогрев (Warm-up) ---
+            # Рассчитываем, сколько дней истории нужно скачать.
+            # Берем минимальное требование стратегии + запас.
             needed_candles = strategy.min_history_needed + 10
 
-            # Грубый перевод интервалов в минуты
-            interval_mins_map = {
-                "1min": 1, "3min": 3, "5min": 5, "15min": 15, "30min": 30, "1hour": 60, "2hour": 120,
-                "4hour": 240, "6hour": 360, "12hour": 720, "1day": 1440, "1week": 10080, "1month": 40320,
-            }
+            # Используем хелпер для получения timedelta интервала (например, 5 минут)
+            interval_delta = parse_interval_to_timedelta(feed.interval)
 
-            # Получаем множитель, если интервал неизвестен - считаем как 1 мин
-            mins_per_candle = interval_mins_map.get(feed.interval, 1)
+            # Считаем общее время в секундах
+            total_seconds_needed = interval_delta.total_seconds() * needed_candles
 
-            total_minutes_needed = needed_candles * mins_per_candle
-            days_needed = (total_minutes_needed / 1440) * 1.5  # Коэффициент запаса
-
+            # Переводим в дни с коэффициентом запаса 1.5 (на случай выходных/праздников)
+            days_needed = (total_seconds_needed / 86400) * 1.5
             days_to_load = max(1, int(days_needed + 0.9))  # Округляем вверх, минимум 1 день
 
             await feed.warm_up(days=days_to_load)
 
-            # 2. Стрим
+            # --- 2. Запуск Стрима ---
             stream_queue = asyncio.Queue()
             loop = asyncio.get_running_loop()
-            # Стрим запускаем как под-задачу. Если wrapper отменят, стрим тоже умрет.
+
+            # Запускаем WebSocket/gRPC клиент как фоновую задачу.
+            # Если wrapper будет отменен, мы должны будем отменить и эту задачу.
             stream_task = loop.create_task(feed.start_stream(stream_queue, loop))
 
             logger.info(f"✅ [Engine] Started strategy #{config_id}: {strategy.name} on {feed.instrument}")
 
-            # 3. Цикл
+            # --- 3. Главный цикл обработки ---
             while True:
+                # Ждем событие MarketEvent из вебсокета
                 event = await stream_queue.get()
                 candle_data = event.data
 
+                # Обновляем данные в фиде (добавляем в DataFrame)
+                # Возвращает True, если свеча новая (закрылась)
                 is_new = await feed.process_candle(candle_data)
 
                 if is_new:
-                    # Важно: BaseStrategy.on_candle теперь синхронный метод.
-                    # Чтобы не блокировать Event Loop тяжелыми расчетами, запускаем в executor.
-                    loop = asyncio.get_running_loop()
+                    # ВАЖНО: Математика стратегий (pandas, ta-lib) — синхронная и тяжелая.
+                    # Чтобы не блокировать Event Loop (и не тормозить других ботов),
+                    # запускаем расчет стратегии в ThreadPoolExecutor.
                     await loop.run_in_executor(None, strategy.on_candle, feed)
 
-                    # Bridge Sync -> Async
+                    # Bridge: Sync Queue -> Async Bus
+                    # Забираем сигналы из синхронной очереди стратегии и отправляем в асинхронную шину
                     try:
                         while True:
                             signal = strategy.events_queue.get_nowait()
                             if isinstance(signal, SignalEvent):
-                                logger.info(f"🔥 SIGNAL: {signal.direction} {signal.instrument}")
+                                logger.info(f"🔥 SIGNAL: {signal.direction} {signal.instrument} ({strategy.name})")
                                 await self.bus.publish(signal)
                             strategy.events_queue.task_done()
                     except queue.Empty:
                         pass
 
-
         except asyncio.CancelledError:
             logger.info(f"🛑 [Engine] Stopping strategy #{config_id}...")
 
+            # Корректное завершение стрима
             if stream_task and not stream_task.done():
                 stream_task.cancel()
-
                 try:
-                    # Ждем, пока стрим реально закроет соединения
                     await stream_task
-
                 except asyncio.CancelledError:
-                    pass  # Это нормально, мы сами его отменили
+                    pass  # Ожидаемое поведение
             raise
 
         except Exception as e:
             logger.error(f"⚠️ [Engine] Error in strategy #{config_id}: {e}", exc_info=True)
-            await asyncio.sleep(5)  # Пауза перед рестартом при ошибке
+            # Небольшая пауза перед перезапуском (если оркестратор решит перезапустить)
+            await asyncio.sleep(5)
 
     async def run_orchestrator(self,
-                               config_loader_func: Callable[[], Awaitable[list]],
+                               config_loader_func: Callable[[], Awaitable[List]],
                                pair_builder_func: Callable[[any], Awaitable[tuple]]):
         """
-        Главный цикл-менеджер (Watchdog).
+        Главный цикл оркестрации (Watchdog).
+
+        Периодически опрашивает базу данных и синхронизирует список запущенных задач
+        с желаемым состоянием (Hot Reload).
+
+        Args:
+            config_loader_func: Асинхронная функция, возвращающая список активных конфигов из БД.
+            pair_builder_func: Асинхронная фабрика, возвращающая пару (Feed, Strategy).
         """
         self._running = True
-        logger.info("🚀 Signal Engine Orchestrator started (Hot Reload enabled).")
+        # Интервал проверки обновлений в БД (секунды)
+        check_interval = config.LIVE_TRADING_CONFIG.get("LIVE_RECONNECT_DELAY_SECONDS", 10)
+
+        logger.info(f"🚀 Signal Engine Orchestrator started. Check interval: {check_interval}s.")
 
         while self._running:
             try:
-                # --- DEBUG START: Добавили лог ---
-                logger.debug("🔄 [Orchestrator] Checking Database for updates...")
-                # ---------------------------------
-
                 # 1. Получаем актуальный список задач из БД
                 db_configs = await config_loader_func()
-
-                # --- DEBUG START: Смотрим, что пришло из базы ---
-                logger.debug(f"📊 [Orchestrator] Found {len(db_configs)} active configs in DB.")
-                for cfg in db_configs:
-                    logger.debug(f"   -> ID: {cfg.id} | {cfg.instrument} | {cfg.strategy_name}")
-                # ------------------------------------------------
-
                 db_config_map = {cfg.id: cfg for cfg in db_configs}
 
                 current_ids = set(self._active_tasks.keys())
                 target_ids = set(db_config_map.keys())
 
-                logger.debug(f"   -> Running IDs: {current_ids}")
-                logger.debug(f"   -> Target IDs: {target_ids}")
-
-                # 2. Вычисляем разницу
+                # 2. Вычисляем разницу (Set difference)
                 ids_to_add = target_ids - current_ids
                 ids_to_remove = current_ids - target_ids
 
-                if ids_to_add:
-                    logger.info(f"🆕 Finding new strategies to add: {ids_to_add}")
-
-                # 3. Удаляем выключенные
+                # 3. Удаляем выключенные стратегии
                 for cid in ids_to_remove:
+                    logger.info(f"Stopping strategy #{cid} (Removed from DB/Disabled)...")
                     task = self._active_tasks.pop(cid)
                     task.cancel()
+                    # Ждем фактической остановки, чтобы освободить ресурсы
                     try:
                         await task
                     except asyncio.CancelledError:
                         pass
-                    logger.info(f"🗑️ Removed strategy #{cid}")
+                    logger.info(f"🗑️ Strategy #{cid} stopped.")
 
-                # 4. Добавляем новые
+                # 4. Запускаем новые стратегии
                 for cid in ids_to_add:
-                    config = db_config_map[cid]
+                    strat_config = db_config_map[cid]
                     try:
-                        logger.info(f"🛠️ Building strategy #{cid}...")
-                        feed, strategy = await pair_builder_func(config)
+                        logger.info(f"🛠️ Building strategy #{cid} ({strat_config.instrument})...")
+                        feed, strategy = await pair_builder_func(strat_config)
 
+                        # Создаем Task и сохраняем ссылку
                         task = asyncio.create_task(self._strategy_wrapper(cid, feed, strategy))
                         self._active_tasks[cid] = task
-                        logger.info(f"✅ Strategy #{cid} launched successfully.")
                     except Exception as e:
                         logger.error(f"❌ Failed to start strategy #{cid}: {e}", exc_info=True)
 
             except Exception as e:
                 logger.error(f"💥 Orchestrator loop error: {e}", exc_info=True)
 
-            # Пауза
-            await asyncio.sleep(10)
+            # Пауза перед следующей проверкой БД
+            await asyncio.sleep(check_interval)
 
     async def stop(self):
+        """Останавливает оркестратор и все дочерние задачи."""
         self._running = False
+        logger.info("SignalEngine: Stopping all strategies...")
+
         for task in self._active_tasks.values():
             task.cancel()
+
+        if self._active_tasks:
+            await asyncio.gather(*self._active_tasks.values(), return_exceptions=True)
+
+        self._active_tasks.clear()

@@ -1,3 +1,15 @@
+"""
+Модуль сессии анализа (Analysis Session).
+
+Этот класс служит оркестратором для пост-процессинга результатов бэктеста.
+Он объединяет расчет математических метрик и генерацию визуальных отчетов.
+
+Роль в архитектуре:
+После завершения симуляции (`BacktestEngine`), сырые данные (сделки и история цен)
+передаются сюда. Сессия превращает их в человекочитаемые результаты:
+коэффициенты Шарпа, графики доходности и консольные таблицы.
+"""
+
 import pandas as pd
 from typing import Dict, Any, Optional
 
@@ -8,11 +20,22 @@ from app.shared.config import config
 
 EXCHANGE_SPECIFIC_CONFIG = config.EXCHANGE_SPECIFIC_CONFIG
 
+
 class AnalysisSession:
     """
-    Оркестратор для полного цикла анализа одного бэктеста.
-    1. Рассчитывает все необходимые метрики для портфеля и бенчмарка.
-    2. Генерирует все необходимые отчеты (графические, консольные и т.д.).
+    Контроллер аналитической сессии.
+
+    Выполняет следующие задачи при инициализации:
+    1.  Рассчитывает метрики портфеля (Portfolio Metrics).
+    2.  Рассчитывает метрики бенчмарка Buy & Hold (Benchmark Metrics).
+    3.  Синхронизирует кривые капитала по времени для построения графиков.
+
+    Attributes:
+        portfolio_metrics (Dict[str, Any]): Результаты расчета для стратегии.
+        benchmark_metrics (Dict[str, Any]): Результаты расчета для Buy & Hold.
+        portfolio_equity_curve (pd.Series): Временной ряд капитала стратегии (индекс - datetime).
+        benchmark_equity_curve (pd.Series): Временной ряд капитала бенчмарка (индекс - datetime).
+        metadata (Dict[str, str]): Контекстная информация (биржа, тикер, имя стратегии).
     """
 
     def __init__(self,
@@ -24,21 +47,22 @@ class AnalysisSession:
                  risk_manager_type: str,
                  strategy_name: str):
         """
-        Инициализирует сессию анализа, сразу же производя все необходимые расчеты.
+        Инициализирует сессию и запускает расчеты.
 
-        :param trades_df: DataFrame с закрытыми сделками.
-        :param historical_data: DataFrame с историческими данными (OHLCV).
-        :param initial_capital: Начальный капитал.
-        :param exchange: Название биржи.
-        :param interval: Таймфрейм.
-        :param risk_manager_type: Тип используемого риск-менеджера.
-        :param strategy_name: Имя стратегии.
+        Args:
+            trades_df (pd.DataFrame): DataFrame со списком закрытых сделок.
+            historical_data (pd.DataFrame): История свечей (OHLCV) за период теста.
+            initial_capital (float): Стартовый депозит.
+            exchange (str): Название биржи.
+            interval (str): Рабочий таймфрейм.
+            risk_manager_type (str): Имя использованного риск-менеджера.
+            strategy_name (str): Имя стратегии.
         """
         self.trades_df = trades_df
         self.historical_data = historical_data
         self.initial_capital = initial_capital
 
-        # Сохраняем метаданные для передачи в отчеты
+        # Сохраняем метаданные для заголовков отчетов
         self.metadata = {
             "exchange": exchange,
             "interval": interval,
@@ -46,37 +70,36 @@ class AnalysisSession:
             "strategy_name": strategy_name
         }
 
-        # --- Шаг 1: Расчет метрик ---
+        # Определяем коэффициент аннуализации (например, 252 дня для акций, 365 для крипты)
         annual_factor = EXCHANGE_SPECIFIC_CONFIG.get(exchange, {}).get("SHARPE_ANNUALIZATION_FACTOR", 252)
 
-        # 1.1 Рассчитываем метрики по сделкам нашей стратегии
+        # --- 1. Расчет метрик (Portfolio & Benchmark) ---
         portfolio_calc = PortfolioMetricsCalculator(trades_df, initial_capital, annual_factor)
         self.portfolio_metrics: Dict[str, Any] = portfolio_calc.calculate_all()
 
-        # 1.2 Рассчитываем метрики для бенчмарка (Buy & Hold)
         benchmark_calc = BenchmarkMetricsCalculator(historical_data, initial_capital, annual_factor)
         self.benchmark_metrics: Dict[str, Any] = benchmark_calc.calculate_all()
 
-        # --- FIX START: Привязка кривых капитала к ВРЕМЕНИ (Datetime), а не к номеру строки ---
+        # --- 2. Подготовка данных для графиков (Time Alignment) ---
+        # Нам нужно, чтобы кривая капитала имела DatetimeIndex, а не просто номер сделки,
+        # чтобы корректно наложить её на график цены бенчмарка.
 
-        # 1. Исправляем кривую стратегии
+        # 2.1. Кривая стратегии
         if portfolio_calc.is_valid:
-            # Берем таблицу сделок из калькулятора
             temp_trades = portfolio_calc.trades.copy()
-            # Убеждаемся, что время выхода - это datetime
+            # Конвертируем время выхода в datetime (если оно еще не конвертировано)
             temp_trades['exit_timestamp_utc'] = pd.to_datetime(temp_trades['exit_timestamp_utc'])
-            # Устанавливаем время как индекс. Теперь график будет строиться по датам.
+
+            # Устанавливаем время как индекс и берем последнее значение капитала на эту дату
             self.portfolio_equity_curve = temp_trades.set_index('exit_timestamp_utc')['equity_curve']
             self.portfolio_equity_curve = self.portfolio_equity_curve.groupby(level=0).last()
         else:
             self.portfolio_equity_curve = pd.Series()
 
-        # 2. Исправляем кривую бенчмарка
+        # 2.2. Кривая бенчмарка
         if benchmark_calc.is_valid:
-            # Берем рассчитанную кривую
             temp_bench = benchmark_calc.equity_curve.copy()
-            # У бенчмарка индекс сейчас 0, 1, 2... (так как historical_data был сброшен)
-            # Нам нужно взять колонку 'time' из данных бенчмарка и сделать её индексом
+            # У бенчмарка индекс был числовой (0..N), восстанавливаем время из historical_data
             temp_bench.index = pd.to_datetime(benchmark_calc.data['time'])
             self.benchmark_equity_curve = temp_bench.groupby(level=0).last()
         else:
@@ -88,15 +111,16 @@ class AnalysisSession:
                              wfo_results: Optional[Dict[str, float]] = None,
                              console_output: bool = True):
         """
-        Генерирует и сохраняет все доступные отчеты на основе рассчитанных метрик.
+        Создает и сохраняет отчеты.
 
-        :param base_filename: Базовое имя файла для отчетов (без расширения).
-        :param report_dir: Директория для сохранения отчетов.
-        :param wfo_results: Опциональный словарь с OOS-результатами WFO для отображения.
-        :param console_output: Флаг, управляющий выводом отчета в консоль.
+        Args:
+            base_filename (str): Имя файла (без расширения), которое будет использовано для отчетов.
+            report_dir (str): Путь к директории для сохранения файлов.
+            wfo_results (Optional[Dict]): Результаты Walk-Forward Optimization (если применимо),
+                                          чтобы добавить их текстом на график.
+            console_output (bool): Если True, выводит краткую сводку в терминал.
         """
-
-        # --- Генерация графического отчета (.png) ---
+        # 1. Графический отчет (PNG)
         plot_gen = PlotReportGenerator(
             portfolio_metrics=self.portfolio_metrics,
             benchmark_metrics=self.benchmark_metrics,
@@ -109,7 +133,7 @@ class AnalysisSession:
         )
         plot_gen.generate(wfo_results=wfo_results)
 
-        # --- Генерация консольного отчета ---
+        # 2. Консольный отчет (Rich Table)
         if console_output:
             console_gen = ConsoleReportGenerator(
                 portfolio_metrics=self.portfolio_metrics,

@@ -1,7 +1,15 @@
+"""
+Репозитории для доступа к данным (Data Access Layer).
+
+Этот модуль реализует паттерн Repository, предоставляя абстракцию над
+прямыми запросами SQLAlchemy. Бизнес-логика использует эти классы
+для создания, чтения, обновления и удаления записей в БД.
+"""
+
+from typing import List, Optional
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-from typing import List, Optional
 
 from app.core.portfolio.state import PortfolioState
 from app.shared.primitives import TradeDirection, Position
@@ -17,10 +25,24 @@ from app.infrastructure.database.models import (
 
 
 class ConfigRepository:
+    """
+    Репозиторий для управления конфигурациями стратегий и ботов.
+    """
+
     def __init__(self, session: AsyncSession):
         self.session = session
 
     async def create_bot(self, name: str, token: str) -> BotInstance:
+        """
+        Создает нового Телеграм-бота.
+
+        Args:
+            name (str): Уникальное внутреннее имя бота.
+            token (str): API токен от @BotFather.
+
+        Returns:
+            BotInstance: Созданный объект бота.
+        """
         bot = BotInstance(name=name, token=token)
         self.session.add(bot)
         await self.session.commit()
@@ -28,6 +50,15 @@ class ConfigRepository:
         return bot
 
     async def add_strategy_config(self, config_data: dict) -> StrategyConfig:
+        """
+        Добавляет конфигурацию стратегии.
+
+        Args:
+            config_data (dict): Словарь с параметрами (instrument, exchange, etc.).
+
+        Returns:
+            StrategyConfig: Созданная конфигурация.
+        """
         config = StrategyConfig(**config_data)
         self.session.add(config)
         await self.session.commit()
@@ -36,9 +67,13 @@ class ConfigRepository:
 
     async def get_active_strategies(self) -> List[StrategyConfig]:
         """
-        Возвращает все активные стратегии для запуска.
-        Использует selectinload для подгрузки связанных данных (бота),
-        чтобы избежать DetachedInstanceError после закрытия сессии.
+        Возвращает список всех активных стратегий, готовых к запуску.
+
+        Использует `selectinload` для жадной загрузки связанного объекта `bot`,
+        чтобы избежать ошибок при доступе к атрибутам бота вне сессии.
+
+        Returns:
+            List[StrategyConfig]: Список активных конфигураций.
         """
         query = (
             select(StrategyConfig)
@@ -50,40 +85,79 @@ class ConfigRepository:
 
 
 class SignalRepository:
+    """
+    Репозиторий для логирования торговых сигналов.
+    """
+
     def __init__(self, session: AsyncSession):
         self.session = session
 
     async def log_signal(self, event):
-        """Сохраняет сигнал в историю."""
+        """
+        Сохраняет событие сигнала в базу данных (append-only).
+
+        Args:
+            event (SignalEvent): Событие сигнала.
+        """
+        # TODO: Добавить поле exchange в SignalEvent для корректного логирования
         signal = SignalLog(
             timestamp=event.timestamp,
-            exchange="unknown", # В будущем добавим в Event поле exchange
+            exchange="unknown",
             instrument=event.instrument,
             strategy_name=event.strategy_id,
             direction=event.direction,
-            price=0.0 # Добавим цену позже
+            price=event.price if event.price else 0.0
         )
         self.session.add(signal)
         await self.session.commit()
 
 
 class BotRepository:
+    """
+    Репозиторий для управления подписчиками и состоянием ботов.
+    """
+
     def __init__(self, session: AsyncSession):
         self.session = session
 
     async def get_all_active_bots(self) -> List[BotInstance]:
-        """Получает токены всех активных ботов для запуска."""
+        """
+        Возвращает список всех включенных ботов.
+
+        Returns:
+            List[BotInstance]: Активные боты.
+        """
         query = select(BotInstance).where(BotInstance.is_active == True)
         result = await self.session.execute(query)
         return result.scalars().all()
 
     async def get_bot_by_token(self, token: str) -> Optional[BotInstance]:
+        """
+        Ищет бота по токену.
+
+        Args:
+            token (str): API токен.
+
+        Returns:
+            Optional[BotInstance]: Найденный бот или None.
+        """
         query = select(BotInstance).where(BotInstance.token == token)
         result = await self.session.execute(query)
         return result.scalar_one_or_none()
 
-    async def register_subscriber(self, bot_id: int, chat_id: int, username: str = None):
-        """Регистрирует пользователя, если его еще нет."""
+    async def register_subscriber(self, bot_id: int, chat_id: int, username: str = None) -> bool:
+        """
+        Регистрирует нового подписчика или активирует старого.
+
+        Args:
+            bot_id (int): ID бота.
+            chat_id (int): Telegram Chat ID пользователя.
+            username (str, optional): Имя пользователя.
+
+        Returns:
+            bool: True, если подписка успешна (новая или восстановленная).
+                  False, если пользователь уже был активен.
+        """
         query = select(TelegramSubscriber).where(
             TelegramSubscriber.bot_id == bot_id,
             TelegramSubscriber.chat_id == chat_id
@@ -102,19 +176,25 @@ class BotRepository:
             await self.session.commit()
             return True  # Вернулся старый
 
-        return False  # Уже был
+        return False  # Уже был активен
 
     async def get_subscribers_for_strategy(self, strategy_config_id: int) -> List[int]:
         """
-        Находим бота, к которому привязана стратегия,
-        и берем всех его активных подписчиков.
+        Возвращает список chat_id всех активных подписчиков, которые должны
+        получать сигналы от данной стратегии (через привязанного бота).
+
+        Args:
+            strategy_config_id (int): ID конфигурации стратегии.
+
+        Returns:
+            List[int]: Список ID чатов.
         """
-        # 1. Находим config
+        # 1. Находим config, чтобы узнать ID бота
         config = await self.session.get(StrategyConfig, strategy_config_id)
         if not config or not config.bot_id:
             return []
 
-        # 2. Берем подписчиков этого бота
+        # 2. Берем всех активных подписчиков этого бота
         query = select(TelegramSubscriber.chat_id).where(
             TelegramSubscriber.bot_id == config.bot_id,
             TelegramSubscriber.is_active == True
@@ -123,7 +203,15 @@ class BotRepository:
         return result.scalars().all()
 
     async def get_all_subscribers_for_bot(self, bot_id: int) -> List[int]:
-        """Возвращает список chat_id всех активных подписчиков этого бота."""
+        """
+        Возвращает список chat_id всех активных подписчиков конкретного бота.
+
+        Args:
+            bot_id (int): ID бота.
+
+        Returns:
+            List[int]: Список ID чатов.
+        """
         query = select(TelegramSubscriber.chat_id).where(
             TelegramSubscriber.bot_id == bot_id,
             TelegramSubscriber.is_active == True
@@ -133,12 +221,26 @@ class BotRepository:
 
 
 class PortfolioRepository(IPortfolioRepository):
+    """
+    Реализация интерфейса сохранения состояния портфеля в БД.
+    Обеспечивает персистентность данных между перезапусками.
+    """
+
     def __init__(self, session: AsyncSession):
         self.session = session
 
     async def save_portfolio_state(self, config_id: int, state: PortfolioState) -> None:
         """
-        Сохраняет состояние: обновляет PortfolioDB и перезаписывает PositionDB.
+        Сохраняет текущее состояние портфеля (баланс + позиции).
+
+        Алгоритм:
+        1. Ищет или создает запись PortfolioDB.
+        2. Обновляет баланс.
+        3. Удаляет старые записи позиций и вставляет новые (полная перезапись списка).
+
+        Args:
+            config_id (int): ID стратегии.
+            state (PortfolioState): Объект состояния из Core-слоя.
         """
         # 1. Ищем существующую запись портфеля
         query = select(PortfolioDB).where(PortfolioDB.strategy_config_id == config_id)
@@ -157,8 +259,7 @@ class PortfolioRepository(IPortfolioRepository):
         portfolio_db.current_capital = state.current_capital
 
         # 4. Сохраняем позиции (стратегия: удалить старые -> записать текущие)
-        # Если портфель уже существовал, у него есть ID, и мы можем удалить старые позиции.
-        # Если портфель только что создан (не закомичен), удалять нечего.
+        # Если у портфеля уже есть ID (он был в базе), чистим старые позиции
         if portfolio_db.id:
             await self.session.execute(
                 delete(PositionDB).where(PositionDB.portfolio_id == portfolio_db.id)
@@ -167,7 +268,7 @@ class PortfolioRepository(IPortfolioRepository):
         # Добавляем актуальные позиции из State
         for ticker, pos in state.positions.items():
             pos_db = PositionDB(
-                portfolio=portfolio_db,  # Привязка объекта (SQLAlchemy сама разберется с ID)
+                portfolio=portfolio_db,  # Привязка через объект
                 instrument=pos.instrument,
                 quantity=pos.quantity,
                 entry_price=pos.entry_price,
@@ -183,9 +284,19 @@ class PortfolioRepository(IPortfolioRepository):
 
     async def load_portfolio_state(self, config_id: int, initial_capital: float) -> PortfolioState:
         """
-        Восстанавливает PortfolioState из БД.
+        Загружает состояние портфеля из БД.
+
+        Если состояние не найдено, возвращает новый пустой объект
+        с заданным начальным капиталом.
+
+        Args:
+            config_id (int): ID стратегии.
+            initial_capital (float): Стартовый капитал (для инициализации, если пусто).
+
+        Returns:
+            PortfolioState: Восстановленное или новое состояние.
         """
-        # Жадная загрузка позиций (joinedload/selectinload)
+        # Жадная загрузка позиций для предотвращения N+1 запросов
         query = select(PortfolioDB).options(selectinload(PortfolioDB.positions)) \
             .where(PortfolioDB.strategy_config_id == config_id)
 

@@ -1,3 +1,16 @@
+"""
+Модуль сравнительного анализа (Comparative Analysis).
+
+Предоставляет инструменты для агрегации и сравнения результатов множества бэктестов.
+Используется в Дашборде для:
+1.  Сравнения разных стратегий на одном инструменте.
+2.  Анализа робастности (устойчивости) стратегии на корзине инструментов.
+3.  Сравнения двух произвольных портфелей (A/B тестирование).
+
+Этот модуль работает с уже готовыми файлами логов (`_trades.jsonl`), загружая их,
+объединяя и пересчитывая метрики для объединенного потока сделок.
+"""
+
 import pandas as pd
 from typing import List, Dict, Tuple, Optional
 
@@ -9,17 +22,31 @@ PATH_CONFIG = config.PATH_CONFIG
 BACKTEST_CONFIG = config.BACKTEST_CONFIG
 EXCHANGE_SPECIFIC_CONFIG = config.EXCHANGE_SPECIFIC_CONFIG
 
+
 class ComparativeAnalyzer:
     """
-    Класс для проведения сравнительного анализа результатов бэктестов.
-    Отвечает за расчеты и агрегацию данных. Не содержит логики визуализации.
+    Аналитический движок для сравнения результатов.
+
+    Не содержит состояния (stateless) в части бизнес-логики, но хранит
+    кеш метаданных (`summary_df`) для быстрого поиска файлов логов.
+
+    Attributes:
+        summary_df (pd.DataFrame): Сводная таблица всех доступных бэктестов.
+        logs_dir (str): Путь к папке с логами.
+        initial_capital_per_instrument (float): Капитал на 1 инструмент в тесте.
     """
 
     def __init__(self, all_backtests_summary_df: pd.DataFrame):
         """
         Инициализирует анализатор.
 
-        :param all_backtests_summary_df: DataFrame со сводной информацией обо всех бэктестах.
+        Args:
+            all_backtests_summary_df (pd.DataFrame): DataFrame, полученный из
+                `app.adapters.dashboard.components.data_loader.load_all_backtests`.
+                Содержит пути к файлам и базовые метрики.
+
+        Raises:
+            ValueError: Если сводная таблица пуста.
         """
         if all_backtests_summary_df.empty:
             raise ValueError("Сводная таблица бэктестов не может быть пустой.")
@@ -27,16 +54,21 @@ class ComparativeAnalyzer:
         self.summary_df = all_backtests_summary_df.copy()
         self.logs_dir = PATH_CONFIG["LOGS_BACKTEST_DIR"]
         self.initial_capital_per_instrument = BACKTEST_CONFIG["INITIAL_CAPITAL"]
-        # Делаем допущение, что большинство сравнений будет для одного типа рынка.
-        # В будущем можно сделать это поле более динамическим.
+
+        # Дефолтный коэффициент аннуализации (можно сделать динамическим)
         self.annualization_factor = EXCHANGE_SPECIFIC_CONFIG.get("tinkoff", {}).get("SHARPE_ANNUALIZATION_FACTOR", 252)
 
-    # <<< ИЗМЕНЕНИЕ 3: Полностью переписанный метод. Теперь он - тонкая обертка.
     def _calculate_portfolio_metrics(self, portfolio_trades_df: pd.DataFrame,
                                      total_initial_capital: float) -> pd.Series:
         """
-        Приватный helper-метод для расчета агрегированных метрик по портфелю сделок.
-        Делегирует всю работу PortfolioMetricsCalculator.
+        Рассчитывает метрики для объединенного потока сделок (портфеля).
+
+        Args:
+            portfolio_trades_df (pd.DataFrame): Объединенный список всех сделок.
+            total_initial_capital (float): Суммарный стартовый капитал портфеля.
+
+        Returns:
+            pd.Series: Основные метрики (PnL, Sharpe, Drawdown).
         """
         if portfolio_trades_df.empty:
             return pd.Series(dtype=float)
@@ -52,7 +84,6 @@ class ComparativeAnalyzer:
 
         all_metrics = calculator.calculate_all()
 
-        # Собираем только те метрики, которые нам нужны для сводной таблицы
         return pd.Series({
             'PnL, %': all_metrics.get('pnl_pct', 0.0),
             'Win Rate, %': all_metrics.get('win_rate', 0.0) * 100,
@@ -70,8 +101,18 @@ class ComparativeAnalyzer:
             risk_manager: str
     ) -> Tuple[pd.DataFrame, Dict[str, pd.Series]]:
         """
-        Сравнивает несколько стратегий на одном инструменте.
-        (Логика этого метода остается прежней, т.к. он берет данные из summary)
+        Сравнивает эффективность разных стратегий на одном и том же инструменте.
+
+        Args:
+            strategy_names: Список имен стратегий.
+            instrument: Тикер.
+            interval: Таймфрейм.
+            risk_manager: Тип риск-менеджера.
+
+        Returns:
+            Tuple:
+                - pd.DataFrame: Таблица с метриками каждой стратегии.
+                - Dict[str, pd.Series]: Словарь кривых капитала {StrategyName: EquityCurve}.
         """
         filtered_summary = self.summary_df[
             (self.summary_df['Strategy'].isin(strategy_names)) &
@@ -88,15 +129,21 @@ class ComparativeAnalyzer:
             try:
                 trades_df = load_trades_from_file(row['File Path'])
                 if not trades_df.empty:
+                    # Восстанавливаем кривую капитала из PnL сделок
                     equity_curve = self.initial_capital_per_instrument + trades_df['pnl'].cumsum()
                     equity_curves[row['Strategy']] = equity_curve
             except Exception as e:
                 print(f"Ошибка при обработке файла для кривой капитала {row['File']}: {e}")
 
+        # Формируем таблицу метрик из уже готовых данных summary_df (чтобы не пересчитывать)
         metrics_df = filtered_summary.set_index('Strategy')[
             ['PnL (Strategy %)', 'Win Rate (%)', 'Max Drawdown (%)', 'Profit Factor', 'Total Trades']]
-        metrics_df.rename(columns={'PnL (Strategy %)': 'PnL, %', 'Win Rate (%)': 'Win Rate, %',
-                                   'Max Drawdown (%)': 'Max Drawdown, %'}, inplace=True)
+
+        metrics_df.rename(columns={
+            'PnL (Strategy %)': 'PnL, %',
+            'Win Rate (%)': 'Win Rate, %',
+            'Max Drawdown (%)': 'Max Drawdown, %'
+        }, inplace=True)
 
         return metrics_df, equity_curves
 
@@ -108,8 +155,19 @@ class ComparativeAnalyzer:
             risk_manager: str
     ) -> Tuple[pd.DataFrame, Optional[pd.Series]]:
         """
-        Анализирует устойчивость одной стратегии на множестве инструментов.
-        (Метод обновлен для использования нового калькулятора)
+        Анализирует "портфель", состоящий из одной стратегии, запущенной на множестве инструментов.
+        Позволяет оценить робастность стратегии (работает ли она везде или только на одном активе).
+
+        Args:
+            strategy_name: Имя стратегии.
+            instruments: Список тикеров.
+            interval: Таймфрейм.
+            risk_manager: Риск-менеджер.
+
+        Returns:
+            Tuple:
+                - pd.DataFrame: Метрики по каждому инструменту + ИТОГОВАЯ строка портфеля.
+                - pd.Series: Кривая капитала всего портфеля.
         """
         filtered_summary = self.summary_df[
             (self.summary_df['Strategy'] == strategy_name) &
@@ -133,82 +191,57 @@ class ComparativeAnalyzer:
         if not all_trades_list:
             return pd.DataFrame(), None
 
+        # Объединяем сделки и сортируем по времени выхода, чтобы симулировать
+        # последовательность событий в портфеле.
         all_trades_df = pd.concat(all_trades_list, ignore_index=True)
         all_trades_df['exit_timestamp_utc'] = pd.to_datetime(all_trades_df['exit_timestamp_utc'])
         all_trades_df.sort_values(by='exit_timestamp_utc', inplace=True)
         all_trades_df.reset_index(drop=True, inplace=True)
 
+        # Капитал портфеля = сумма капиталов отдельных стратегий
         num_instruments = len(filtered_summary)
         portfolio_initial_capital = self.initial_capital_per_instrument * num_instruments
 
+        # Рассчитываем метрики для всего портфеля
         portfolio_summary_series = self._calculate_portfolio_metrics(all_trades_df, portfolio_initial_capital)
         portfolio_summary_series.name = 'ИТОГО (портфель)'
 
+        # Собираем таблицу: метрики по инструментам + итоговая строка
         individual_metrics = filtered_summary[
             ['Instrument', 'PnL (Strategy %)', 'Win Rate (%)', 'Max Drawdown (%)', 'Profit Factor',
              'Total Trades']].copy()
-        individual_metrics.rename(columns={'PnL (Strategy %)': 'PnL, %', 'Win Rate (%)': 'Win Rate, %',
-                                           'Max Drawdown (%)': 'Max Drawdown, %'}, inplace=True)
+
+        individual_metrics.rename(columns={
+            'PnL (Strategy %)': 'PnL, %',
+            'Win Rate (%)': 'Win Rate, %',
+            'Max Drawdown (%)': 'Max Drawdown, %'
+        }, inplace=True)
+
         individual_metrics.set_index('Instrument', inplace=True)
 
         final_metrics_df = pd.concat([individual_metrics, portfolio_summary_series.to_frame().T])
 
+        # Кривая капитала портфеля
         portfolio_equity_curve = portfolio_initial_capital + all_trades_df['pnl'].cumsum()
 
         return final_metrics_df, portfolio_equity_curve
 
-    def compare_aggregated_strategies(
-            self,
-            strategy_names: List[str],
-            instruments: List[str],
-            interval: str,
-            risk_manager: str
-    ) -> Tuple[pd.DataFrame, Dict[str, pd.Series]]:
-        """
-        Сравнивает агрегированные (портфельные) результаты нескольких стратегий.
-        (Этот метод автоматически начинает работать правильно после рефакторинга
-         analyze_instrument_robustness, поэтому здесь изменений нет)
-        """
-        aggregated_metrics_list = []
-        equity_curves = {}
-
-        for strategy_name in strategy_names:
-            try:
-                metrics_df, equity_curve = self.analyze_instrument_robustness(
-                    strategy_name=strategy_name,
-                    instruments=instruments,
-                    interval=interval,
-                    risk_manager=risk_manager
-                )
-                if metrics_df.empty or equity_curve is None:
-                    continue
-
-                portfolio_summary = metrics_df.loc['ИТОГО (портфель)'].copy()
-                portfolio_summary.name = strategy_name
-                aggregated_metrics_list.append(portfolio_summary)
-                equity_curves[strategy_name] = equity_curve
-
-            except Exception as e:
-                print(f"Ошибка при агрегации результатов для стратегии '{strategy_name}': {e}")
-
-        if not aggregated_metrics_list:
-            return pd.DataFrame(), {}
-
-        final_metrics_df = pd.DataFrame(aggregated_metrics_list)
-        final_metrics_df.index.name = "Стратегия (портфель)"
-
-        return final_metrics_df, equity_curves
-
     def compare_two_portfolios(self, portfolio_a_params: Dict, portfolio_b_params: Dict) -> Tuple[
         pd.DataFrame, Dict[str, pd.Series]]:
         """
-        Анализирует и сравнивает два заданных портфеля.
-        Возвращает DataFrame с метриками и словарь с кривыми капитала.
+        Сравнивает два произвольных портфеля (набор стратегий/инструментов).
+
+        Args:
+            portfolio_a_params (Dict): Параметры первого портфеля.
+            portfolio_b_params (Dict): Параметры второго портфеля.
+
+        Returns:
+            Tuple: Таблица сравнения метрик и словарь кривых капитала.
         """
         metrics_list = []
         equity_curves = {}
 
-        # Анализируем портфель А
+        # 1. Анализируем портфель А
         metrics_a, curve_a = self.analyze_instrument_robustness(
             strategy_name=portfolio_a_params['strategy'],
             instruments=portfolio_a_params['instruments'],
@@ -221,7 +254,7 @@ class ComparativeAnalyzer:
             metrics_list.append(summary_a)
             equity_curves["Портфель A"] = curve_a
 
-        # Анализируем портфель B
+        # 2. Анализируем портфель B
         metrics_b, curve_b = self.analyze_instrument_robustness(
             strategy_name=portfolio_b_params['strategy'],
             instruments=portfolio_b_params['instruments'],

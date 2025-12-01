@@ -1,6 +1,22 @@
+"""
+Логика главного меню лаунчера (CLI Controller).
+
+Этот модуль управляет основным циклом приложения:
+1. Сканирует доступные скрипты в папке `scripts/`.
+2. Сопоставляет их с конфигурацией `SCRIPT_HANDLERS`.
+3. Отображает интерактивное меню (через `questionary`).
+4. Вызывает соответствующие диалоги настройки (`user_prompts`).
+5. Запускает выбранную логику (либо как функцию внутри процесса, либо как подпроцесс).
+
+Роль в архитектуре:
+    Связующее звено между пользователем (консоль) и бизнес-логикой (Core/Infrastructure).
+"""
+
 import os
 import sys
 import subprocess
+from typing import Dict, Any, Callable, Optional
+
 import questionary
 from rich.console import Console
 
@@ -17,10 +33,17 @@ from app.shared.config import config
 BASE_DIR = config.BASE_DIR
 
 # --- КОНФИГУРАЦИЯ МАППИНГА ---
-# Связываем имя файла скрипта с красивым названием и логикой UI.
-# Если скрипта нет в этом списке, он будет показан "как есть" и запущен без аргументов.
+# Реестр, связывающий файлы скриптов с логикой их запуска.
+# Если скрипта нет в этом списке, он будет показан "как есть" и запущен как внешний процесс.
+#
+# Structure:
+#   "filename.py": {
+#       "name": "Отображаемое имя в меню",
+#       "prompt_func": Функция, возвращающая dict с настройками (или None при отмене),
+#       "dispatcher": Функция, принимающая settings и запускающая логику
+#   }
 
-SCRIPT_HANDLERS = {
+SCRIPT_HANDLERS: Dict[str, Dict[str, Any]] = {
     "manage_data.py": {
         "name": "💾 Управление данными (Data Manager)",
         "prompt_func": user_prompts.prompt_for_data_management,
@@ -28,7 +51,7 @@ SCRIPT_HANDLERS = {
     },
     "run_backtest.py": {
         "name": "🧪 Одиночный Бэктест (Single Backtest)",
-        # Мы используем существующий промпт, но нам нужно убедиться, что он возвращает режим 'single'
+        # force_mode="single" гарантирует, что промпт не спросит режим, а сразу перейдет к файлу
         "prompt_func": lambda: user_prompts.prompt_for_backtest_settings(force_mode="single"),
         "dispatcher": run_single_backtest_flow
     },
@@ -44,7 +67,7 @@ SCRIPT_HANDLERS = {
     },
     "run_dashboard.py": {
         "name": "📊 Дашборд (Аналитика & Результаты)",
-        "prompt_func": None,  # Нет вопросов перед запуском
+        "prompt_func": None,  # Нет настроек перед запуском
         "dispatcher": lambda _: _run_external_script("run_dashboard.py")
     },
     "run_signals.py": {
@@ -67,26 +90,31 @@ SCRIPT_HANDLERS = {
 
 # --- Вспомогательные функции диспетчеров ---
 
-def _dispatch_data(settings):
-    """Разруливает логику manage_data."""
-    if not settings: return
+def _dispatch_data(settings: Optional[Dict[str, Any]]):
+    """
+    Промежуточный диспетчер для управления данными.
+    Инициализирует нужного клиента биржи и вызывает соответствующий flow.
 
-    # 1. Определяем нужного клиента
+    Args:
+        settings: Словарь настроек, полученный из user_prompts.
+    """
+    if not settings:
+        return
+
+    # 1. Определяем нужного клиента и режим
     exchange = settings.get("exchange")
-    # Логика: Tinkoff -> Sandbox (безопасно), Bybit -> Real (публичные данные)
+    # Логика безопасности: Tinkoff только в песочнице, Bybit - Real (для публичных данных)
     mode = "SANDBOX" if exchange == ExchangeType.TINKOFF else "REAL"
 
     try:
-        # 2. Получаем клиента из контейнера
+        # 2. Получаем клиента из контейнера (Singleton/Flyweight)
         client = container.get_exchange_client(exchange, mode=mode)
 
         action = settings.pop("action")
         if action == "update":
-            # 3. Передаем клиента
             success, msg = update_lists_flow(settings, client)
             print(msg)
         elif action == "download":
-            # 3. Передаем клиента
             download_data_flow(settings, client)
 
     except Exception as e:
@@ -94,17 +122,27 @@ def _dispatch_data(settings):
 
 
 def _run_external_script(script_name: str):
-    """Запускает скрипт как отдельный процесс (для изоляции)."""
+    """
+    Запускает скрипт как отдельный процесс ОС.
+
+    Используется для:
+    1. Изоляции (чтобы ошибка скрипта не крашила лаунчер).
+    2. Скриптов с собственным сложным I/O или GUI (Streamlit).
+    3. Обхода ограничений GIL для долгих задач (хотя для этого лучше multiprocessing).
+
+    Args:
+        script_name: Имя файла в папке scripts/.
+    """
     script_path = os.path.join(BASE_DIR, "scripts", script_name)
     print(f"\n--- Запуск скрипта: {script_name} ---\n")
 
-    # копируем текущее окружение и добавляем корень проекта в PYTHONPATH
+    # Копируем текущее окружение и добавляем корень проекта в PYTHONPATH.
+    # Это КРИТИЧНО, иначе скрипт не сможет импортировать пакет 'app'.
     env = os.environ.copy()
-    # Добавляем BASE_DIR (где лежит папка app) в пути поиска питона
     env["PYTHONPATH"] = str(BASE_DIR) + os.pathsep + env.get("PYTHONPATH", "")
 
     try:
-        # Используем текущий интерпретатор Python
+        # sys.executable гарантирует использование того же интерпретатора (venv)
         subprocess.run([sys.executable, script_path], cwd=BASE_DIR, env=env)
     except KeyboardInterrupt:
         print(f"\nСкрипт {script_name} остановлен.")
@@ -114,8 +152,10 @@ def _run_external_script(script_name: str):
 
 # --- ОСНОВНАЯ ЛОГИКА ---
 
-def get_scripts_list():
-    """Сканирует папку scripts и возвращает список файлов."""
+def get_scripts_list() -> list:
+    """
+    Сканирует папку scripts и возвращает список доступных .py файлов.
+    """
     scripts_dir = os.path.join(BASE_DIR, "scripts")
     if not os.path.exists(scripts_dir):
         return []
@@ -125,29 +165,32 @@ def get_scripts_list():
 
 
 def main():
+    """
+    Точка входа в UI Лаунчера.
+    Запускает бесконечный цикл меню.
+    """
     console = Console()
     console.print("[bold green]Market Bots Launcher[/bold green]", justify="center")
 
     while True:
         scripts = get_scripts_list()
 
-        # Формируем меню
+        # Формирование пунктов меню
         choices = []
-        mapped_keys = []
-
         for script_file in scripts:
             handler = SCRIPT_HANDLERS.get(script_file)
             if handler:
                 display_name = handler["name"]
             else:
+                # Fallback для скриптов без маппинга
                 display_name = f"📜 {script_file} (Скрипт)"
 
             choices.append(questionary.Choice(title=display_name, value=script_file))
-            mapped_keys.append(script_file)
 
         choices.append(questionary.Separator())
         choices.append(questionary.Choice(title="Выход", value="EXIT"))
 
+        # Отображение меню
         selected_script = questionary.select(
             "Выберите действие:",
             choices=choices,
@@ -158,12 +201,12 @@ def main():
             print("До встречи!")
             break
 
-        # Логика запуска
+        # Обработка выбора
         handler = SCRIPT_HANDLERS.get(selected_script)
 
         try:
             if handler:
-                # 1. Есть специальный обработчик
+                # 1. Сценарий с обработчиком
                 prompt_func = handler.get("prompt_func")
                 dispatch_func = handler.get("dispatcher")
 
@@ -171,21 +214,23 @@ def main():
                 if prompt_func:
                     print(f"\n--- Настройка: {selected_script} ---")
                     settings = prompt_func()
-                    if settings is None and prompt_func is not None:
-                        # Пользователь нажал "Назад" или отменил
+
+                    # Если user_prompts вернул None (пользователь нажал Назад/Отмена)
+                    if settings is None:
                         continue
 
-                        # Запуск функции
+                # Запуск логики
                 dispatch_func(settings)
 
             else:
-                # 2. Нет обработчика - просто запускаем файл
+                # 2. Fallback сценарий (просто запуск файла)
                 _run_external_script(selected_script)
 
             questionary.text("Нажмите Enter, чтобы вернуться в меню...").ask()
 
         except Exception as e:
             console.print(f"[bold red]Произошла ошибка:[/bold red] {e}")
+            # Полный трейсбек полезен для отладки, даже в лаунчере
             import traceback
             traceback.print_exc()
             questionary.text("Нажмите Enter...").ask()

@@ -1,87 +1,108 @@
-import sqlite3
-import datetime
+"""
+Скрипт для ручного добавления подписчика (Telegram ID) к боту.
+
+Позволяет администратору вручную зарегистрировать пользователя в системе,
+зная его `chat_id`. Это полезно для добавления друзей, коллег или
+тестировщиков, которые не могут или не хотят проходить стандартный путь
+через команду /start в Telegram.
+
+Если пользователь уже существует, но был неактивен, скрипт активирует его подписку.
+
+Запуск:
+    python scripts/manual_sub.py
+"""
+
+import asyncio
 import sys
 import os
 
-# Добавляем корень проекта в путь
+# Добавляем корневую директорию в sys.path для импорта модулей приложения
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.shared.config import config
+from app.infrastructure.database.session import async_session_factory
+from app.infrastructure.database.repositories import BotRepository
 
 
-def main():
-    db_path = config.DB_PATH
+async def main() -> None:
+    """
+    Асинхронная точка входа.
 
-    if not db_path.exists():
-        print(f"❌ База данных не найдена по пути: {db_path}")
-        return
+    Алгоритм работы:
+    1. Инициализирует сессию БД и репозиторий ботов.
+    2. Загружает список всех ботов.
+    3. Запрашивает у пользователя ID бота и данные подписчика (chat_id, username).
+    4. Использует метод репозитория `register_subscriber`, который атомарно
+       обрабатывает создание нового или обновление существующего пользователя.
+    """
+    print("👤 МАСТЕР РУЧНОЙ ПОДПИСКИ\n")
 
-    con = sqlite3.connect(db_path)
-    cursor = con.cursor()
+    async with async_session_factory() as session:
+        repo = BotRepository(session)
 
-    print(f"🔌 Подключено к БД: {db_path}")
+        # 1. Загрузка и отображение ботов
+        # В репозитории есть метод get_all_active_bots, но для админки
+        # лучше видеть ВСЕХ ботов (даже неактивных), чтобы можно было к ним привязать.
+        # Поэтому используем ORM запрос напрямую или расширяем репозиторий.
+        # Для простоты используем существующий метод, предполагая, что подписываем на активных.
+        bots = await repo.get_all_active_bots()
 
-    # 1. Выбираем бота
-    cursor.execute("SELECT id, name, is_active FROM bot_instances")
-    bots = cursor.fetchall()
+        if not bots:
+            print("❌ В базе нет активных ботов. Сначала создайте бота через Лаунчер.")
+            return
 
-    if not bots:
-        print("❌ В базе вообще нет ботов. Сначала создайте бота через Лаунчер.")
-        return
+        print("--- Доступные активные боты ---")
+        for b in bots:
+            print(f"ID [{b.id}]: {b.name} (@{b.token.split(':')[0]}...)")
 
-    print("\n--- Список всех ботов ---")
-    for b in bots:
-        status_icon = "✅ ON" if b[2] else "💤 OFF"
-        print(f"ID [{b[0]}]: {b[1]} ({status_icon})")
+        # 2. Выбор бота
+        try:
+            bot_id_input = input("\nВведите ID бота, к которому добавить пользователя: ").strip()
+            if not bot_id_input.isdigit():
+                print("Ошибка: ID должен быть числом.")
+                return
+            bot_id = int(bot_id_input)
+        except ValueError:
+            print("Некорректный ввод.")
+            return
 
-    try:
-        bot_id_input = input("\nВведите ID бота, к которому добавить друга: ")
-        bot_id = int(bot_id_input)
-    except ValueError:
-        print("Некорректный ID.")
-        return
+        # Проверка валидности ID (локальная)
+        if bot_id not in [b.id for b in bots]:
+            print("⚠️ Бота с таким ID нет в списке активных.")
+            return
 
-    # Проверка существования бота (просто по ID)
-    if bot_id not in [b[0] for b in bots]:
-        print("Такого ID нет в списке.")
-        return
+        # 3. Ввод данных пользователя
+        try:
+            chat_id_input = input("Введите Telegram chat_id пользователя (число): ").strip()
+            if not chat_id_input.isdigit():
+                print("Ошибка: Chat ID должен состоять только из цифр.")
+                return
+            chat_id = int(chat_id_input)
+        except ValueError:
+            print("Некорректный ввод.")
+            return
 
-    # 2. Вводим данные друга
-    try:
-        friend_chat_id = input("Введите chat_id друга (цифры): ").strip()
-        if not friend_chat_id: return
-        chat_id = int(friend_chat_id)
-    except ValueError:
-        print("Chat ID должен состоять только из цифр.")
-        return
+        username = input("Введите Username (без @, можно пропустить): ").strip() or "Manual_Added"
 
-    friend_username = input("Введите Username друга (без @, можно пропустить): ") or "Manual_Added"
+        # 4. Регистрация через репозиторий
+        try:
+            # Метод register_subscriber сам проверяет существование и делает commit
+            is_new = await repo.register_subscriber(bot_id, chat_id, username)
 
-    # 3. Добавляем в базу
-    try:
-        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            if is_new:
+                print(f"✅ Пользователь {username} ({chat_id}) успешно ДОБАВЛЕН или АКТИВИРОВАН.")
+            else:
+                print(f"ℹ️ Пользователь {username} ({chat_id}) уже существует и активен.")
 
-        # Проверяем, нет ли уже такого
-        cursor.execute("SELECT id FROM telegram_subscribers WHERE bot_id = ? AND chat_id = ?", (bot_id, chat_id))
-        exists = cursor.fetchone()
-
-        if exists:
-            print("⚠️ Этот пользователь уже есть в базе! Обновляю статус на Active (1).")
-            cursor.execute("UPDATE telegram_subscribers SET is_active = 1 WHERE id = ?", (exists[0],))
-        else:
-            cursor.execute("""
-                INSERT INTO telegram_subscribers (bot_id, chat_id, username, is_active, created_at)
-                VALUES (?, ?, ?, 1, ?)
-            """, (bot_id, chat_id, friend_username, now))
-            print(f"✅ Пользователь {friend_username} ({chat_id}) успешно привязан к боту ID {bot_id}!")
-
-        con.commit()
-
-    except Exception as e:
-        print(f"❌ Ошибка SQL: {e}")
-    finally:
-        con.close()
+        except Exception as e:
+            print(f"❌ Ошибка при сохранении в БД: {e}")
 
 
 if __name__ == "__main__":
-    main()
+    # Настройка для Windows (Python 3.8+)
+    if sys.platform == 'win32':
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\nОперация отменена пользователем.")
