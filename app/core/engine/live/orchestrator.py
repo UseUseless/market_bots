@@ -13,6 +13,7 @@
 
 import asyncio
 import logging
+import queue
 from typing import Tuple, Any, List
 
 # Импорты БД
@@ -93,7 +94,7 @@ async def _pair_builder(config: StrategyConfig) -> Tuple[UnifiedDataFeed, Any, P
     )
 
     strategy = StrategyClass(
-        events_queue=asyncio.Queue(),  # В Live используем Async Queue
+        events_queue=queue.Queue(),
         feature_engine=container.feature_engine,
         config=pydantic_config
     )
@@ -192,6 +193,10 @@ async def _async_main():
         # Ждем фактической отмены, игнорируя ошибки отмены
         await asyncio.gather(*tasks, return_exceptions=True)
 
+        # Закрываем соединения с БД для предотвращения ошибок при повторном запуске
+        from app.infrastructure.database.session import engine as db_engine
+        await db_engine.dispose()
+        logger.info("Database connections closed.")
 
 def run_live_monitor_flow(settings: dict = None):
     """

@@ -23,9 +23,6 @@ __pycache__/
 # Папка с логами
 logs/
 
-/storage/
-
-
 # Папка с отчетами
 /reports/
 

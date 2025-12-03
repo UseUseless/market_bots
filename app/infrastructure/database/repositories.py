@@ -99,10 +99,11 @@ class SignalRepository:
         Args:
             event (SignalEvent): Событие сигнала.
         """
+
         # TODO: Добавить поле exchange в SignalEvent для корректного логирования
         signal = SignalLog(
             timestamp=event.timestamp,
-            exchange="unknown",
+            exchange="unknown",  # TODO: брать из event
             instrument=event.instrument,
             strategy_name=event.strategy_id,
             direction=event.direction,

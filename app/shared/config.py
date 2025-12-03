@@ -53,11 +53,6 @@ class AppConfig(BaseSettings):
         return self.BASE_DIR / "reports"
 
     @property
-    def DB_PATH(self) -> Path:
-        """Полный путь к файлу базы данных SQLite."""
-        return self.BASE_DIR / "storage" / "market_bots.db"
-
-    @property
     def PATH_CONFIG(self) -> Dict[str, str]:
         """
         Возвращает словарь всех путей в строковом формате.
@@ -205,6 +200,32 @@ class AppConfig(BaseSettings):
         env_file_encoding="utf-8",  # Кодировка файла
         extra="ignore"  # Игнорировать лишние переменные в .env, не выбрасывая ошибку
     )
+
+    # =========================================================================
+    # 7. Настройки Базы Данных (Database Config)
+    # =========================================================================
+
+    # Мы только объявляем типы. Значения Pydantic САМ возьмет из .env файла.
+    # Если в .env их не будет — приложение упадет с ошибкой при старте.
+    # Это ПРАВИЛЬНОЕ поведение: лучше упасть сразу, чем работать с неверными доступами.
+
+    POSTGRES_USER: str
+    POSTGRES_PASSWORD: str
+    POSTGRES_HOST: str
+    POSTGRES_PORT: int
+    POSTGRES_DB: str
+
+    @property
+    def DATABASE_URL(self) -> str:
+        """
+        Собирает строку подключения для SQLAlchemy (драйвер asyncpg).
+        """
+        return (
+            f"postgresql+asyncpg://"
+            f"{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@"
+            f"{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/"
+            f"{self.POSTGRES_DB}"
+        )
 
 
 # Создаем единственный экземпляр (Singleton pattern), который будет импортироваться везде.

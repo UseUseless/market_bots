@@ -8,11 +8,17 @@
 Используется декларативный стиль SQLAlchemy.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, JSON, Float, BigInteger
 from sqlalchemy.orm import relationship
 from app.infrastructure.database.session import Base
 
+def utc_now():
+    """
+    Возвращает текущее время в UTC с информацией о часовом поясе.
+    Используется как callable для default значений в SQLAlchemy.
+    """
+    return datetime.now(timezone.utc)
 
 class BotInstance(Base):
     """
@@ -34,7 +40,7 @@ class BotInstance(Base):
     name = Column(String, unique=True, nullable=False)
     token = Column(String, unique=True, nullable=False)
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=utc_now)
 
     # Связи
     # При удалении бота удаляются все связанные конфиги стратегий и подписчики
@@ -67,7 +73,7 @@ class TelegramSubscriber(Base):
     first_name = Column(String, nullable=True)
 
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=utc_now)
 
     bot = relationship("BotInstance", back_populates="subscribers")
 
@@ -102,7 +108,7 @@ class StrategyConfig(Base):
     parameters = Column(JSON, nullable=False, default={})
     risk_manager_type = Column(String, default="FIXED")
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=utc_now)
 
     bot = relationship("BotInstance", back_populates="strategies")
 
@@ -129,13 +135,13 @@ class SignalLog(Base):
     __tablename__ = "signal_logs"
 
     id = Column(Integer, primary_key=True, index=True)
-    timestamp = Column(DateTime, nullable=False)
+    timestamp = Column(DateTime(timezone=True), nullable=False)
     exchange = Column(String, nullable=False)
     instrument = Column(String, nullable=False)
     strategy_name = Column(String, nullable=False)
     direction = Column(String, nullable=False)
     price = Column(Float, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=utc_now)
 
 
 class PortfolioDB(Base):
@@ -157,7 +163,7 @@ class PortfolioDB(Base):
 
     current_capital = Column(Float, default=0.0)
     initial_capital = Column(Float, default=0.0)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
     strategy_config = relationship("StrategyConfig", back_populates="portfolio_state")
     positions = relationship("PositionDB", back_populates="portfolio", cascade="all, delete-orphan")

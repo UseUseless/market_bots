@@ -1,23 +1,26 @@
 """
 Страница мониторинга сигналов (Live Monitor).
 
-Этот модуль визуализирует текущее состояние системы:
-- Список активных ботов и стратегий.
-- Ленту последних сгенерированных сигналов.
-- Статистику подписчиков.
+Этот модуль отвечает за визуализацию текущего состояния торговой системы в реальном времени.
+Он подключается к базе данных PostgreSQL, извлекает оперативные метрики и отображает их
+в интерфейсе Streamlit.
 
-Данные читаются напрямую из базы данных SQLite, что обеспечивает
-отображение информации в реальном времени (при обновлении страницы).
+Функциональность:
+    1. **KPI Метрики:** Количество активных ботов, стратегий, подписчиков и время последнего сигнала.
+    2. **Лента сигналов:** Таблица последних сгенерированных сигналов с цветовой кодировкой.
+    3. **Статус системы:** Сводные таблицы по активным ботам и запущенным стратегиям.
 """
 
-import sqlite3
+import logging
+from typing import Tuple
+
 import pandas as pd
 import streamlit as st
+from sqlalchemy import create_engine, text
 
 from app.shared.config import config
 
-# Глобальные настройки путей
-DB_PATH = config.DB_PATH
+logger = logging.getLogger(__name__)
 
 # Настройка страницы Streamlit
 st.set_page_config(
@@ -27,93 +30,117 @@ st.set_page_config(
 )
 st.title("🚀 Live Signal Monitor")
 
+# --- Настройка подключения к БД ---
+# Используем синхронный драйвер psycopg2 для Streamlit
+SYNC_DB_URL = config.DATABASE_URL.replace("+asyncpg", "+psycopg2")
+engine = create_engine(SYNC_DB_URL)
 
-def load_data():
+
+def load_operational_data() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
-    Загружает оперативные данные из базы данных.
+    Загружает полный набор оперативных данных из базы данных.
 
-    Выполняет несколько SQL-запросов для получения сводной информации
-    о ботах, стратегиях, сигналах и подписчиках.
+    Выполняет четыре SQL-запроса в рамках одного подключения для оптимизации производительности.
+    Извлекает информацию о ботах, стратегиях, сигналах и подписчиках.
 
     Returns:
-        tuple: Кортеж из четырех DataFrame (bots, strategies, signals, subscribers).
+        Tuple[pd.DataFrame, ...]: Кортеж из четырех DataFrame:
+            - bots: Список всех ботов и их статусов.
+            - strategies: Активные стратегии с привязкой к именам ботов.
+            - signals: Последние 20 торговых сигналов (Time, Exchange, Ticker, Direction, Price).
+            - subscribers: Агрегированная статистика подписчиков по ботам.
     """
-    con = sqlite3.connect(DB_PATH)
-
     try:
-        # 1. Активные Боты
-        bots = pd.read_sql("""
-            SELECT id, name, is_active, created_at 
-            FROM bot_instances
-        """, con)
+        with engine.connect() as conn:
+            # 1. Активные Боты
+            bots = pd.read_sql(text("""
+                SELECT id, name, is_active, created_at 
+                FROM bot_instances
+            """), conn)
 
-        # 2. Активные Стратегии (с джойном на имя бота)
-        strats = pd.read_sql("""
-            SELECT s.id, s.strategy_name, s.exchange, s.instrument, s.interval, 
-                   b.name as bot_name, s.is_active
-            FROM strategy_configs s
-            LEFT JOIN bot_instances b ON s.bot_id = b.id
-            WHERE s.is_active = 1
-        """, con)
+            # 2. Активные Стратегии (с Join для получения имени бота)
+            strats = pd.read_sql(text("""
+                SELECT s.id, s.strategy_name, s.exchange, s.instrument, s.interval, 
+                       b.name as bot_name, s.is_active
+                FROM strategy_configs s
+                LEFT JOIN bot_instances b ON s.bot_id = b.id
+                WHERE s.is_active = true
+            """), conn)
 
-        # 3. Последние Сигналы (лимит 20 для производительности)
-        signals = pd.read_sql("""
-            SELECT timestamp, exchange, instrument, strategy_name, direction, price
-            FROM signal_logs
-            ORDER BY timestamp DESC
-            LIMIT 20
-        """, con)
+            # 3. Лента Сигналов (последние 20)
+            signals = pd.read_sql(text("""
+                SELECT timestamp, exchange, instrument, strategy_name, direction, price
+                FROM signal_logs
+                ORDER BY timestamp DESC
+                LIMIT 20
+            """), conn)
 
-        # 4. Статистика подписчиков по ботам
-        subs = pd.read_sql("""
-            SELECT b.name as bot_name, COUNT(t.id) as sub_count
-            FROM telegram_subscribers t
-            JOIN bot_instances b ON t.bot_id = b.id
-            WHERE t.is_active = 1
-            GROUP BY b.name
-        """, con)
+            # 4. Статистика подписчиков (Агрегация)
+            subs = pd.read_sql(text("""
+                SELECT b.name as bot_name, COUNT(t.id) as sub_count
+                FROM telegram_subscribers t
+                JOIN bot_instances b ON t.bot_id = b.id
+                WHERE t.is_active = true
+                GROUP BY b.name
+            """), conn)
 
-        return bots, strats, signals, subs
+            return bots, strats, signals, subs
 
-    except pd.errors.DatabaseError:
-        # Если таблицы еще не созданы
+    except Exception as e:
+        logger.error(f"Dashboard Data Load Error: {e}")
+        st.error(f"Ошибка подключения к базе данных: {e}")
+        # Возвращаем пустые структуры, чтобы UI не упал
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
-    finally:
-        con.close()
 
 
-def highlight_direction(val):
+def _style_direction_cell(val: str) -> str:
     """
-    Функция стилизации ячеек таблицы сигналов.
-    Окрашивает 'BUY' в зеленый, 'SELL' в красный.
+    Применяет CSS-стили к ячейке направления торговли.
+
+    Окрашивает текст в зеленый для покупок и красный для продаж.
+
+    Args:
+        val (str): Значение направления ('BUY' или 'SELL').
+
+    Returns:
+        str: CSS-строка стилей (например, 'color: #2ca02c; font-weight: bold').
     """
     color = '#d62728' if val == 'SELL' else '#2ca02c'
     return f'color: {color}; font-weight: bold'
 
 
-# --- Основной UI ---
+def main():
+    """
+    Основная функция рендеринга страницы (Controller).
 
-# Кнопка ручного обновления
-if st.button('🔄 Обновить данные'):
-    st.rerun()
+    Отвечает за:
+    1. Обработку кнопки обновления.
+    2. Вызов функции загрузки данных.
+    3. Отрисовку метрик (KPI).
+    4. Отрисовку таблиц с данными.
+    """
+    # Кнопка ручного обновления состояния
+    if st.button('🔄 Обновить данные'):
+        st.rerun()
 
-try:
-    df_bots, df_strats, df_signals, df_subs = load_data()
+    # Загрузка данных
+    df_bots, df_strats, df_signals, df_subs = load_operational_data()
 
-    # --- СЕКЦИЯ 1: МЕТРИКИ (KPI) ---
+    # --- СЕКЦИЯ 1: KPI МЕТРИКИ ---
     col1, col2, col3, col4 = st.columns(4)
 
-    active_bots_count = len(df_bots[df_bots['is_active'] == 1]) if not df_bots.empty else 0
+    # Подсчет активных ботов
+    active_bots_count = len(df_bots[df_bots['is_active'] == True]) if not df_bots.empty else 0
     col1.metric("Активных ботов", active_bots_count)
 
     col2.metric("Активных стратегий", len(df_strats))
 
     total_subs = df_subs['sub_count'].sum() if not df_subs.empty else 0
-    col3.metric("Всего подписчиков", total_subs)
+    col3.metric("Всего подписчиков", int(total_subs))
 
     last_sig_time = "Нет данных"
     if not df_signals.empty:
-        # Убираем микросекунды для красоты
+        # Убираем микросекунды для чистоты отображения
         last_sig_time = str(df_signals.iloc[0]['timestamp']).split('.')[0]
 
     col4.metric("Последний сигнал", last_sig_time)
@@ -126,16 +153,11 @@ try:
     with c1:
         st.subheader("📡 Лента Сигналов")
         if not df_signals.empty:
-            # Применяем стили к DataFrame
-            styled_df = df_signals.style.map(highlight_direction, subset=['direction'])
-
-            st.dataframe(
-                styled_df,
-                use_container_width=True,
-                height=400
-            )
+            # Применение стилей к DataFrame
+            styled_df = df_signals.style.map(_style_direction_cell, subset=['direction'])
+            st.dataframe(styled_df, use_container_width=True, height=400)
         else:
-            st.info("Лента сигналов пуста. Запустите 'run_signals.py', чтобы начать мониторинг.")
+            st.info("Лента сигналов пуста. Ожидание событий...")
 
     with c2:
         st.subheader("🤖 Статус Ботов")
@@ -152,8 +174,11 @@ try:
                 hide_index=True
             )
         else:
-            st.warning("Нет активных стратегий! Добавьте их на вкладке Configuration.")
+            st.warning("Нет активных стратегий! Перейдите на вкладку Configuration.")
 
-except Exception as e:
-    st.error(f"Ошибка загрузки данных: {e}")
-    st.info("Убедитесь, что база данных инициализирована (скрипт init_db.py).")
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        st.error(f"Критическая ошибка приложения: {e}")

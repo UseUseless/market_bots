@@ -13,25 +13,12 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, Asyn
 from sqlalchemy.orm import DeclarativeBase
 from app.shared.config import config
 
-# Определение пути к файлу БД и автоматическое создание директории, если её нет.
-# Это предотвращает ошибки при первом запуске на чистой системе.
-DB_PATH = config.DB_PATH
-
-if not DB_PATH.parent.exists():
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-
-# Строка подключения для SQLAlchemy + aiosqlite
-DATABASE_URL = f"sqlite+aiosqlite:///{DB_PATH}"
-
-# Создаем асинхронный движок.
-# echo=False отключает вывод всех SQL-запросов в консоль (можно включить для отладки).
-engine = create_async_engine(DATABASE_URL, echo=False)
+engine = create_async_engine(config.DATABASE_URL, echo=False)
 
 # Фабрика сессий.
 # expire_on_commit=False обязателен для асинхронной работы, чтобы объекты
 # не "протухали" после закрытия транзакции (так как lazy loading в async ограничен).
 async_session_factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
-
 
 class Base(DeclarativeBase):
     """
