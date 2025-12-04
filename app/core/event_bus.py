@@ -53,8 +53,6 @@ class SignalBus(IPublisher):
 
         # Раскладываем событие по всем очередям
         for q in self._subscribers:
-            # put_nowait нельзя использовать, так как очередь может быть полной.
-            # await q.put гарантирует, что мы подождем освобождения места, если установлен maxsize.
             await q.put(event)
 
     def subscribe(self) -> asyncio.Queue:
@@ -82,6 +80,7 @@ class SignalBus(IPublisher):
         Args:
             q (asyncio.Queue): Очередь, которую нужно отключить от шины.
         """
+        #my_question - удаляется в конце бэктеста?
         if q in self._subscribers:
             self._subscribers.remove(q)
             logger.info("Bus: Subscriber unregistered.")

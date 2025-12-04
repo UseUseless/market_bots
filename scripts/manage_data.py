@@ -1,130 +1,124 @@
 """
-CLI-утилита для управления рыночными данными (Data Manager).
+CLI-скрипт для управления рыночными данными (Data Manager).
 
 Предоставляет интерфейс командной строки для двух основных операций:
-1. `update`: Обновление списков ликвидных инструментов (скачивает топ по обороту).
+1. `update`: Обновление (создание) списков ликвидных инструментов (скачивает топ по обороту)
+    и сохраняет их в текстовые файлы в папке `datalists/.
 2. `download`: Загрузка исторических свечей (OHLCV) и метаданных инструментов.
 
-Скрипт выступает точкой входа, инициализирует необходимые зависимости (клиенты бирж)
+Скрипт инициализирует необходимые зависимости (клиенты бирж)
 через DI-контейнер и передает управление функциям-оркестраторам в `app.infrastructure`.
 
-Запуск:
-    python scripts/manage_data.py update --exchange bybit
-    python scripts/manage_data.py download --exchange tinkoff --list tinkoff_top_liquid.txt --interval 1hour
+Примеры запуска:
+    Обновить список ликвидных монет для Bybit:
+    $ python scripts/manage_data.py update --exchange bybit
+
+    Скачать историю за год для тикеров из файла:
+    $ python scripts/manage_data.py download --exchange tinkoff --list tinkoff_top_liquid.txt --interval 1hour
+
+    Скачать конкретные тикеры:
+    $ python scripts/manage_data.py download --exchange bybit --instrument BTCUSDT ETHUSDT --interval 15min
 """
 
 import argparse
 import logging
 import sys
-
-# Добавляем корневую директорию в sys.path, если скрипт запускается не как модуль
 import os
+from typing import Dict, Any
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.infrastructure.storage.data_manager import update_lists_flow, download_data_flow
-from app.shared.logging_setup import setup_global_logging
 from app.bootstrap.container import container
 from app.shared.primitives import ExchangeType
 from app.shared.config import config
+from app.core.interfaces import BaseDataClient
+from app.shared.logging_setup import setup_global_logging
+from app.shared.decorators import safe_entry
 
 DEFAULT_DAYS_TO_LOAD = config.DATA_LOADER_CONFIG["DAYS_TO_LOAD"]
 
 
+def _get_client(args_settings: Dict[str, Any]) -> BaseDataClient:
+    """
+    Создает клиент биржи.
+
+    Args:
+        args_settings (Dict[str, Any]): Словарь аргументов, полученный из argparse.
+            Должен содержать ключ 'exchange'.
+
+    Returns:
+        BaseDataClient: Инициализированный клиент биржи (TinkoffHandler или BybitHandler),
+        полученный из DI-контейнера.
+    """
+    exchange = args_settings.get("exchange")
+    mode = "SANDBOX" if exchange == ExchangeType.TINKOFF else "REAL"
+    return container.get_exchange_client(exchange, mode=mode)
+
+@safe_entry
 def main() -> None:
     """
     Основная функция-диспетчер.
 
     Алгоритм работы:
-    1. Настраивает глобальное логирование.
+    1. Настраивает tqdm логирование
     2. Парсит аргументы командной строки (argparse).
-    3. Инициализирует клиент биржи (Tinkoff/Bybit) через Container.
-       - Для Tinkoff принудительно используется режим SANDBOX (безопасность).
-       - Для Bybit используется режим REAL (доступ к публичным данным без ключей).
+    3. Создает соответствующий клиент биржи через `_get_client`.
     4. Вызывает соответствующую функцию бизнес-логики (`update_lists_flow` или `download_data_flow`),
        передавая ей настройки и готовый клиент.
     """
-    setup_global_logging()
+    # Включаем режим tqdm, чтобы логи не ломали прогресс-бар загрузки
+    setup_global_logging(mode='tqdm', log_level=logging.INFO)
 
     parser = argparse.ArgumentParser(
-        description="Утилита для управления рыночными данными: обновление списков и скачивание истории.",
+        description="Утилита для управления рыночными данными.",
         formatter_class=argparse.RawTextHelpFormatter
     )
+
+    # dest='command' означает, что имя выбранной команды (update или download) запишется в переменную args.command
     subparsers = parser.add_subparsers(dest='command', required=True, help='Доступные команды')
 
-    # --- Команда 'update' ---
+    # --- 1. Настройка команды 'update' ---
     parser_update = subparsers.add_parser(
         'update',
-        help='Обновить и сохранить список ликвидных инструментов (Top Liquid).'
+        help='Обновить список ликвидных инструментов.'
     )
     parser_update.add_argument(
         "--exchange", type=str, required=True, choices=['tinkoff', 'bybit'],
-        help="Биржа, для которой обновляется список."
+        help="Биржа."
     )
 
-    # --- Команда 'download' ---
+    # --- 2. Настройка команды 'download' ---
     parser_download = subparsers.add_parser(
         'download',
-        help='Скачать исторические данные по инструментам.'
+        help='Скачать исторические данные.'
     )
     parser_download.add_argument(
         "--exchange", type=str, required=True, choices=['tinkoff', 'bybit'],
-        help="Биржа для загрузки данных."
+        help="Биржа."
     )
 
-    # Группа взаимоисключающих аргументов: либо конкретные тикеры, либо файл со списком
     group = parser_download.add_mutually_exclusive_group(required=True)
-    group.add_argument(
-        "--instrument", type=str, nargs='+',
-        help="Один или несколько тикеров через пробел (например: SBER GAZP BTCUSDT)."
-    )
-    group.add_argument(
-        "--list", type=str,
-        help="Имя файла из папки 'datalists' (например: tinkoff_top_liquid.txt)."
-    )
+    group.add_argument("--instrument", type=str, nargs='+', help="Тикеры через пробел.")
+    group.add_argument("--list", type=str, help="Имя файла списка.")
 
-    parser_download.add_argument(
-        "--interval", type=str, required=True,
-        help="Интервал свечей (например: 1min, 5min, 1hour, 1day)."
-    )
-    parser_download.add_argument(
-        "--days", type=int, default=DEFAULT_DAYS_TO_LOAD,
-        help=f"Глубина истории в днях (по умолчанию: {DEFAULT_DAYS_TO_LOAD})."
-    )
-    parser_download.add_argument(
-        "--category", type=str, default="linear",
-        help="Категория рынка для Bybit (linear/spot/inverse). По умолчанию: linear."
-    )
+    parser_download.add_argument("--interval", type=str, required=True, help="Интервал.")
+    parser_download.add_argument("--days", type=int, default=DEFAULT_DAYS_TO_LOAD, help="Дни.")
+    parser_download.add_argument("--category", type=str, default="linear", help="Категория Bybit.")
 
-    # --- Парсинг и Выполнение ---
+    # --- Парсинг и выбор действия ---
     args = parser.parse_args()
     args_settings = vars(args)
-    exchange = args_settings.get("exchange")
 
-    # Логика выбора режима клиента для скачивания данных:
-    # Tinkoff: Используем SANDBOX, так как ReadOnly токен часто имеет доступ к песочнице,
-    #          а для скачивания истории этого достаточно.
-    # Bybit: Используем REAL, чтобы делать публичные запросы к основному API без ключей.
-    mode = "SANDBOX" if exchange == ExchangeType.TINKOFF else "REAL"
+    # Получаем клиент из DI-контейнера
+    client = _get_client(args_settings)
+    command = args_settings.get('command')
 
-    try:
-        # Получаем клиент из DI-контейнера
-        client = container.get_exchange_client(exchange, mode=mode)
-        command = args_settings.get('command')
-
-        if command == 'update':
-            update_lists_flow(args_settings, client)
-        elif command == 'download':
-            download_data_flow(args_settings, client)
-
-    except Exception as e:
-        logging.getLogger(__name__).critical(f"Критическая ошибка выполнения: {e}", exc_info=True)
-        sys.exit(1)
+    if command == 'update':
+        update_lists_flow(args_settings, client)
+    elif command == 'download':
+        download_data_flow(args_settings, client)
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        print("\nОперация прервана пользователем.")
-        sys.exit(0)
+    main()

@@ -20,7 +20,6 @@ class StrategyConfigModel(BaseModel):
 
     Attributes:
         strategy_name (str): Имя класса стратегии (например, 'SimpleSMACross').
-                             Должно совпадать с ключом в `AVAILABLE_STRATEGIES`.
         instrument (str): Тикер инструмента (например, 'BTCUSDT').
         exchange (str): Название биржи (например, 'bybit').
         interval (str): Таймфрейм свечей (например, '1hour', '5min').
@@ -36,13 +35,13 @@ class StrategyConfigModel(BaseModel):
     interval: str
 
     # Field(default_factory=dict) используется, чтобы не создавать
-    # один и тот же изменяемый словарь для всех экземпляров (mutable default argument trap)
+    # один и тот же изменяемый словарь для всех экземпляров
     params: Dict[str, Any] = Field(default_factory=dict)
 
     risk_manager_type: str = "FIXED"
     risk_manager_params: Dict[str, Any] = Field(default_factory=dict)
 
-    # Настройки Pydantic V2
+    # Настройки Pydantic
     model_config = ConfigDict(frozen=True)  # Запрет на изменение полей после создания
 
     @field_validator('interval')

@@ -9,8 +9,6 @@
 2.  **SignalEvent**: Стратегия проанализировала данные и захотела купить/продать.
 3.  **OrderEvent**: Риск-менеджер одобрил сигнал, рассчитал объем и создал ордер.
 4.  **FillEvent**: Биржа (или симулятор) исполнила ордер.
-
-Использование `@dataclass` обеспечивает высокую производительность и читаемость.
 """
 
 from dataclasses import dataclass
@@ -55,7 +53,7 @@ class MarketEvent(Event):
 @dataclass
 class SignalEvent(Event):
     """
-    Событие 'Торговый Сигнал' (Намерение).
+    Событие 'Торговый Сигнал'.
 
     Генерируется: Strategy.
     Потребители: PortfolioManager / OrderManager.
@@ -84,7 +82,7 @@ class SignalEvent(Event):
 @dataclass
 class OrderEvent(Event):
     """
-    Событие 'Ордер' (Команда).
+    Событие 'Ордер'.
 
     Генерируется: OrderManager / RiskMonitor.
     Потребители: ExecutionHandler (Simulator или Live).
@@ -98,7 +96,7 @@ class OrderEvent(Event):
         quantity (float): Точное количество лотов/монет для отправки на биржу.
         direction (TradeDirection): Направление сделки.
         trigger_reason (TriggerReason): Причина ордера (Сигнал стратегии, Стоп-лосс, Тейк-профит).
-        stop_loss (float): Рассчитанный уровень SL (для установки на бирже, если поддерживается).
+        stop_loss (float): Рассчитанный уровень SL.
         take_profit (float): Рассчитанный уровень TP.
         price_hint (Optional[float]): "Подсказка" цены для симулятора.
             Используется в бэктестах, чтобы Simulator знал, от какой цены считать
@@ -117,7 +115,7 @@ class OrderEvent(Event):
 @dataclass
 class FillEvent(Event):
     """
-    Событие 'Исполнение' (Факт).
+    Событие 'Исполнение'.
 
     Генерируется: ExecutionHandler.
     Потребители: PortfolioManager (для обновления баланса и позиций).
@@ -126,7 +124,7 @@ class FillEvent(Event):
 
     Attributes:
         timestamp (datetime): Фактическое время исполнения сделки.
-        instrument (str): Тикер.
+        instrument (str): Тикер инструмента.
         quantity (float): Фактически исполненный объем.
         direction (TradeDirection): Направление.
         price (float): Средняя цена исполнения (с учетом проскальзывания).
