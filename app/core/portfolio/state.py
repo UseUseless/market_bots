@@ -43,6 +43,7 @@ class PortfolioState:
         self.current_capital: float = initial_capital
 
         self.positions: Dict[str, Position] = {}
+        self.last_known_prices: Dict[str, float] = {}
         self.pending_orders: Set[str] = set()
         self.closed_trades: List[Dict[str, Any]] = []
 
@@ -76,14 +77,31 @@ class PortfolioState:
     @property
     def total_equity(self) -> float:
         """
-        Полная стоимость портфеля (Кэш + Стоимость позиций).
-        Полезно для расчета метрик просадки.
+        Полная стоимость портфеля.
+
+        Формула: Кэш + (Кол-во * ТЕКУЩАЯ ЦЕНА).
+        Учитывает нереализованную прибыль или убыток (Unrealized PnL).
 
         Returns:
-            float: Текущее количество денег на счету+стоимость купленных инструментов
+            float: Реальная стоимость портфеля на текущий момент.
         """
-        # Это упрощенная оценка (по цене входа), для точности нужно Mark-to-Market
-        return self.current_capital + self.frozen_capital
+        equity = self.current_capital
+
+        for ticker, pos in self.positions.items():
+            # Если текущая цена известна, используем её.
+            # Если нет (например, только запустились), используем цену входа как безопасный вариант.
+            market_price = self.last_known_prices.get(ticker, pos.entry_price)
+
+            position_value = pos.quantity * market_price
+            equity += position_value
+
+        return equity
+
+    def update_price(self, instrument: str, price: float):
+        """
+        Обновляет последнюю известную цену инструмента.
+        """
+        self.last_known_prices[instrument] = price
 
     def to_dict(self) -> Dict[str, Any]:
         """

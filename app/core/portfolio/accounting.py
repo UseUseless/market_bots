@@ -16,6 +16,10 @@ from app.shared.primitives import TradeDirection, Position
 
 logger = logging.getLogger(__name__)
 
+# Точность для финансовых вычислений (баланс, PnL в котируемой валюте).
+# 10 знаков достаточно для корректного учета USDT/RUB, не перегружая float.
+PRECISION = 10
+
 
 class FillProcessor:
     """
@@ -44,14 +48,6 @@ class FillProcessor:
                  risk_manager_params: Dict[str, Any]):
         """
         Инициализирует процессор с метаданными для логирования.
-
-        Args:
-            trade_log_file (Optional[str]): Путь к файлу логов. Если None, запись в файл отключена.
-            exchange (str): Название биржи (metadata).
-            interval (str): Рабочий интервал (metadata).
-            strategy_name (str): Идентификатор стратегии (metadata).
-            risk_manager_name (str): Идентификатор РМ (metadata).
-            risk_manager_params (Dict[str, Any]): Параметры РМ (metadata).
         """
         self.trade_log_file = trade_log_file
         self.exchange = exchange
@@ -63,48 +59,42 @@ class FillProcessor:
     def process_fill(self, event: FillEvent, state: PortfolioState):
         """
         Обрабатывает событие исполнения ордера.
-
-        Маршрутизирует событие на открытие или закрытие позиции в зависимости
-        от текущего состояния портфеля. Также снимает блокировку `pending_orders`.
-
-        Args:
-            event (FillEvent): Событие исполнения сделки от биржи/симулятора.
-            state (PortfolioState): Текущее состояние портфеля для обновления.
         """
         instrument = event.instrument
 
-        # Снимаем флаг ожидания ордера, так как ордер исполнен
+        # Снимаем флаг ожидания ордера
         if instrument in state.pending_orders:
             state.pending_orders.remove(instrument)
 
         position = state.positions.get(instrument)
 
         if not position:
-            # Если позиции нет, значит это вход (Entry)
             self._handle_fill_open(event, state)
         else:
-            # Если позиция есть, значит это выход (Exit)
-            # Примечание: Частичное закрытие или усреднение тут пока не реализовано,
-            # предполагается полное закрытие.
             self._handle_fill_close(event, state, position)
+
+    def _format_price(self, price: float) -> str:
+        """
+        Умное форматирование цены для логов.
+        Если цена очень маленькая (BabyDoge), показывает больше знаков.
+        """
+        if price < 0.0001:
+            return f"{price:.12f}"
+        elif price < 1.0:
+            return f"{price:.6f}"
+        else:
+            return f"{price:.2f}"
 
     def _handle_fill_open(self, event: FillEvent, state: PortfolioState):
         """
         Регистрирует открытие новой позиции.
-
-        Создает объект `Position` и сохраняет его в стейт.
-        Списывает полную стоимость входа из свободного капитала (Cash-Based Accounting).
-
-        Args:
-            event (FillEvent): Событие входа.
-            state (PortfolioState): Состояние портфеля.
         """
-        # 1. Рассчитываем полную стоимость входа (Cost Basis)
-        # Для Spot/Linear: Цена * Кол-во + Комиссия
-        entry_cost = (event.price * event.quantity) + event.commission
+        # 1. Рассчитываем полную стоимость входа (в валюте баланса, напр. USDT)
+        raw_cost = (event.price * event.quantity) + event.commission
+        entry_cost = round(raw_cost, PRECISION)
 
-        # 2. Вычитаем из баланса ("замораживаем" деньги в активе)
-        state.current_capital -= entry_cost
+        # 2. Вычитаем из баланса
+        state.current_capital = round(state.current_capital - entry_cost, PRECISION)
 
         new_position = Position(
             instrument=event.instrument,
@@ -119,46 +109,37 @@ class FillProcessor:
 
         state.positions[event.instrument] = new_position
 
+        price_str = self._format_price(event.price)
         logger.info(
             f"Позиция ОТКРЫТА: {event.direction} {event.quantity} {event.instrument} "
-            f"@ {event.price:.4f}. Cost: {entry_cost:.2f}. New Balance: {state.current_capital:.2f}"
+            f"@ {price_str}. Cost: {entry_cost:.2f}. New Balance: {state.current_capital:.2f}"
         )
 
     def _handle_fill_close(self, event: FillEvent, state: PortfolioState, position: Position):
         """
         Регистрирует закрытие позиции и фиксирует финансовый результат.
-
-        Рассчитывает PnL, возвращает средства (тело + прибыль) на баланс
-        и сохраняет статистику в лог.
-
-        Args:
-            event (FillEvent): Событие выхода.
-            state (PortfolioState): Состояние портфеля.
-            position (Position): Объект позиции, которую закрываем.
         """
         gross_pnl = 0.0
 
-        # Расчет "грязной" прибыли (без комиссий)
         if position.direction == TradeDirection.BUY:
-            # Long: (Exit - Entry) * Qty
             gross_pnl = (event.price - position.entry_price) * event.quantity
         else:  # TradeDirection.SELL
-            # Short: (Entry - Exit) * Qty
             gross_pnl = (position.entry_price - event.price) * event.quantity
+
+        gross_pnl = round(gross_pnl, PRECISION)
 
         commission_exit = event.commission
         commission_entry = position.entry_commission
 
         # Чистая прибыль (Net PnL)
-        pnl = gross_pnl - commission_entry - commission_exit
+        pnl = round(gross_pnl - commission_entry - commission_exit, PRECISION)
 
         # 3. Рассчитываем выручку (Proceeds) для возврата на баланс.
-        # Мы должны вернуть: Изначальную стоимость позиции (без комиссии) + Gross PnL - Exit Commission.
-        # Это эквивалентно сумме, которую биржа начисляет на счет после сделки.
-        proceeds = (position.entry_price * position.quantity) + gross_pnl - commission_exit
+        raw_proceeds = (position.entry_price * position.quantity) + gross_pnl - commission_exit
+        proceeds = round(raw_proceeds, PRECISION)
 
-        # Обновляем капитал (возврат средств)
-        state.current_capital += proceeds
+        # Обновляем капитал
+        state.current_capital = round(state.current_capital + proceeds, PRECISION)
 
         # Сохраняем статистику
         save_trade_log(
@@ -177,14 +158,12 @@ class FillProcessor:
             risk_manager=self.risk_manager_name
         )
 
-        # Добавляем в историю сессии (для быстрого расчета метрик без чтения файла)
         state.closed_trades.append({
             'pnl': pnl,
             'entry_timestamp_utc': position.entry_timestamp,
             'exit_timestamp_utc': event.timestamp
         })
 
-        # Удаляем позицию из активных
         del state.positions[event.instrument]
 
         logger.info(

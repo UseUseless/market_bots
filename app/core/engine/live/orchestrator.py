@@ -14,6 +14,7 @@
 import asyncio
 import logging
 import queue
+import signal
 from typing import Tuple, Any, List
 
 # Импорты БД
@@ -170,17 +171,34 @@ async def _async_main():
             pair_builder_func=_pair_builder
         )))
 
+        # --- Обработка сигналов (Graceful Shutdown) ---
+        loop = asyncio.get_running_loop()
+
+        def signal_handler():
+            logger.warning("🛑 Received shutdown signal (SIGTERM/SIGINT). Cancelling tasks...")
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+
+        # Регистрация обработчиков (try-except для совместимости с Windows)
+        try:
+            for sig in (signal.SIGTERM, signal.SIGINT):
+                loop.add_signal_handler(sig, signal_handler)
+            logger.info("✅ Signal handlers registered (SIGTERM/SIGINT).")
+        except NotImplementedError:
+            logger.warning("⚠️ Signal handlers not supported on this platform. Use Ctrl+C/Kill.")
+
         logger.info("🚀 Система запущена. Ожидание событий...")
 
         # Используем return_exceptions=True, чтобы падение одной задачи не крашило всё
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         for res in results:
-            if isinstance(res, Exception):
+            if isinstance(res, Exception) and not isinstance(res, asyncio.CancelledError):
                 logger.error(f"Task failed with error: {res}", exc_info=res)
 
     except asyncio.CancelledError:
-        logger.info("Остановка системы (KeyboardInterrupt)...")
+        logger.info("Остановка системы (Main Task Cancelled)...")
         await engine.stop()
     except Exception as e:
         logger.critical(f"Критическая ошибка в main loop: {e}", exc_info=True)
@@ -213,4 +231,6 @@ def run_live_monitor_flow(settings: dict = None):
         # Запуск асинхронного ядра
         asyncio.run(_async_main())
     except KeyboardInterrupt:
+        # Этот блок ловит Ctrl+C до того, как loop запустится или если asyncio.run завершится.
+        # Основная обработка внутри _async_main через signal_handler.
         print("\nОстановлено пользователем.")

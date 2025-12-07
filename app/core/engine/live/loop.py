@@ -84,6 +84,11 @@ class SignalEngine:
             # Рассчитываем, сколько дней истории нужно скачать.
             needed_candles = strategy.min_history_needed + 10
             interval_delta = parse_interval_to_timedelta(feed.interval)
+
+            # Рассчитываем таймаут ожидания данных (Watchdog)
+            # Если данных нет 5 интервалов (или минимум 5 минут), считаем поток мертвым
+            watchdog_timeout = max(300.0, interval_delta.total_seconds() * 5)
+
             total_seconds_needed = interval_delta.total_seconds() * needed_candles
             # Переводим в дни с коэффициентом запаса 1.5
             days_needed = (total_seconds_needed / 86400) * 1.5
@@ -100,16 +105,25 @@ class SignalEngine:
 
             logger.info(
                 f"✅ [Engine] Started strategy #{config_id}: {strategy.name} on {feed.instrument}. "
-                f"Positions restored: {len(state.positions)}"
+                f"Positions restored: {len(state.positions)}. Watchdog: {int(watchdog_timeout)}s"
             )
 
             # --- 3. Главный цикл обработки ---
             while True:
-                # Ждем событие MarketEvent из вебсокета
-                event = await stream_queue.get()
+                try:
+                    # Ждем событие MarketEvent из вебсокета с ТАЙМАУТОМ.
+                    # Это защищает от зависания, если сокет умер молча.
+                    event = await asyncio.wait_for(stream_queue.get(), timeout=watchdog_timeout)
+                except asyncio.TimeoutError:
+                    logger.error(
+                        f"💀 [Engine] Strategy #{config_id}: No data for {int(watchdog_timeout)}s. "
+                        f"Restarting stream..."
+                    )
+                    raise  # Вызываем перезапуск задачи через оркестратор
+
                 candle_data = event.data
 
-                # Обновляем данные в фиде. Возвращает True, если свеча закрылась.
+                # Обновляем данные в фиде. Возвращает True, если свеча закрылась или обновилась.
                 is_new = await feed.process_candle(candle_data)
 
                 if is_new:

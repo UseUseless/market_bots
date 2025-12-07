@@ -77,12 +77,18 @@ class Portfolio:
         Обрабатывает поступление новых рыночных данных.
 
         Обновляет локальный кэш цен (чтобы другие компоненты имели доступ к
-        актуальной цене Close) и запускает мониторинг рисков.
+        актуальной цене Close), обновляет цену в State (для расчета Equity)
+        и запускает мониторинг рисков.
 
         Args:
             event (MarketEvent): Событие с данными свечи.
         """
         self.last_market_data[event.instrument] = event.data
+
+        # Обновляем цену в стейте для корректного расчета Equity
+        current_close = event.data.get('close')
+        if current_close:
+            self.state.update_price(event.instrument, float(current_close))
 
         # Запускаем пассивную защиту позиций (проверка SL/TP)
         self.risk_monitor.check_positions(event, self.state)

@@ -145,13 +145,15 @@ class BybitHandler(BaseExchangeHandler):
                         })
 
                     # Обновляем курсор времени: берем время самой старой полученной свечи (последней в списке)
-                    last_candle_time = int(candles_list[-1][0])
+                    oldest_candle_time = int(candles_list[-1][0])
 
-                    # Если курсор не сдвинулся (API вернул то же самое), прерываем бесконечный цикл
-                    if last_candle_time >= current_end_ts:
+                    # Если API вернул данные, где самая старая свеча новее или равна нашему запросу (странность API),
+                    # прерываем, чтобы не уйти в вечный цикл.
+                    if oldest_candle_time >= current_end_ts:
                         break
 
-                    current_end_ts = last_candle_time
+                    # Сдвигаем курсор НАЗАД на 1 мс от самой старой свечи, чтобы не получить её дубль
+                    current_end_ts = oldest_candle_time - 1
 
                     # Обновление прогресс-бара
                     days_loaded = (datetime.fromtimestamp(end_ts / 1000) - datetime.fromtimestamp(current_end_ts / 1000)).days
