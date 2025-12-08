@@ -1,196 +1,163 @@
 """
 Логика главного меню лаунчера (CLI Controller).
 
-Этот модуль управляет основным циклом приложения:
-1. Сканирует доступные скрипты в папке `scripts/`.
-2. Сопоставляет их с конфигурацией `SCRIPT_HANDLERS`.
-3. Отображает интерактивное меню (через `questionary`).
-4. Вызывает соответствующие диалоги настройки (`user_prompts`).
-5. Запускает выбранную логику (либо как функцию внутри процесса, либо как подпроцесс).
-
-Роль в архитектуре:
-    Связующее звено между пользователем (консоль) и бизнес-логикой (Core/Infrastructure).
+Этот модуль управляет основным циклом приложения.
+Теперь он работает как "тонкий клиент": собирает настройки через UI
+и запускает соответствующие скрипты из папки scripts/ как подпроцессы.
 """
 
 import os
 import sys
 import subprocess
-from typing import Dict, Any, Callable, Optional
+from typing import Dict, Any, List
 
 import questionary
 from rich.console import Console
 
 from . import user_prompts
-
-from app.infrastructure.storage.data_manager import update_lists_flow, download_data_flow
-from app.core.engine.backtest.runners import run_single_backtest_flow, run_batch_backtest_flow
-from app.core.engine.optimization.runner import run_optimization_flow
-from app.core.engine.live.orchestrator import run_live_monitor_flow
-from app.bootstrap.container import container
-from app.shared.primitives import ExchangeType
 from app.shared.config import config
 
 BASE_DIR = config.BASE_DIR
 
-# --- КОНФИГУРАЦИЯ МАППИНГА ---
-# Реестр, связывающий файлы скриптов с логикой их запуска.
-# Если скрипта нет в этом списке, он будет показан "как есть" и запущен как внешний процесс.
-#
-# Structure:
-#   "filename.py": {
-#       "name": "Отображаемое имя в меню",
-#       "prompt_func": Функция, возвращающая dict с настройками (или None при отмене),
-#       "dispatcher": Функция, принимающая settings и запускающая логику
-#   }
 
-SCRIPT_HANDLERS: Dict[str, Dict[str, Any]] = {
-    "manage_data.py": {
-        "name": "💾 Управление данными (Data Manager)",
-        "prompt_func": user_prompts.prompt_for_data_management,
-        "dispatcher": lambda settings: _dispatch_data(settings)
-    },
-    "run_backtest.py": {
-        "name": "🧪 Одиночный Бэктест (Single Backtest)",
-        # force_mode="single" гарантирует, что промпт не спросит режим, а сразу перейдет к файлу
-        "prompt_func": lambda: user_prompts.prompt_for_backtest_settings(force_mode="single"),
-        "dispatcher": run_single_backtest_flow
-    },
-    "run_batch_backtest.py": {
-        "name": "📦 Пакетный Бэктест (Batch Backtest)",
-        "prompt_func": lambda: user_prompts.prompt_for_backtest_settings(force_mode="batch"),
-        "dispatcher": run_batch_backtest_flow
-    },
-    "run_optimization.py": {
-        "name": "🧬 Оптимизация (WFO / Optuna)",
-        "prompt_func": user_prompts.prompt_for_optimization_settings,
-        "dispatcher": run_optimization_flow
-    },
-    "run_dashboard.py": {
-        "name": "📊 Дашборд (Аналитика & Результаты)",
-        "prompt_func": None,  # Нет настроек перед запуском
-        "dispatcher": lambda _: _run_external_script("run_dashboard.py")
-    },
-    "run_signals.py": {
-        "name": "📡 Монитор Сигналов (Telegram Alerts)",
-        "prompt_func": user_prompts.prompt_for_live_settings,
-        "dispatcher": run_live_monitor_flow
-    },
-    "add_bot.py": {
-        "name": "🤖 Добавить Телеграм Бота (Wizard)",
-        "prompt_func": None,  # Скрипт сам внутри себя задает вопросы
-        "dispatcher": lambda _: _run_external_script("add_bot.py")
-    },
-    "init_db.py": {
-        "name": "🛠️ Инициализация Базы Данных",
-        "prompt_func": lambda: questionary.confirm("Пересоздать/Обновить таблицы БД?").ask(),
-        "dispatcher": lambda confirmed: _run_external_script("init_db.py") if confirmed else print("Отмена.")
-    }
-}
-
-
-# --- Вспомогательные функции диспетчеров ---
-
-def _dispatch_data(settings: Optional[Dict[str, Any]]):
+def _build_cli_args(settings: Dict[str, Any], positional_key: str = None) -> List[str]:
     """
-    Промежуточный диспетчер для управления данными.
-    Инициализирует нужного клиента биржи и вызывает соответствующий flow.
+    Преобразует словарь настроек в список аргументов командной строки.
 
     Args:
-        settings: Словарь настроек, полученный из user_prompts.
+        settings: Словарь параметров (например, {"exchange": "bybit", "days": 100}).
+        positional_key: Если задан, значение этого ключа будет добавлено
+                        как позиционный аргумент (без --флага) в начало.
+                        Нужно для команд типа 'manage_data.py download ...'.
+
+    Returns:
+        List[str]: Список аргументов (['download', '--exchange', 'bybit', ...]).
     """
-    if not settings:
-        return
+    args = []
 
-    # 1. Определяем нужного клиента и режим
-    exchange = settings.get("exchange")
-    # Логика безопасности: Tinkoff только в песочнице, Bybit - Real (для публичных данных)
-    mode = "SANDBOX" if exchange == ExchangeType.TINKOFF else "REAL"
+    # 1. Обработка позиционного аргумента (команды)
+    if positional_key and positional_key in settings:
+        args.append(str(settings.pop(positional_key)))
 
-    try:
-        # 2. Получаем клиента из контейнера (Singleton/Flyweight)
-        client = container.get_exchange_client(exchange, mode=mode)
+    # 2. Обработка остальных аргументов
+    for key, value in settings.items():
+        # Пропускаем служебные ключи или пустые значения
+        if value is None:
+            continue
 
-        action = settings.pop("action")
-        if action == "update":
-            success, msg = update_lists_flow(settings, client)
-            print(msg)
-        elif action == "download":
-            download_data_flow(settings, client)
+        # Преобразуем python-ключи в CLI-флаги (risk_manager_type -> --rm)
+        # Маппинг ключей, если они отличаются в user_prompts и в скриптах
+        flag = f"--{key.replace('_', '-')}"
 
-    except Exception as e:
-        print(f"Ошибка при инициализации клиента биржи: {e}")
+        # Специфичный маппинг для некоторых аргументов, где имена не совпадают
+        if key == "risk_manager_type":
+            flag = "--rm"
+        elif key == "portfolio_path":
+            flag = "--portfolio-path"
+
+        if isinstance(value, bool):
+            # Для булевых флагов (если True, то добавляем флаг, если False - нет)
+            if value:
+                args.append(flag)
+        elif isinstance(value, list):
+            # Для списков (nargs='+')
+            args.append(flag)
+            args.extend([str(v) for v in value])
+        else:
+            # Для обычных значений
+            args.append(flag)
+            args.append(str(value))
+
+    return args
 
 
-def _run_external_script(script_name: str):
+def _run_script(script_name: str, args: List[str] = None):
     """
-    Запускает скрипт как отдельный процесс ОС.
-
-    Используется для:
-    1. Изоляции (чтобы ошибка скрипта не крашила лаунчер).
-    2. Скриптов с собственным сложным I/O или GUI (Streamlit).
-    3. Обхода ограничений GIL для долгих задач (хотя для этого лучше multiprocessing).
-
-    Args:
-        script_name: Имя файла в папке scripts/.
+    Запускает скрипт из папки scripts/ с переданными аргументами.
     """
     script_path = os.path.join(BASE_DIR, "scripts", script_name)
-    print(f"\n--- Запуск скрипта: {script_name} ---\n")
+    cmd = [sys.executable, script_path] + (args or [])
 
-    # Копируем текущее окружение и добавляем корень проекта в PYTHONPATH.
-    # Это КРИТИЧНО, иначе скрипт не сможет импортировать пакет 'app'.
+    print(f"\n🚀 Запуск: python scripts/{script_name} {' '.join(args or [])}")
+    print("-" * 50 + "\n")
+
+    # Копируем окружение и настраиваем PYTHONPATH
     env = os.environ.copy()
     env["PYTHONPATH"] = str(BASE_DIR) + os.pathsep + env.get("PYTHONPATH", "")
 
     try:
-        # sys.executable гарантирует использование того же интерпретатора (venv)
-        subprocess.run([sys.executable, script_path], cwd=BASE_DIR, env=env)
+        subprocess.run(cmd, cwd=BASE_DIR, env=env)
     except KeyboardInterrupt:
-        print(f"\nСкрипт {script_name} остановлен.")
+        print(f"\n🛑 Скрипт {script_name} остановлен пользователем.")
     except Exception as e:
-        print(f"Ошибка при запуске скрипта: {e}")
+        print(f"❌ Ошибка при запуске: {e}")
 
 
-# --- ОСНОВНАЯ ЛОГИКА ---
+# --- КОНФИГУРАЦИЯ ---
+
+# Описываем, как запускать каждый скрипт:
+# - prompt_func: функция диалога
+# - positional_arg: какой ключ из настроек является командой (для manage_data)
+SCRIPT_CONFIG = {
+    "manage_data.py": {
+        "name": "💾 Управление данными (Data Manager)",
+        "prompt_func": user_prompts.prompt_for_data_management,
+        "positional_arg": "action"  # 'action' из промпта станет командой (update/download)
+    },
+    "run_backtest.py": {
+        "name": "🧪 Одиночный Бэктест",
+        "prompt_func": lambda: user_prompts.prompt_for_backtest_settings(force_mode="single"),
+    },
+    "run_batch_backtest.py": {
+        "name": "📦 Пакетный Бэктест",
+        "prompt_func": lambda: user_prompts.prompt_for_backtest_settings(force_mode="batch"),
+    },
+    "run_optimization.py": {
+        "name": "🧬 Оптимизация (WFO)",
+        "prompt_func": user_prompts.prompt_for_optimization_settings,
+    },
+    "run_signals.py": {
+        "name": "📡 Монитор Сигналов (Live)",
+        "prompt_func": user_prompts.prompt_for_live_settings,
+    },
+    "run_dashboard.py": {
+        "name": "📊 Дашборд (Web UI)",
+        "prompt_func": None,
+    },
+    "add_bot.py": {
+        "name": "🤖 Добавить Телеграм Бота",
+        "prompt_func": None,
+    },
+    "init_db.py": {
+        "name": "🛠️ Инициализация БД",
+        "prompt_func": lambda: {"confirm": questionary.confirm("Создать таблицы?").ask()},
+    }
+}
+
 
 def get_scripts_list() -> list:
-    """
-    Сканирует папку scripts и возвращает список доступных .py файлов.
-    """
     scripts_dir = os.path.join(BASE_DIR, "scripts")
     if not os.path.exists(scripts_dir):
         return []
-
-    files = [f for f in os.listdir(scripts_dir) if f.endswith(".py") and f != "__init__.py"]
-    return sorted(files)
+    return sorted([f for f in os.listdir(scripts_dir) if f.endswith(".py") and f != "__init__.py"])
 
 
 def main():
-    """
-    Точка входа в UI Лаунчера.
-    Запускает бесконечный цикл меню.
-    """
     console = Console()
     console.print("[bold green]Market Bots Launcher[/bold green]", justify="center")
 
     while True:
         scripts = get_scripts_list()
-
-        # Формирование пунктов меню
         choices = []
-        for script_file in scripts:
-            handler = SCRIPT_HANDLERS.get(script_file)
-            if handler:
-                display_name = handler["name"]
-            else:
-                # Fallback для скриптов без маппинга
-                display_name = f"📜 {script_file} (Скрипт)"
 
+        for script_file in scripts:
+            config_entry = SCRIPT_CONFIG.get(script_file)
+            display_name = config_entry["name"] if config_entry else f"📜 {script_file}"
             choices.append(questionary.Choice(title=display_name, value=script_file))
 
         choices.append(questionary.Separator())
         choices.append(questionary.Choice(title="Выход", value="EXIT"))
 
-        # Отображение меню
         selected_script = questionary.select(
             "Выберите действие:",
             choices=choices,
@@ -202,35 +169,39 @@ def main():
             break
 
         # Обработка выбора
-        handler = SCRIPT_HANDLERS.get(selected_script)
+        config_entry = SCRIPT_CONFIG.get(selected_script)
+        cli_args = []
 
         try:
-            if handler:
-                # 1. Сценарий с обработчиком
-                prompt_func = handler.get("prompt_func")
-                dispatch_func = handler.get("dispatcher")
-
-                settings = {}
+            if config_entry:
+                # 1. Запуск диалога (если есть)
+                prompt_func = config_entry.get("prompt_func")
                 if prompt_func:
                     print(f"\n--- Настройка: {selected_script} ---")
                     settings = prompt_func()
 
-                    # Если user_prompts вернул None (пользователь нажал Назад/Отмена)
+                    # Если пользователь нажал "Назад" или отменил
                     if settings is None:
                         continue
 
-                # Запуск логики
-                dispatch_func(settings)
+                    # Специальная проверка для init_db (подтверждение)
+                    if selected_script == "init_db.py" and not settings.get("confirm"):
+                        print("Отмена.")
+                        continue
+                    if selected_script == "init_db.py":
+                        settings = {} # Очищаем, чтобы не передавать --confirm как аргумент
 
-            else:
-                # 2. Fallback сценарий (просто запуск файла)
-                _run_external_script(selected_script)
+                    # 2. Генерация аргументов
+                    pos_key = config_entry.get("positional_arg")
+                    cli_args = _build_cli_args(settings, positional_key=pos_key)
+
+            # 3. Запуск скрипта
+            _run_script(selected_script, cli_args)
 
             questionary.text("Нажмите Enter, чтобы вернуться в меню...").ask()
 
         except Exception as e:
-            console.print(f"[bold red]Произошла ошибка:[/bold red] {e}")
-            # Полный трейсбек полезен для отладки, даже в лаунчере
+            console.print(f"[bold red]Произошла ошибка в лаунчере:[/bold red] {e}")
             import traceback
             traceback.print_exc()
             questionary.text("Нажмите Enter...").ask()

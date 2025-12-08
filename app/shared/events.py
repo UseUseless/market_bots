@@ -1,14 +1,14 @@
 """
 Модуль определений событий (Events).
 
-Этот файл содержит классы событий, которые используются для асинхронного обмена
+Этот файл содержит классы событий, которые используются для обмена
 данными между компонентами системы через шину событий (Event Bus) или очереди (Queue).
 
 Жизненный цикл торговой операции:
 1.  **MarketEvent**: Пришли новые данные (свеча).
 2.  **SignalEvent**: Стратегия проанализировала данные и захотела купить/продать.
 3.  **OrderEvent**: Риск-менеджер одобрил сигнал, рассчитал объем и создал ордер.
-4.  **FillEvent**: Биржа (или симулятор) исполнила ордер.
+4.  **FillEvent**: Симулятор исполнил ордер.
 """
 
 from dataclasses import dataclass
@@ -40,14 +40,15 @@ class MarketEvent(Event):
     Потребители: Strategy (для анализа), RiskMonitor (для проверки SL/TP).
 
     Attributes:
-        timestamp (datetime): Время закрытия свечи (UTC).
-        instrument (str): Тикер инструмента (например, 'BTCUSDT').
         data (pd.Series): Полная строка данных свечи (OHLCV) плюс
             рассчитанные индикаторы. Стратегия использует именно это поле.
+        instrument (str): Тикер инструмента (например, 'BTCUSDT').
+        timestamp (datetime): Время закрытия свечи (UTC).
+
     """
-    timestamp: datetime
-    instrument: str
     data: pd.Series
+    instrument: str
+    timestamp: datetime
 
 
 @dataclass
@@ -63,21 +64,20 @@ class SignalEvent(Event):
     лимита потерь) или скорректирован.
 
     Attributes:
-        timestamp (datetime): Время генерации сигнала.
         instrument (str): Тикер инструмента.
         direction (TradeDirection): Направление (BUY/SELL).
+        timestamp (datetime): Время генерации сигнала.
         strategy_id (str): Идентификатор стратегии (для логов и статистики).
+        interval (str): Таймфрейм, на котором получен сигнал (для логов).
         price (Optional[float]): Рекомендуемая цена входа (обычно Close свечи).
                                  Если None — предполагается вход по рынку.
-        interval (str): Таймфрейм, на котором получен сигнал (для логов).
     """
-    timestamp: datetime
     instrument: str
     direction: TradeDirection
+    timestamp: datetime
     strategy_id: str
-    price: Optional[float] = None
     interval: str = None
-
+    price: Optional[float] = None
 
 @dataclass
 class OrderEvent(Event):
@@ -91,25 +91,23 @@ class OrderEvent(Event):
     размер позиции (quantity) рассчитан и округлен под требования биржи.
 
     Attributes:
-        timestamp (datetime): Время создания ордера.
         instrument (str): Тикер инструмента.
-        quantity (float): Точное количество лотов/монет для отправки на биржу.
         direction (TradeDirection): Направление сделки.
+        timestamp (datetime): Время создания ордера.
         trigger_reason (TriggerReason): Причина ордера (Сигнал стратегии, Стоп-лосс, Тейк-профит).
+        quantity (float): Точное количество лотов/монет для отправки на биржу.
         stop_loss (float): Рассчитанный уровень SL.
         take_profit (float): Рассчитанный уровень TP.
-        price_hint (Optional[float]): "Подсказка" цены для симулятора.
-            Используется в бэктестах, чтобы Simulator знал, от какой цены считать
-            проскальзывание, не заглядывая в будущее. Обычно это Close текущей свечи.
+        price (Optional[float]): Цена без проскальзывания для Sl/TP. Обычно это Close текущей свечи.
     """
-    timestamp: datetime
     instrument: str
-    quantity: float
     direction: TradeDirection
+    timestamp: datetime
     trigger_reason: TriggerReason
+    quantity: float
+    price: Optional[float] = None
     stop_loss: float = 0.0
     take_profit: float = 0.0
-    price_hint: Optional[float] = None
 
 
 @dataclass
@@ -123,22 +121,22 @@ class FillEvent(Event):
     Описывает, что *фактически* произошло на бирже.
 
     Attributes:
-        timestamp (datetime): Фактическое время исполнения сделки.
         instrument (str): Тикер инструмента.
-        quantity (float): Фактически исполненный объем.
         direction (TradeDirection): Направление.
-        price (float): Средняя цена исполнения (с учетом проскальзывания).
-        commission (float): Удержанная комиссия (в валюте котировки).
+        timestamp (datetime): Фактическое время исполнения сделки.
         trigger_reason (TriggerReason): Причина, по которой произошла сделка.
+        quantity (float): Фактически исполненный объем.
+        commission (float): Удержанная комиссия (в валюте котировки).
+        price (float): Средняя цена исполнения (с учетом проскальзывания).
         stop_loss (float): Уровень SL, привязанный к этой позиции (для учета в стейте).
         take_profit (float): Уровень TP, привязанный к этой позиции.
     """
-    timestamp: datetime
     instrument: str
-    quantity: float
     direction: TradeDirection
-    price: float
-    commission: float
+    timestamp: datetime
     trigger_reason: TriggerReason
+    quantity: float
+    commission: float
+    price: float
     stop_loss: float = 0.0
     take_profit: float = 0.0

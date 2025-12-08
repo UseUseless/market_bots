@@ -143,7 +143,7 @@ class VolatilityBreakoutStrategy(BaseStrategy):
 
             if pullback_triggered:
                 logger.info(f"Откат к EMA({self.pullback_ema_period}) произошел. Генерирую сигнал {direction}.")
-                self.events_queue.put(SignalEvent(timestamp, self.instrument, direction, self.name))
+                self.events_queue.put(SignalEvent(timestamp=timestamp, instrument=self.instrument, direction=direction, strategy_id=self.name))
                 self._reset_state()
             return
 
@@ -166,7 +166,7 @@ class VolatilityBreakoutStrategy(BaseStrategy):
                     self.state["pullback_bar_counter"] = 0
                 else:
                     logger.info("Генерирую сигнал НЕМЕДЛЕННО после подтверждения.")
-                    self.events_queue.put(SignalEvent(timestamp, self.instrument, direction, self.name))
+                    self.events_queue.put(SignalEvent(timestamp=timestamp, instrument=self.instrument, direction=direction, strategy_id=self.name))
                     self._reset_state()
             else:
                 logger.info("Пробой НЕ подтвержден, сигнал отменен.")
@@ -192,7 +192,7 @@ class VolatilityBreakoutStrategy(BaseStrategy):
                     self.state["waiting_for_breakout"] = False
                 else:
                     logger.info(f"Обнаружен пробой {direction}. Генерирую сигнал НЕМЕДЛЕННО.")
-                    self.events_queue.put(SignalEvent(timestamp, self.instrument, direction, self.name))
+                    self.events_queue.put(SignalEvent(timestamp=timestamp, instrument=self.instrument, direction=direction, strategy_id=self.name))
                     self._reset_state()
             return
 

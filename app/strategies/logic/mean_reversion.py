@@ -94,16 +94,28 @@ class MeanReversionStrategy(BaseStrategy):
 
         # Сигнал на покупку (возврат к среднему снизу)
         if prev_z_score < self.lower_threshold and current_z_score >= self.lower_threshold:
-            self.events_queue.put(SignalEvent(timestamp, self.instrument, TradeDirection.BUY, self.name))
+            self.events_queue.put(SignalEvent(timestamp=timestamp,
+                                              instrument=self.instrument,
+                                              direction=TradeDirection.BUY,
+                                              strategy_id=self.name))
 
         # Сигнал на продажу (возврат к среднему сверху)
         elif prev_z_score > self.upper_threshold and current_z_score <= self.upper_threshold:
-            self.events_queue.put(SignalEvent(timestamp, self.instrument, TradeDirection.SELL, self.name))
+            self.events_queue.put(SignalEvent(timestamp=timestamp,
+                                              instrument=self.instrument,
+                                              direction=TradeDirection.SELL,
+                                              strategy_id=self.name))
 
         # Сигнал на закрытие лонга (пересечение нулевой линии)
         elif prev_z_score < 0 and current_z_score >= 0:
-            self.events_queue.put(SignalEvent(timestamp, self.instrument, TradeDirection.SELL, self.name))
+            self.events_queue.put(SignalEvent(timestamp=timestamp,
+                                              instrument=self.instrument,
+                                              direction=TradeDirection.SELL,
+                                              strategy_id=self.name))
 
         # Сигнал на закрытие шорта (пересечение нулевой линии)
         elif prev_z_score > 0 and current_z_score <= 0:
-            self.events_queue.put(SignalEvent(timestamp, self.instrument, TradeDirection.BUY, self.name))
+            self.events_queue.put(SignalEvent(timestamp=timestamp,
+                                              instrument=self.instrument,
+                                              direction=TradeDirection.BUY,
+                                              strategy_id=self.name))

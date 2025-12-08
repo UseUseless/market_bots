@@ -18,37 +18,9 @@ from tqdm import tqdm
 import optuna
 
 
-class TqdmLoggingHandler(logging.Handler):
-    """
-    Кастомный обработчик логов для корректной работы с прогресс-барами `tqdm`.
-
-    Если использовать стандартный `StreamHandler`, вывод логов будет "разрывать"
-    строку прогресс-бара. Этот класс использует `tqdm.write()`, который аккуратно
-    печатает сообщение *над* прогресс-баром.
-    """
-
-    def __init__(self, level=logging.NOTSET):
-        super().__init__(level)
-
-    def emit(self, record):
-        """
-        Перехватывает запись лога и выводит её через tqdm.
-        """
-        try:
-            msg = self.format(record)
-            tqdm.write(msg)
-            self.flush()
-        except Exception:
-            self.handleError(record)
-
-
 def setup_global_logging(mode: str = 'default', log_level: int = logging.INFO):
     """
-    Централизованная настройка корневого логгера приложения.
-
-    Очищает существующие хендлеры и устанавливает новые в зависимости от режима.
-    Также настраивает уровень шума для сторонних библиотек.
-
+    Настройка корневого логгера приложения.
     Args:
         mode (str): Режим вывода.
             - 'default': Стандартный вывод в stdout (для обычного запуска).
@@ -86,51 +58,6 @@ def setup_global_logging(mode: str = 'default', log_level: int = logging.INFO):
     optuna_logger.propagate = False
 
 
-class BacktestTimeFilter(logging.Filter):
-    """
-    Фильтр логирования для внедрения времени симуляции.
-
-    В режиме бэктеста реальное время (wall-clock time) не имеет значения.
-    Важно знать, какое время было "внутри" симуляции, когда произошло событие.
-
-    Использует `threading.local`, чтобы потокобезопасно хранить время
-    для каждого запущенного бэктеста (если они идут параллельно).
-    """
-
-    def __init__(self):
-        super().__init__()
-        self._storage = local()
-        self._storage.sim_time = None
-
-    def set_sim_time(self, dt: datetime):
-        """
-        Устанавливает текущее время симуляции для текущего потока.
-        Вызывается движком бэктеста на каждой новой свече.
-
-        Args:
-            dt (datetime): Текущее время в симуляции.
-        """
-        self._storage.sim_time = dt.strftime('%Y-%m-%d %H:%M:%S')
-
-    def reset_sim_time(self):
-        """Сбрасывает время симуляции (например, при завершении теста)."""
-        self._storage.sim_time = None
-
-    def filter(self, record):
-        """
-        Добавляет атрибут `sim_time` к каждой записи лога.
-
-        Если время не установлено (этап инициализации), используется метка 'SETUP'.
-        В формате логов можно использовать `%(sim_time)s`.
-        """
-        record.sim_time = getattr(self._storage, 'sim_time', None) or "SETUP"
-        return True
-
-
-# Глобальный экземпляр фильтра, который импортируют другие модули
-backtest_time_filter = BacktestTimeFilter()
-
-
 def setup_backtest_logging(log_file_path: str):
     """
     Настраивает специфичный логгер для одиночного прогона бэктеста.
@@ -156,21 +83,77 @@ def setup_backtest_logging(log_file_path: str):
     console_handler.setFormatter(log_formatter)
 
     # Настройка логгера 'backtester'
-    app_logger = logging.getLogger('backtester')
-    app_logger.setLevel(logging.INFO)
+    backtest_logger = logging.getLogger('backtester')
+    backtest_logger.setLevel(logging.INFO)
 
     # Очистка старых хендлеров (критично при повторных запусках из кода)
-    if app_logger.hasHandlers():
-        app_logger.handlers.clear()
+    for handler in backtest_logger.handlers[:]:
+        backtest_logger.removeHandler(handler)
 
     # Подключение хендлеров и фильтра времени
-    app_logger.addHandler(file_handler)
-    app_logger.addHandler(console_handler)
-    app_logger.addFilter(backtest_time_filter)
+    backtest_logger.addHandler(file_handler)
+    backtest_logger.addHandler(console_handler)
+    backtest_logger.addFilter(backtest_time_filter)
 
     # Отключаем всплытие (propagate), чтобы логи не дублировались в корневом логгере
-    app_logger.propagate = False
+    backtest_logger.propagate = False
 
-    # Повторно глушим шумные библиотеки, на случай если они проснулись
-    logging.getLogger('matplotlib').setLevel(logging.WARNING)
-    logging.getLogger('PIL').setLevel(logging.WARNING)
+
+class TqdmLoggingHandler(logging.Handler):
+    """
+    Кастомный обработчик логов для корректной работы с прогресс-барами `tqdm`.
+    """
+
+    def __init__(self, level=logging.NOTSET):
+        super().__init__(level)
+
+    def emit(self, record):
+        """
+        Перехватывает запись лога и выводит её через tqdm.
+        """
+        try:
+            msg = self.format(record)
+            tqdm.write(msg)
+            self.flush()
+        except Exception:
+            self.handleError(record)
+
+
+class BacktestTimeFilter(logging.Filter):
+    """
+    Заменяет в логах для бэктеста текущее системное время, на время свечи из df
+
+    Использует `threading.local`, чтобы потокобезопасно хранить время
+    для каждого запущенного бэктеста (если они идут параллельно).
+    """
+
+    def __init__(self):
+        super().__init__()
+        self._storage = local()
+        self._storage.sim_time = None
+
+    def set_sim_time(self, dt: datetime):
+        """
+        Устанавливает текущее время симуляции для текущего потока.
+        Вызывается движком бэктеста на каждой новой свече.
+
+        Args:
+            dt (datetime): Текущее время в симуляции.
+        """
+        self._storage.sim_time = dt.strftime('%Y-%m-%d %H:%M:%S')
+
+    def reset_sim_time(self):
+        """Сбрасывает время симуляции (например, при завершении теста)."""
+        self._storage.sim_time = None
+
+    def filter(self, log_record):
+        """
+        Добавляет атрибут `sim_time` к каждому логу.
+
+        Если время не установлено (этап инициализации), используется метка 'SETUP'.
+        В формате логов можно использовать `%(sim_time)s`.
+        """
+        log_record.sim_time = getattr(self._storage, 'sim_time', None) or "SETUP"
+        return True
+# Глобальный экземпляр фильтра, который импортируют другие модули
+backtest_time_filter = BacktestTimeFilter()

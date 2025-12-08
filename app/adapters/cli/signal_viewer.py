@@ -14,7 +14,7 @@ import asyncio
 import logging
 from typing import Optional
 
-from app.shared.time_helper import parse_interval_to_timedelta, msk_timezone
+from app.shared.time_helper import interval_to_timedelta, msk_timezone
 from app.core.event_bus import SignalBus
 from app.shared.events import SignalEvent
 from app.shared.primitives import TradeDirection
@@ -82,7 +82,7 @@ class ConsoleAdapter:
         """
         # 1. Считаем время закрытия свечи (сигнал приходит по Open Time, но логически это Close)
         # TODO: Убедиться, что event.interval корректно заполняется в стратегии
-        duration = parse_interval_to_timedelta(event.interval or "1min")
+        duration = interval_to_timedelta(event.interval or "1min")
         close_time_utc = event.timestamp + duration
 
         # 2. Переводим в МСК для удобства пользователя

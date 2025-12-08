@@ -22,7 +22,7 @@ from app.shared.events import SignalEvent
 from app.core.interfaces import IPublisher, IDataFeed
 from app.strategies.base_strategy import BaseStrategy
 from app.core.portfolio.state import PortfolioState
-from app.shared.time_helper import parse_interval_to_timedelta
+from app.shared.time_helper import interval_to_timedelta
 from app.shared.config import config
 
 logger = logging.getLogger(__name__)
@@ -83,7 +83,7 @@ class SignalEngine:
             # --- 1. Разогрев (Warm-up) ---
             # Рассчитываем, сколько дней истории нужно скачать.
             needed_candles = strategy.min_history_needed + 10
-            interval_delta = parse_interval_to_timedelta(feed.interval)
+            interval_delta = interval_to_timedelta(feed.interval)
 
             # Рассчитываем таймаут ожидания данных (Watchdog)
             # Если данных нет 5 интервалов (или минимум 5 минут), считаем поток мертвым

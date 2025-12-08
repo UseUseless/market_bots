@@ -13,7 +13,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import numpy as np
 
-from app.shared.time_helper import parse_interval_to_timedelta
+from app.shared.time_helper import interval_to_timedelta
 from app.infrastructure.storage.file_io import load_trades_from_file
 from app.core.analysis.metrics import PortfolioMetricsCalculator, BenchmarkMetricsCalculator
 from app.shared.primitives import TradeDirection
@@ -136,7 +136,7 @@ def plot_trades_on_chart(historical_data: pd.DataFrame, trades_df: pd.DataFrame,
     # Коррекция времени сделок
     # Сделки совершаются по ценам Close/Open свечи, но для красивого отображения
     # маркеры лучше сдвигать к моменту Open соответствующей свечи.
-    delta = parse_interval_to_timedelta(interval_str)
+    delta = interval_to_timedelta(interval_str)
 
     trades_df['entry_timestamp_utc'] = pd.to_datetime(trades_df['entry_timestamp_utc'])
     trades_df['exit_timestamp_utc'] = pd.to_datetime(trades_df['exit_timestamp_utc'])

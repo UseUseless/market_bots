@@ -46,7 +46,9 @@ except FileNotFoundError as e:
     # Если запуск совсем кривой, используем stderr, т.к. st еще может быть не инициализирован
     print(f"CRITICAL PATH ERROR: {e}", file=sys.stderr)
 
-# --- Импорты приложения ---
+from app.shared.logging_setup import setup_global_logging
+setup_global_logging(mode='default')
+
 # Теперь, когда sys.path настроен, можно импортировать внутренние модули
 from app.adapters.dashboard.components.data_loader import load_all_backtests
 from app.adapters.dashboard.components.sidebar import render_sidebar

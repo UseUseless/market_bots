@@ -19,17 +19,16 @@ import questionary
 from . import dialogs as ui_helpers
 from app.strategies.base_strategy import BaseStrategy
 from app.core.analysis.constants import METRIC_CONFIG
+# Импортируем реестр риск-менеджеров, чтобы список был динамическим
+from app.core.risk.manager import AVAILABLE_RISK_MANAGERS
 from app.shared.primitives import ExchangeType
 from app.shared.config import config
+from docs.help_texts import HELP_TOPICS
 
-# Попытка импорта модуля документации (опционально)
-try:
-    from docs.help_texts import HELP_TOPICS
-except ImportError:
-    HELP_TOPICS = {}
 
 PATH_CONFIG = config.PATH_CONFIG
 EXCHANGE_INTERVAL_MAPS = config.EXCHANGE_INTERVAL_MAPS
+DATA_LOADER_CONFIG = config.DATA_LOADER_CONFIG
 
 # Константы для меню
 GO_BACK_OPTION = "Назад"
@@ -50,19 +49,6 @@ class UserCancelledError(Exception):
 def ask(question_func, *args, **kwargs):
     """
     Обертка для вызова функций questionary с обработкой отмены.
-
-    Если пользователь нажимает Ctrl+C или выбирает 'Назад',
-    выбрасывается UserCancelledError.
-
-    Args:
-        question_func: Функция questionary (select, text, confirm и т.д.).
-        *args, **kwargs: Аргументы для этой функции.
-
-    Returns:
-        Ответ пользователя.
-
-    Raises:
-        UserCancelledError: Если ввод отменен.
     """
     try:
         answer = question_func(*args, **kwargs).ask()
@@ -76,7 +62,6 @@ def ask(question_func, *args, **kwargs):
 def get_available_strategies() -> Dict[str, Type[BaseStrategy]]:
     """
     Динамически находит и импортирует все доступные стратегии.
-    Использует ленивый импорт, чтобы избежать циклических зависимостей.
     """
     from app.strategies import AVAILABLE_STRATEGIES
     return AVAILABLE_STRATEGIES
@@ -85,12 +70,6 @@ def get_available_strategies() -> Dict[str, Type[BaseStrategy]]:
 def _select_metrics_for_optimization() -> List[str]:
     """
     Диалог выбора метрик для оптимизации (WFO).
-
-    Позволяет выбрать одну цель (например, maximize Sharpe) или две
-    для построения фронта Парето (например, Sharpe vs Drawdown).
-
-    Returns:
-        List[str]: Список ключей метрик (например, ['sharpe_ratio', 'max_drawdown']).
     """
     mode = ask(
         questionary.select,
@@ -136,27 +115,25 @@ def _select_metrics_for_optimization() -> List[str]:
 def prompt_for_data_management() -> Optional[Dict[str, Any]]:
     """
     Диалог управления данными (скачивание, обновление списков).
-
-    Returns:
-        Optional[Dict[str, Any]]: Словарь с настройками для `data_manager`.
     """
     UPDATE_LISTS = "Обновить списки ликвидных инструментов"
     DOWNLOAD_DATA = "Скачать исторические данные"
 
     try:
-        action = ask(
+        selected_action_text = ask(
             questionary.select, "Выберите действие:",
             choices=[UPDATE_LISTS, DOWNLOAD_DATA, GO_BACK_OPTION]
         )
 
-        if action == UPDATE_LISTS:
+        # Маппинг текста меню на команды скрипта manage_data.py
+        if selected_action_text == UPDATE_LISTS:
             exchange = ask(
                 questionary.select, "Выберите биржу:",
                 choices=[ExchangeType.TINKOFF, ExchangeType.BYBIT, GO_BACK_OPTION]
             )
             return {"action": "update", "exchange": exchange}
 
-        elif action == DOWNLOAD_DATA:
+        elif selected_action_text == DOWNLOAD_DATA:
             download_mode = ask(
                 questionary.select, "Что вы хотите скачать?",
                 choices=["Отдельные тикеры (ручной ввод)", "Готовый список инструментов", GO_BACK_OPTION]
@@ -170,6 +147,7 @@ def prompt_for_data_management() -> Optional[Dict[str, Any]]:
 
             if "Отдельные тикеры" in download_mode:
                 instruments_str = ask(questionary.text, f"Введите тикеры для {exchange.upper()} через пробел:")
+                # manage_data.py ожидает список для --instrument
                 settings["instrument"] = instruments_str.split()
             else:
                 lists_dir = PATH_CONFIG["DATALISTS_DIR"]
@@ -188,17 +166,21 @@ def prompt_for_data_management() -> Optional[Dict[str, Any]]:
             available_intervals = list(EXCHANGE_INTERVAL_MAPS[exchange].keys())
             interval = ask(questionary.select, "Выберите интервал:", choices=[*available_intervals, GO_BACK_OPTION])
 
+            # DRY: Берем дефолтное кол-во дней из конфига
+            default_days = str(DATA_LOADER_CONFIG["DAYS_TO_LOAD"])
             days = ask(
-                questionary.text, "Количество дней загрузки:", default="365",
+                questionary.text, "Количество дней загрузки:", default=default_days,
                 validate=lambda text: text.isdigit() and int(text) > 0
             )
 
             settings.update({"interval": interval, "days": int(days)})
 
             if exchange == ExchangeType.BYBIT:
+                # DRY: Берем дефолтную категорию из конфига
+                default_cat = config.EXCHANGE_SPECIFIC_CONFIG[ExchangeType.BYBIT]["DEFAULT_CATEGORY"]
                 category = ask(
                     questionary.select, "Категория рынка Bybit:",
-                    choices=["linear", "spot", "inverse", GO_BACK_OPTION], default="linear"
+                    choices=["linear", "spot", "inverse", GO_BACK_OPTION], default=default_cat
                 )
                 settings["category"] = category
 
@@ -211,13 +193,6 @@ def prompt_for_data_management() -> Optional[Dict[str, Any]]:
 def prompt_for_backtest_settings(force_mode: str = None) -> Optional[Dict[str, Any]]:
     """
     Диалог настройки бэктеста.
-
-    Args:
-        force_mode (str): Принудительный режим ('single' или 'batch').
-                          Используется, если скрипт запущен напрямую.
-
-    Returns:
-        Optional[Dict[str, Any]]: Настройки для запуска движка бэктеста.
     """
     try:
         strategies = get_available_strategies()
@@ -234,9 +209,12 @@ def prompt_for_backtest_settings(force_mode: str = None) -> Optional[Dict[str, A
             )
 
         strategy_name = ask(questionary.select, "Выберите стратегию:", choices=[*strategies.keys(), GO_BACK_OPTION])
+
+        # Динамический список риск-менеджеров
+        rm_options = list(AVAILABLE_RISK_MANAGERS.keys()) + [GO_BACK_OPTION]
         rm_type = ask(
             questionary.select, "Выберите риск-менеджер:",
-            choices=["FIXED", "ATR", GO_BACK_OPTION], default="FIXED"
+            choices=rm_options, default="FIXED"
         )
 
         settings = {"strategy": strategy_name, "risk_manager_type": rm_type}
@@ -260,9 +238,6 @@ def prompt_for_backtest_settings(force_mode: str = None) -> Optional[Dict[str, A
 def prompt_for_optimization_settings() -> Optional[Dict[str, Any]]:
     """
     Диалог настройки оптимизации (WFO).
-
-    Returns:
-        Optional[Dict[str, Any]]: Настройки для `OptimizationEngine`.
     """
     try:
         strategies = get_available_strategies()
@@ -272,7 +247,10 @@ def prompt_for_optimization_settings() -> Optional[Dict[str, Any]]:
 
         strategy_name = ask(questionary.select, "Стратегия для оптимизации:",
                             choices=[*strategies.keys(), GO_BACK_OPTION])
-        rm_type = ask(questionary.select, "Риск-менеджер:", choices=["FIXED", "ATR", GO_BACK_OPTION])
+
+        # Динамический список риск-менеджеров
+        rm_options = list(AVAILABLE_RISK_MANAGERS.keys()) + [GO_BACK_OPTION]
+        rm_type = ask(questionary.select, "Риск-менеджер:", choices=rm_options)
 
         opt_mode = ask(
             questionary.select, "Объект оптимизации:",
@@ -291,6 +269,7 @@ def prompt_for_optimization_settings() -> Optional[Dict[str, Any]]:
             if data_params:
                 full_path = os.path.join(PATH_CONFIG["DATA_DIR"], data_params['exchange'], data_params['interval'])
                 settings.update(data_params)
+                # Для скрипта run_optimization.py ключ должен быть portfolio_path
                 settings["portfolio_path"] = full_path
 
         if not data_params: return None
@@ -343,10 +322,6 @@ def prompt_for_help_topic() -> Optional[str]:
     """
     Показывает меню выбора темы помощи (если доступно).
     """
-    if not HELP_TOPICS:
-        print("Справка недоступна (файл docs/help_texts.py не найден).")
-        return None
-
     try:
         choices = list(HELP_TOPICS.keys()) + [GO_BACK_OPTION]
         topic_key = ask(

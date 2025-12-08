@@ -48,22 +48,22 @@ class Position:
 
     Attributes:
         instrument (str): Тикер инструмента (например, 'BTCUSDT' или 'SBER').
-        quantity (float): Текущий объем позиции.
-        entry_price (float): Цена входа.
-        entry_timestamp (datetime): Время открытия позиции (UTC).
         direction (TradeDirection): Направление (Long/Short).
+        entry_timestamp (datetime): Время открытия позиции (UTC).
+        quantity (float): Текущий объем позиции.
+        entry_commission (float): Комиссия, уплаченная при входе (для расчета чистого PnL при выходе).
+        entry_price (float): Цена входа.
         stop_loss (float): Текущий уровень Stop Loss.
         take_profit (float): Текущий уровень Take Profit.
-        entry_commission (float): Комиссия, уплаченная при входе (для расчета чистого PnL при выходе).
     """
     instrument: str
-    quantity: float
-    entry_price: float
-    entry_timestamp: datetime
     direction: TradeDirection
+    entry_timestamp: datetime
+    quantity: float
+    entry_commission: float
+    entry_price: float
     stop_loss: float
     take_profit: float
-    entry_commission: float
 
 
 @dataclass

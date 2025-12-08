@@ -90,9 +90,9 @@ class SimulatedExecutionHandler(BaseExecutionHandler):
         Исполняет ордер.
 
         Логика выбора цены:
-        1. Если это StopLoss/TakeProfit (`price_hint` задан): Исполняем по уровню стопа
+        1. Если это StopLoss/TakeProfit (`price` задан): Исполняем по уровню стопа
            (с добавлением проскальзывания).
-        2. Если это Рыночный вход по сигналу (`price_hint` is None): Исполняем по цене
+        2. Если это Рыночный вход по сигналу (`price` is None): Исполняем по цене
            OPEN текущей свечи (`last_candle['open']`).
            *Почему Open?* Потому что сигнал генерируется по Close предыдущей свечи (`t-1`).
            Физически мы можем войти только на открытии следующей (`t`).
@@ -109,9 +109,9 @@ class SimulatedExecutionHandler(BaseExecutionHandler):
             raise ValueError("Для симуляции исполнения необходимы данные последней свечи.")
 
         # 1. Определение базовой цены
-        if event.price_hint is not None:
+        if event.price is not None:
             # Исполнение отложенного ордера (SL/TP)
-            ideal_price = event.price_hint
+            ideal_price = event.price
         else:
             # Рыночный вход (Market Order)
             ideal_price = last_candle['open']

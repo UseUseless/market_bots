@@ -128,7 +128,7 @@ class RiskMonitor:
             position (Position): Позиция, которую нужно закрыть.
             reason (TriggerReason): Причина (SL или TP).
             execution_price (float): Цена, по которой должен исполниться ордер
-                (уровень SL или TP). Передается как `price_hint` для симулятора.
+                (уровень SL или TP).
             state (PortfolioState): Состояние портфеля.
         """
         # Закрытие = сделка в противоположном направлении
@@ -140,7 +140,7 @@ class RiskMonitor:
             quantity=position.quantity,  # Закрываем полный объем
             direction=exit_direction,
             trigger_reason=reason,
-            price_hint=execution_price  # Подсказка симулятору: "исполни по этой цене"
+            price=execution_price
         )
         self.events_queue.put(order)
 

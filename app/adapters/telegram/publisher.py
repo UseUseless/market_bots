@@ -22,7 +22,7 @@ from app.adapters.telegram.manager import BotManager
 from app.infrastructure.database.session import async_session_factory
 from app.infrastructure.database.repositories import BotRepository
 from app.infrastructure.database.models import StrategyConfig
-from app.shared.time_helper import parse_interval_to_timedelta, msk_timezone
+from app.shared.time_helper import interval_to_timedelta, msk_timezone
 from app.shared.primitives import TradeDirection
 
 logger = logging.getLogger(__name__)
@@ -153,7 +153,7 @@ class TelegramBridge:
             str: Текст сообщения.
         """
         # 1. Рассчитываем время закрытия свечи (timestamp сигнала указывает на начало свечи + интервал)
-        duration = parse_interval_to_timedelta(event.interval or "1min")
+        duration = interval_to_timedelta(event.interval or "1min")
         close_time_utc = event.timestamp + duration
 
         # 2. Переводим в Московское время

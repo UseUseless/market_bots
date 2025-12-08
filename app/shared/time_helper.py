@@ -8,7 +8,7 @@
 from datetime import timedelta, timezone
 
 
-def parse_interval_to_timedelta(interval_str: str) -> timedelta:
+def interval_to_timedelta(interval_str: str) -> timedelta:
     """
     Преобразует строку интервала (из конфига или API) в объект `timedelta`.
 
