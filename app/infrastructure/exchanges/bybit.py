@@ -14,14 +14,13 @@
 import logging
 import time
 from datetime import datetime, timedelta
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 
 import pandas as pd
 from tqdm import tqdm
 from pybit.unified_trading import HTTP
 
 from app.infrastructure.exchanges.base import BaseExchangeHandler
-from app.core.interfaces import TradeModeType
 from app.shared.primitives import ExchangeType
 from app.shared.config import config
 
@@ -31,44 +30,20 @@ logger = logging.getLogger(__name__)
 class BybitHandler(BaseExchangeHandler):
     """
     Адаптер для биржи Bybit.
-
-    Наследуется от BaseExchangeHandler, получая общие механизмы обработки данных.
-    Реализует специфику API Bybit V5.
+    Работает в режиме Read-Only.
     """
 
-    def __init__(self, trade_mode: TradeModeType = "SANDBOX"):
+    def __init__(self):
         """
         Инициализирует клиента Bybit.
-
-        Args:
-            trade_mode (TradeModeType): Режим работы.
-                - SANDBOX: Использует Testnet (ключи BYBIT_TESTNET_*).
-                - REAL: Использует Mainnet (ключи BYBIT_REAL_* - пока не реализованы в конфиге).
         """
-        # Инициализация базового класса
-        super().__init__(trade_mode)
+        super().__init__()
 
-        use_testnet = (self.trade_mode == "SANDBOX")
-        api_key = ""
-        api_secret = ""
+        self.default_category = config.EXCHANGE_SPECIFIC_CONFIG[ExchangeType.BYBIT]["DEFAULT_CATEGORY"]
 
-        # В будущем здесь можно добавить ветку для REAL ключей
-        if use_testnet:
-            api_key = config.BYBIT_TESTNET_API_KEY
-            api_secret = config.BYBIT_TESTNET_API_SECRET
+        self.client = HTTP(testnet=False, timeout=10)
 
-            # Проверка наличия ключей (базовая защита от запуска без конфига)
-            if not api_key or "Your" in api_key or not api_secret or "Your" in api_secret:
-                raise ConnectionError(f"API ключи для Bybit ({trade_mode}) не заданы в .env.")
-
-        # Инициализация HTTP сессии pybit с таймаутом
-        self.client = HTTP(
-            testnet=use_testnet,
-            api_key=api_key,
-            api_secret=api_secret,
-            timeout=10
-        )
-        logging.info(f"Торговый клиент Bybit инициализирован в режиме '{self.trade_mode}'.")
+        logging.info(f"Bybit Client инициализирован для получения данных.")
 
     def get_historical_data(self, instrument: str, interval: str, days: int, **kwargs) -> pd.DataFrame:
         """
@@ -89,7 +64,7 @@ class BybitHandler(BaseExchangeHandler):
             pd.DataFrame: DataFrame с историей.
         """
         instrument_upper = instrument.upper()
-        category = kwargs.get("category", "linear")
+        category = kwargs.get("category", self.default_category)
         # Лимит 200 безопасен и стабилен, хотя API позволяет до 1000
         limit = kwargs.get("limit", 200)
 
@@ -189,7 +164,7 @@ class BybitHandler(BaseExchangeHandler):
         Returns:
             Dict[str, Any]: Словарь с 'min_order_qty' и 'qty_step'.
         """
-        category = kwargs.get("category", "linear")
+        category = kwargs.get("category", self.default_category)
         instrument_upper = instrument.upper()
         try:
             response = self.client.get_instruments_info(category=category, symbol=instrument_upper)
@@ -222,7 +197,7 @@ class BybitHandler(BaseExchangeHandler):
             List[str]: Список тикеров, отсортированных по обороту.
         """
         try:
-            tickers_response = self.client.get_tickers(category="linear")
+            tickers_response = self.client.get_tickers(category=self.default_category)
             if tickers_response.get("retCode") != 0:
                 return []
 
@@ -250,35 +225,3 @@ class BybitHandler(BaseExchangeHandler):
         except Exception as e:
             logging.error(f"Bybit Top Liquid Error: {e}")
             return []
-
-    def _place_order_impl(self, instrument_id: str, quantity: float, direction: str, **kwargs) -> Optional[dict]:
-        """
-        Внутренняя реализация отправки ордера для Bybit.
-
-        Вызывается шаблонным методом `place_market_order` из базового класса.
-
-        Args:
-            instrument_id (str): Тикер.
-            quantity (float): Объем.
-            direction (str): 'BUY' или 'SELL'.
-            **kwargs: category (str).
-
-        Returns:
-            Optional[dict]: Результат от API или None.
-        """
-        category = kwargs.get("category", "linear")
-
-        response = self.client.place_order(
-            category=category,
-            symbol=instrument_id,
-            side=direction.capitalize(), # Bybit требует 'Buy'/'Sell'
-            orderType="Market",
-            qty=str(quantity) # pybit требует строку для точности
-        )
-
-        if response.get("retCode") == 0:
-            return response['result']
-        else:
-            # Логируем специфичное сообщение об ошибке от Bybit
-            logging.error(f"Bybit API Error: {response.get('retMsg')}")
-            return None

@@ -20,13 +20,18 @@ class AppConfig(BaseSettings):
     """
     Основной класс конфигурации.
 
-    Наследуется от `BaseSettings`, что позволяет автоматически мапить
-    переменные окружения (например, `TINKOFF_TOKEN`) в атрибуты класса.
+    Наследуется от `BaseSettings`, что позволяет автоматически
+    загружать .env в атрибуты класса.
     """
 
-    # =========================================================================
+    # --- Pydantic Config ---
+    model_config = SettingsConfigDict(
+        env_file=".env",  # Имя файла с секретами
+        env_file_encoding="utf-8",  # Кодировка файла
+        extra="ignore"  # Игнорировать лишние переменные в .env, не выбрасывая ошибку
+    )
+
     # 1. Основные пути (File System Paths)
-    # =========================================================================
 
     # Определяем корень проекта относительно текущего файла.
     # app/shared/config.py
@@ -74,24 +79,35 @@ class AppConfig(BaseSettings):
             "REPORTS_OPTIMIZATION_DIR": str(self.REPORTS_DIR / "optimizations"),
         }
 
-    # =========================================================================
-    # 2. API Токены и Секреты (Secrets)
-    # Значения загружаются из .env файла. Если их нет — будет None.
-    # =========================================================================
+    # 2. Настройки Базы Данных (Database Config)
+    # Только объявляем типы. Значения Pydantic САМ возьмет из .env файла.
+
+    POSTGRES_USER: str
+    POSTGRES_PASSWORD: str
+    POSTGRES_HOST: str
+    POSTGRES_PORT: int
+    POSTGRES_DB: str
+
+    @property
+    def DATABASE_URL(self) -> str:
+        """
+        Собирает строку подключения для SQLAlchemy (драйвер asyncpg).
+        """
+        return (
+            f"postgresql+asyncpg://"
+            f"{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@"
+            f"{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/"
+            f"{self.POSTGRES_DB}"
+        )
+
+    # 3. API Токены и Секреты (Secrets)
+    # Значения загружаются из .env файла.
 
     TINKOFF_TOKEN_READONLY: Optional[str] = None
-    TINKOFF_TOKEN_FULL_ACCESS: Optional[str] = None
-    TINKOFF_TOKEN_SANDBOX: Optional[str] = None
-    TINKOFF_ACCOUNT_ID: Optional[str] = None
 
-    BYBIT_TESTNET_API_KEY: Optional[str] = None
-    BYBIT_TESTNET_API_SECRET: Optional[str] = None
+    # 4. Настройки Загрузчика Данных (Data Loader Config)
 
-    # =========================================================================
-    # 3. Настройки Загрузчика Данных (Data Loader Config)
-    # =========================================================================
-
-    DL_DAYS_TO_LOAD: int = 365  # Сколько дней истории качать по умолчанию
+    DL_DAYS_TO_LOAD: int = 120  # Сколько дней истории качать по умолчанию
     DL_LIQUID_COUNT: int = 10  # Сколько топ-инструментов брать в список
     DATA_FILE_EXTENSION: str = ".parquet"  # Формат хранения данных
 
@@ -103,11 +119,9 @@ class AppConfig(BaseSettings):
             "LIQUID_INSTRUMENTS_COUNT": self.DL_LIQUID_COUNT
         }
 
-    # =========================================================================
-    # 4. Настройки Live Торговли (Live Trading Config)
-    # =========================================================================
+    # 5. Настройки Live Торговли (Live Trading Config)
 
-    LIVE_RECONNECT_DELAY: int = 10  # Секунд ожидания перед реконнектом
+    LIVE_RECONNECT_DELAY: int = 5  # Секунд ожидания перед реконнектом
     LIVE_HISTORY_BUFFER_MULT: int = 2  # Коэффициент запаса истории
 
     @property
@@ -118,13 +132,11 @@ class AppConfig(BaseSettings):
             "LIVE_HISTORY_BUFFER_MULTIPLIER": self.LIVE_HISTORY_BUFFER_MULT
         }
 
-    # =========================================================================
-    # 5. Настройки Бэктеста (Backtest Config)
-    # =========================================================================
+    # 6. Настройки Бэктеста (Backtest Config)
 
-    bt_initial_capital: float = 100000.0
+    bt_initial_capital: float = 500000.0
     bt_commission_rate: float = 0.0005  # 0.05%
-    bt_max_exposure: float = 0.25  # Макс. доля капитала на 1 позицию (без учета плеч)
+    bt_max_exposure: float = 0.2  # Макс. доля капитала на 1 позицию (без учета плеч)
     bt_slippage_enabled: bool = True  # Включить симуляцию проскальзывания
     bt_slippage_impact: float = 0.1  # Коэффициент влияния объема на цену
 
@@ -141,15 +153,13 @@ class AppConfig(BaseSettings):
             }
         }
 
-    # =========================================================================
-    # 6. Спецификации Бирж (Exchange Specs)
-    # Маппинг интервалов и специфические настройки (сессии, аннуализация).
-    # =========================================================================
+    # 7. Спецификации Бирж (Exchange Specs)
+    # Обработка интервалов и специфические настройки (сессии, аннуализация).
 
     @property
     def EXCHANGE_INTERVAL_MAPS(self) -> Dict[str, Dict[str, str]]:
         """
-        Маппинг наших строковых интервалов ('1min', '1hour')
+        Обработка строковых интервалов ('1min', '1hour')
         в специфичные константы API конкретной биржи.
         """
         return {
@@ -178,6 +188,7 @@ class AppConfig(BaseSettings):
             SHARPE_ANNUALIZATION_FACTOR: Кол-во торговых дней в году (Крипта=365, Акции=252).
             SESSION_START/END: Время начала и конца основной сессии (для фильтрации премаркета).
             DEFAULT_CLASS_CODE: Класс инструмента по умолчанию (для Tinkoff).
+            DEFAULT_CATEGORY: Тип рынка (для Bybit).
         """
         return {
             ExchangeType.TINKOFF: {
@@ -190,42 +201,9 @@ class AppConfig(BaseSettings):
                 "SHARPE_ANNUALIZATION_FACTOR": 365,
                 "SESSION_START_UTC": None,  # Крипта торгуется 24/7
                 "SESSION_END_UTC": None,
+                "DEFAULT_CATEGORY": "linear",
             }
         }
-
-    # --- Pydantic Config ---
-    model_config = SettingsConfigDict(
-        env_file=".env",  # Имя файла с секретами
-        env_file_encoding="utf-8",  # Кодировка файла
-        extra="ignore"  # Игнорировать лишние переменные в .env, не выбрасывая ошибку
-    )
-
-    # =========================================================================
-    # 7. Настройки Базы Данных (Database Config)
-    # =========================================================================
-
-    # Мы только объявляем типы. Значения Pydantic САМ возьмет из .env файла.
-    # Если в .env их не будет — приложение упадет с ошибкой при старте.
-    # Это ПРАВИЛЬНОЕ поведение: лучше упасть сразу, чем работать с неверными доступами.
-
-    POSTGRES_USER: str
-    POSTGRES_PASSWORD: str
-    POSTGRES_HOST: str
-    POSTGRES_PORT: int
-    POSTGRES_DB: str
-
-    @property
-    def DATABASE_URL(self) -> str:
-        """
-        Собирает строку подключения для SQLAlchemy (драйвер asyncpg).
-        """
-        return (
-            f"postgresql+asyncpg://"
-            f"{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@"
-            f"{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/"
-            f"{self.POSTGRES_DB}"
-        )
-
 
 # Создаем единственный экземпляр (Singleton pattern), который будет импортироваться везде.
 config = AppConfig()

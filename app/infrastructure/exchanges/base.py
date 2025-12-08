@@ -13,36 +13,19 @@
 """
 
 import logging
-from abc import abstractmethod
-from typing import Optional, List, Dict, Any
+from typing import List, Dict, Any
 
 import pandas as pd
 
-from app.core.interfaces import BaseDataClient, BaseTradeClient, TradeModeType
+from app.core.interfaces import BaseDataClient
 
 logger = logging.getLogger(__name__)
 
 
-class BaseExchangeHandler(BaseDataClient, BaseTradeClient):
+class BaseExchangeHandler(BaseDataClient):
     """
     Абстрактный базовый класс адаптера биржи.
-
-    Предоставляет реализацию общих утилитных методов, оставляя специфику
-    взаимодействия с конкретным API наследникам.
-
-    Attributes:
-        trade_mode (str): Режим работы клиента ('SANDBOX' или 'REAL').
     """
-
-    def __init__(self, trade_mode: TradeModeType):
-        """
-        Инициализирует базовый обработчик.
-
-        Args:
-            trade_mode (TradeModeType): Режим торговли. Влияет на выбор API-endpoint'ов
-                (тестовая сеть или боевая) в классах-наследниках.
-        """
-        self.trade_mode = trade_mode.upper()
 
     def _process_candles_to_df(self, candles: List[Dict[str, Any]]) -> pd.DataFrame:
         """
@@ -91,60 +74,3 @@ class BaseExchangeHandler(BaseDataClient, BaseTradeClient):
         # Оставляем только стандартизированные колонки, отсекая лишний шум от API
         available_cols = ["time"] + [c for c in cols_to_numeric if c in df.columns]
         return df[available_cols]
-
-    def place_market_order(self, instrument_id: str, quantity: float, direction: str, **kwargs) -> Optional[Any]:
-        """
-        Шаблонный метод (Template Method) отправки рыночного ордера.
-
-        Обеспечивает единый стандарт логирования и обработки ошибок для всех бирж.
-        Фактическая отправка запроса делегируется методу `_place_order_impl`.
-
-        Args:
-            instrument_id (str): Идентификатор инструмента (Ticker для Bybit, FIGI для Tinkoff).
-            quantity (float): Объем ордера (в лотах или монетах).
-            direction (str): Направление сделки ('BUY' или 'SELL').
-            **kwargs: Дополнительные параметры (category, account_id и т.д.),
-                      специфичные для конкретной биржи.
-
-        Returns:
-            Optional[Any]: Объект ответа API (JSON dict или Pydantic model),
-                           если ордер успешен. Возвращает None в случае ошибки.
-        """
-        logging.info(f"[{self.__class__.__name__}] Отправка ордера: {direction} {quantity} {instrument_id}...")
-
-        try:
-            # Делегирование исполнения абстрактному методу (реализуется наследником)
-            result = self._place_order_impl(instrument_id, quantity, direction, **kwargs)
-
-            if result:
-                logging.info(f"[{self.__class__.__name__}] Ордер успешно размещен. Ответ: {result}")
-                return result
-            else:
-                # Если наследник вернул None, он уже должен был залогировать причину
-                logging.error(f"[{self.__class__.__name__}] API вернул пустой результат/ошибку.")
-                return None
-
-        except Exception as e:
-            # "Safety Net": Ловим любые непредвиденные ошибки (сеть, парсинг),
-            # чтобы не обрушить вызывающий поток (LiveExecutionHandler).
-            logging.error(f"[{self.__class__.__name__}] Критическая ошибка размещения ордера: {e}", exc_info=True)
-            return None
-
-    @abstractmethod
-    def _place_order_impl(self, instrument_id: str, quantity: float, direction: str, **kwargs) -> Optional[Any]:
-        """
-        Внутренняя реализация отправки ордера (Hook Method).
-
-        Должна быть переопределена в классе-наследнике для вызова
-        специфичного API конкретной биржи.
-
-        Args:
-            instrument_id (str): Идентификатор инструмента.
-            quantity (float): Объем.
-            direction (str): Направление.
-            **kwargs: Доп. параметры.
-
-        Returns:
-            Optional[Any]: Ответ API или None.
-        """
-        raise NotImplementedError("Метод _place_order_impl должен быть реализован в подклассе.")

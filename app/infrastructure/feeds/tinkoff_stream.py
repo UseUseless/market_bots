@@ -31,6 +31,10 @@ class TinkoffStreamDataHandler(BaseStreamDataHandler):
     Обеспечивает автоматическое переподключение при разрывах связи.
     """
 
+    def __init__(self, events_queue, instrument, interval_str, token):
+        super().__init__(events_queue, instrument, interval_str)
+        self.token = token
+
     async def stream_data(self):
         """
         Запускает бесконечный цикл получения рыночных данных.
@@ -65,7 +69,7 @@ class TinkoffStreamDataHandler(BaseStreamDataHandler):
         while True:
             try:
                 # Вся логика подключения и получения данных находится внутри try-блока
-                async with AsyncClient(token=TOKEN_READONLY) as client:
+                async with AsyncClient(token=self.token) as client:
                     logging.info(f"Tinkoff Stream: Поиск FIGI для {self.instrument}...")
 
                     # 1. Поиск FIGI (нужен для подписки)

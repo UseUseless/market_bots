@@ -24,36 +24,17 @@ import argparse
 import logging
 import sys
 import os
-from typing import Dict, Any
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.infrastructure.storage.data_manager import update_lists_flow, download_data_flow
 from app.bootstrap.container import container
-from app.shared.primitives import ExchangeType
 from app.shared.config import config
-from app.core.interfaces import BaseDataClient
 from app.shared.logging_setup import setup_global_logging
 from app.shared.decorators import safe_entry
 
 DEFAULT_DAYS_TO_LOAD = config.DATA_LOADER_CONFIG["DAYS_TO_LOAD"]
 
-
-def _get_client(args_settings: Dict[str, Any]) -> BaseDataClient:
-    """
-    Создает клиент биржи.
-
-    Args:
-        args_settings (Dict[str, Any]): Словарь аргументов, полученный из argparse.
-            Должен содержать ключ 'exchange'.
-
-    Returns:
-        BaseDataClient: Инициализированный клиент биржи (TinkoffHandler или BybitHandler),
-        полученный из DI-контейнера.
-    """
-    exchange = args_settings.get("exchange")
-    mode = "SANDBOX" if exchange == ExchangeType.TINKOFF else "REAL"
-    return container.get_exchange_client(exchange, mode=mode)
 
 @safe_entry
 def main() -> None:
@@ -63,7 +44,7 @@ def main() -> None:
     Алгоритм работы:
     1. Настраивает tqdm логирование
     2. Парсит аргументы командной строки (argparse).
-    3. Создает соответствующий клиент биржи через `_get_client`.
+    3. Создает соответствующий клиент биржи.
     4. Вызывает соответствующую функцию бизнес-логики (`update_lists_flow` или `download_data_flow`),
        передавая ей настройки и готовый клиент.
     """
@@ -111,9 +92,10 @@ def main() -> None:
     args_settings = vars(args)
 
     # Получаем клиент из DI-контейнера
-    client = _get_client(args_settings)
-    command = args_settings.get('command')
+    exchange = args_settings.get("exchange")
+    client = container.get_exchange_client(exchange)
 
+    command = args_settings.get('command')
     if command == 'update':
         update_lists_flow(args_settings, client)
     elif command == 'download':

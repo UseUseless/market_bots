@@ -32,7 +32,6 @@ from app.adapters.telegram.publisher import TelegramBridge
 
 from app.strategies import AVAILABLE_STRATEGIES
 from app.shared.logging_setup import setup_global_logging
-from app.shared.primitives import ExchangeType
 # Импорт стейта
 from app.core.portfolio.state import PortfolioState
 from app.shared.config import config as app_config
@@ -71,9 +70,8 @@ async def _pair_builder(config: StrategyConfig) -> Tuple[UnifiedDataFeed, Any, P
     Raises:
         ValueError: Если указанная в конфиге стратегия не найдена в коде.
     """
-    # 1. Режим работы (Sandbox/Real)
-    trade_mode = "SANDBOX" if config.exchange == ExchangeType.TINKOFF else "REAL"
-    client = container.get_exchange_client(config.exchange, mode=trade_mode)
+    # 1. Получаем клиент
+    client = container.get_exchange_client(config.exchange)
 
     # 2. Инициализация стратегии
     StrategyClass = AVAILABLE_STRATEGIES.get(config.strategy_name)

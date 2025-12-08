@@ -101,16 +101,13 @@ class Container:
             logger.debug("Container: BotManager initialized.")
         return self._bot_manager
 
-    def get_exchange_client(self, exchange: str, mode: str = "SANDBOX") -> Any:
+    def get_exchange_client(self, exchange: str) -> Any:
         """
         Фабричный метод для получения клиента биржи.
-
-        Реализует паттерн Flyweight (Приспособленец): если клиент с такими
-        параметрами уже был создан, возвращает существующий экземпляр.
+        Всегда возвращает клиента для работы с реальными данными.
 
         Args:
             exchange (str): Название биржи (tinkoff, bybit).
-            mode (str): Режим торгов (SANDBOX, REAL).
 
         Returns:
             Union[TinkoffHandler, BybitHandler]: Клиент биржи.
@@ -118,9 +115,8 @@ class Container:
         Raises:
             ValueError: Если запрошена неизвестная биржа.
         """
-        key = f"{exchange}_{mode}"
+        key = exchange
 
-        # Если клиент уже есть в кэше — возвращаем его
         if key in self._exchange_clients:
             return self._exchange_clients[key]
 
@@ -128,13 +124,12 @@ class Container:
 
         client = None
         if exchange == ExchangeType.TINKOFF:
-            client = TinkoffHandler(trade_mode=mode)
+            client = TinkoffHandler()  # Без аргументов
         elif exchange == ExchangeType.BYBIT:
-            client = BybitHandler(trade_mode=mode)
+            client = BybitHandler()  # Без аргументов
         else:
             raise ValueError(f"Unknown exchange: {exchange}")
 
-        # Сохраняем в кэш
         self._exchange_clients[key] = client
         return client
 

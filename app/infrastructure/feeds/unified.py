@@ -117,11 +117,13 @@ class UnifiedDataFeed(IDataFeed):
         Фабричный метод для запуска соответствующего WebSocket/gRPC стрима.
         """
         if self.exchange == ExchangeType.TINKOFF:
-            self.stream_handler = TinkoffStreamDataHandler(event_queue, self.instrument, self._interval)
+            token = self.client.token
+            self.stream_handler = TinkoffStreamDataHandler(event_queue, self.instrument, self._interval, token)
         elif self.exchange == ExchangeType.BYBIT:
             self.stream_handler = BybitStreamDataHandler(
                 event_queue, self.instrument, self._interval, loop,
-                channel_type=kwargs.get('category', 'linear'), testnet=False
+                channel_type=kwargs.get('category', 'linear'),
+                testnet=False
             )
         else:
             raise ValueError(f"Unknown exchange: {self.exchange}")

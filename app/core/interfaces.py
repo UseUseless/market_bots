@@ -8,7 +8,7 @@
 
 from abc import ABC, abstractmethod
 from queue import Queue
-from typing import Literal, Dict, Any, List
+from typing import Dict, Any, List
 
 import pandas as pd
 
@@ -111,9 +111,6 @@ class IPublisher(ABC):
         raise NotImplementedError
 
 
-TradeModeType = Literal["REAL", "SANDBOX"]
-
-
 class BaseDataClient(ABC):
     """
     Контракт для клиентов, получающих данные от API биржи (Market Data).
@@ -158,28 +155,6 @@ class BaseDataClient(ABC):
 
         Returns:
             List[str]: Список тикеров.
-        """
-        raise NotImplementedError
-
-
-class BaseTradeClient(ABC):
-    """
-    Контракт для клиентов, исполняющих торговые операции (Execution).
-    """
-
-    @abstractmethod
-    def place_market_order(self, instrument_id: str, quantity: float, direction: str, **kwargs):
-        """
-        Размещает рыночный ордер через API.
-
-        Args:
-            instrument_id (str): Идентификатор инструмента (FIGI или Ticker).
-            quantity (float): Объем ордера.
-            direction (str): Направление ('BUY' или 'SELL').
-            **kwargs: Дополнительные параметры API.
-
-        Returns:
-            Any: Ответ API биржи (структура зависит от реализации).
         """
         raise NotImplementedError
 
