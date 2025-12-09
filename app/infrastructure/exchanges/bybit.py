@@ -20,14 +20,14 @@ import pandas as pd
 from tqdm import tqdm
 from pybit.unified_trading import HTTP
 
-from app.infrastructure.exchanges.base import BaseExchangeHandler
+from app.infrastructure.exchanges.base import ExchangeExchangeHandler
 from app.shared.primitives import ExchangeType
 from app.shared.config import config
 
 logger = logging.getLogger(__name__)
 
 
-class BybitHandler(BaseExchangeHandler):
+class BybitHandler(ExchangeExchangeHandler):
     """
     Адаптер для биржи Bybit.
     Работает в режиме Read-Only.

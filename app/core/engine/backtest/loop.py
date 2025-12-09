@@ -16,13 +16,13 @@ from app.core.portfolio.state import PortfolioState
 from app.shared.schemas import StrategyConfigModel
 from app.core.portfolio.manager import Portfolio
 from app.infrastructure.feeds.local import HistoricLocalDataHandler
-from app.core.execution.simulator import SimulatedExecutionHandler
+from app.core.execution.simulator import BacktestExecutionHandler
 from app.core.risk.sizer import FixedRiskSizer
 from app.core.risk.manager import AVAILABLE_RISK_MANAGERS
 from app.core.risk.monitor import RiskMonitor
 from app.core.execution.order_logic import OrderManager
 from app.core.portfolio.accounting import FillProcessor
-from app.core.engine.backtest.feeds import BacktestDataFeed
+from app.core.engine.backtest.feeds import BacktestDataProvider
 from app.core.calculations.indicators import FeatureEngine
 
 from app.strategies.base_strategy import BaseStrategy
@@ -131,7 +131,7 @@ class BacktestEngine:
 
         slippage_conf = config.BACKTEST_CONFIG.get("SLIPPAGE_CONFIG", {})
 
-        execution_handler = SimulatedExecutionHandler(
+        execution_handler = BacktestExecutionHandler(
             events_queue,
             commission_rate=self.settings["commission_rate"],
             slippage_config=slippage_conf
@@ -251,7 +251,7 @@ class BacktestEngine:
         instrument = self.settings['instrument']
 
         # Инициализация фида данных
-        feed = BacktestDataFeed(data=enriched_data, interval=self.settings['interval'])
+        feed = BacktestDataProvider(data=enriched_data, interval=self.settings['interval'])
 
         while feed.next():
             current_candle = feed.get_current_candle()

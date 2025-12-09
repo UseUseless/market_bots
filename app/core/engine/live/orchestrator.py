@@ -1,14 +1,19 @@
 """
 Оркестратор запуска Live-режима (Live Monitor Orchestrator).
 
-Этот модуль является точкой входа для запуска системы в режиме реального времени.
-Он отвечает за "сборку" приложения (Application Assembly): инициализацию
-глобальных сервисов, настройку адаптеров ввода-вывода и запуск главного
-асинхронного цикла.
+Этот модуль является точкой входа для запуска системы в режиме реального времени
+(Signal Monitor). Он отвечает за "сборку" приложения (Application Assembly):
+инициализацию глобальных сервисов, настройку обработчиков сигналов и запуск
+главного асинхронного цикла.
 
 Архитектура:
     Модуль связывает инфраструктурный слой (БД, Биржи) с ядром (SignalEngine),
-    используя Dependency Injection контейнер.
+    используя принципы Dependency Injection (DI) и Factory Pattern.
+
+Особенности режима Monitor:
+    В отличие от бэктеста, здесь отключена система управления портфелем (`PortfolioState`),
+    симулятор ордеров и учет PnL. Система работает по упрощенной схеме:
+    Data -> Strategy -> Signal -> Notification.
 """
 
 import asyncio
@@ -17,24 +22,25 @@ import queue
 import signal
 from typing import Tuple, Any, List
 
-# Импорты БД
+# Импорты схем и БД
 from app.shared.schemas import StrategyConfigModel
 from app.infrastructure.database.session import async_session_factory
-from app.infrastructure.database.repositories import ConfigRepository, PortfolioRepository
+from app.infrastructure.database.repositories import ConfigRepository
 from app.infrastructure.database.models import StrategyConfig
 
+# Глобальные зависимости
 from app.bootstrap.container import container
 from app.core.engine.live.loop import SignalEngine
-from app.infrastructure.feeds.unified import UnifiedDataFeed
-from app.adapters.cli.signal_viewer import ConsoleAdapter
-from app.infrastructure.database.signal_logger import DBLoggerAdapter
-from app.adapters.telegram.publisher import TelegramBridge
+from app.infrastructure.feeds.unified import UnifiedDataProvider
 
+# Обработчики сигналов (Signal Handlers)
+from app.adapters.cli.signal_viewer import ConsoleSignalViewer
+from app.infrastructure.database.signal_logger import DBSignalLogger
+from app.adapters.telegram.publisher import TelegramSignalSender
+
+# Стратегии и утилиты
 from app.strategies import AVAILABLE_STRATEGIES
 from app.shared.logging_setup import setup_global_logging
-# Импорт стейта
-from app.core.portfolio.state import PortfolioState
-from app.shared.config import config as app_config
 
 logger = logging.getLogger(__name__)
 
@@ -47,51 +53,59 @@ async def _config_loader() -> List[StrategyConfig]:
     эту функцию, чтобы получить актуальный список активных стратегий из БД.
 
     Returns:
-        List[StrategyConfig]: Список ORM-объектов конфигурации.
+        List[StrategyConfig]: Список ORM-объектов конфигурации активных стратегий.
     """
     async with async_session_factory() as session:
         repo = ConfigRepository(session)
         configs = await repo.get_active_strategies()
         return configs
 
-async def _pair_builder(config: StrategyConfig) -> Tuple[UnifiedDataFeed, Any, PortfolioState]:
+
+async def _pair_builder(config: StrategyConfig) -> Tuple[UnifiedDataProvider, Any]:
     """
     Функция-фабрика (Factory Callback).
 
-    Создает и настраивает экземпляры `Strategy` и `UnifiedDataFeed` на основе
+    Создает и настраивает экземпляры `Strategy` и `UnifiedDataProvider` на основе
     конфигурации из БД.
 
     Args:
         config (StrategyConfig): ORM-объект конфигурации стратегии.
 
     Returns:
-        Tuple[UnifiedDataFeed, BaseStrategy, PortfolioState]: Готовая пара для запуска в движке.
+        Tuple[UnifiedDataProvider, Any]: Кортеж (DataFeed, Strategy), готовый
+        для запуска в движке.
 
     Raises:
-        ValueError: Если указанная в конфиге стратегия не найдена в коде.
+        ValueError: Если указанная в конфиге стратегия не найдена в реестре.
     """
-    # 1. Получаем клиент
+    # 1. Получаем клиент биржи из контейнера (Singleton)
     client = container.get_exchange_client(config.exchange)
 
-    # 2. Инициализация стратегии
+    # 2. Инициализация класса стратегии
     StrategyClass = AVAILABLE_STRATEGIES.get(config.strategy_name)
     if not StrategyClass:
         raise ValueError(f"Strategy class '{config.strategy_name}' not found")
 
+    # 3. Слияние параметров (Default + DB override)
     strategy_params = StrategyClass.get_default_params()
     if config.parameters:
         strategy_params.update(config.parameters)
 
+    # 4. Создание валидированной модели конфигурации
     pydantic_config = StrategyConfigModel(
         strategy_name=config.strategy_name,
         instrument=config.instrument,
         exchange=config.exchange,
         interval=config.interval,
         params=strategy_params,
+        # Риск-менеджер здесь нужен только для того, чтобы стратегия знала,
+        # какие индикаторы (напр. ATR) добавить в required_indicators.
+        # Сами расчеты рисков и сайзинга в режиме Monitor отключены.
         risk_manager_type=config.risk_manager_type or "FIXED",
         risk_manager_params={}
     )
 
+    # 5. Инстанцирование стратегии
     strategy = StrategyClass(
         events_queue=queue.Queue(),
         feature_engine=container.feature_engine,
@@ -99,8 +113,8 @@ async def _pair_builder(config: StrategyConfig) -> Tuple[UnifiedDataFeed, Any, P
     )
     strategy.name = config.strategy_name
 
-    # 3. Инициализация фида
-    feed = UnifiedDataFeed(
+    # 6. Инициализация фида данных
+    feed = UnifiedDataProvider(
         client=client,
         exchange=config.exchange,
         instrument=config.instrument,
@@ -109,67 +123,48 @@ async def _pair_builder(config: StrategyConfig) -> Tuple[UnifiedDataFeed, Any, P
         required_indicators=strategy.required_indicators
     )
 
-    # 4. ВОССТАНОВЛЕНИЕ СОСТОЯНИЯ (State Recovery)
-    # Загружаем из БД или создаем новое
-    async with async_session_factory() as session:
-        repo = PortfolioRepository(session)
-
-        # Определяем стартовый капитал (из конфига стратегии или глобальный дефолт)
-        initial_cap = strategy_params.get("initial_capital", app_config.BACKTEST_CONFIG["INITIAL_CAPITAL"])
-
-        portfolio_state = await repo.load_portfolio_state(
-            config_id=config.id,
-            initial_capital=float(initial_cap)
-        )
-
-        if portfolio_state.positions:
-            logger.info(
-                f"♻️ Восстановлено состояние для {config.instrument}: {len(portfolio_state.positions)} позиций.")
-
-    return feed, strategy, portfolio_state
+    # В режиме монитора мы НЕ загружаем PortfolioState из БД.
+    return feed, strategy
 
 
-async def _async_main():
+async def _async_main() -> None:
     """
-    Главная асинхронная точка входа.
+    Главная асинхронная точка входа (Wiring).
 
-    Инициализирует компоненты системы, запускает фоновые задачи (Tasks)
-    и управляет их жизненным циклом.
+    Инициализирует компоненты системы, связывает их друг с другом,
+    запускает фоновые задачи (Tasks) и управляет их жизненным циклом.
     """
-    logger.info("Запуск Live Monitor Orchestrator...")
+    logger.info("Запуск Live Signal Monitor (Lightweight Mode)...")
 
     # 1. Получаем глобальные сервисы из контейнера
-    bus = container.bus
     bot_manager = container.bot_manager
 
-    # Инициализируем движок, который будет управлять стратегиями
-    engine = SignalEngine(bus)
+    # 2. Инициализируем обработчики сигналов (Signal Handlers)
+    # Используем Direct Composition для маршрутизации сигналов
+    telegram_sender = TelegramSignalSender(bot_manager)  # Отправка в Telegram
+    db_logger = DBSignalLogger()                         # Логирование в БД
+    console_view = ConsoleSignalViewer()                 # Вывод в консоль
 
-    # 2. Инициализируем адаптеры (слушатели шины событий)
-    console_adapter = ConsoleAdapter(bus)       # Вывод в консоль
-    db_logger = DBLoggerAdapter(bus)            # Запись в БД
-    telegram_bridge = TelegramBridge(bus, bot_manager) # Отправка в Telegram
+    signal_handlers = [telegram_sender, db_logger, console_view]
+
+    # 3. Инициализируем движок
+    engine = SignalEngine(handlers=signal_handlers)
 
     tasks = []
     try:
         # --- Запуск фоновых задач ---
 
-        # 1. Слушатели событий
-        tasks.append(asyncio.create_task(console_adapter.start()))
-        tasks.append(asyncio.create_task(db_logger.start()))
-        tasks.append(asyncio.create_task(telegram_bridge.start()))
-
-        # 2. Менеджер ботов (Polling Telegram API)
+        # Задача 1: Менеджер ботов (Polling Telegram API)
         tasks.append(asyncio.create_task(bot_manager.start()))
 
-        # 3. ОРКЕСТРАТОР (Главный цикл управления стратегиями)
-        # Передаем ему функции-коллбэки для работы с БД и создания объектов
+        # Задача 2: ОРКЕСТРАТОР (Главный цикл управления стратегиями)
+        # Передаем функции-коллбэки для работы с БД и создания объектов
         tasks.append(asyncio.create_task(engine.run_orchestrator(
             config_loader_func=_config_loader,
             pair_builder_func=_pair_builder
         )))
 
-        # --- Обработка сигналов (Graceful Shutdown) ---
+        # --- Обработка сигналов остановки (Graceful Shutdown) ---
         loop = asyncio.get_running_loop()
 
         def signal_handler():
@@ -184,11 +179,13 @@ async def _async_main():
                 loop.add_signal_handler(sig, signal_handler)
             logger.info("✅ Signal handlers registered (SIGTERM/SIGINT).")
         except NotImplementedError:
-            logger.warning("⚠️ Signal handlers not supported on this platform. Use Ctrl+C/Kill.")
+            logger.warning("⚠️ Signal handlers not supported on this platform. Use Ctrl+C to stop.")
 
-        logger.info("🚀 Система запущена. Ожидание событий...")
+        logger.info("🚀 Монитор сигналов запущен. Ожидание событий...")
 
-        # Используем return_exceptions=True, чтобы падение одной задачи не крашило всё
+        # Ожидание завершения задач
+        # return_exceptions=True предотвращает немедленное падение всего приложения
+        # при ошибке в одной из задач
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         for res in results:
@@ -206,29 +203,29 @@ async def _async_main():
         for t in tasks:
             if not t.done():
                 t.cancel()
-        # Ждем фактической отмены, игнорируя ошибки отмены
-        await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Закрываем соединения с БД для предотвращения ошибок при повторном запуске
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Закрываем соединения с БД
         from app.infrastructure.database.session import engine as db_engine
         await db_engine.dispose()
         logger.info("Database connections closed.")
 
-def run_live_monitor_flow(settings: dict = None):
+
+def run_live_monitor_flow(settings: dict = None) -> None:
     """
     Синхронная обертка для запуска из лаунчера.
 
     Настраивает логирование и запускает `asyncio` цикл.
 
     Args:
-        settings (dict, optional): Настройки запуска (пока не используются,
-                                   так как конфиг берется из БД).
+        settings (dict, optional): Настройки запуска (не используются,
+                                   конфиг берется из БД).
     """
     setup_global_logging()
     try:
         # Запуск асинхронного ядра
         asyncio.run(_async_main())
     except KeyboardInterrupt:
-        # Этот блок ловит Ctrl+C до того, как loop запустится или если asyncio.run завершится.
-        # Основная обработка внутри _async_main через signal_handler.
         print("\nОстановлено пользователем.")

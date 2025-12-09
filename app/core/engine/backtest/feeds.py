@@ -1,15 +1,15 @@
 """
 Модуль поставщика данных для бэктеста.
 
-Содержит реализацию `IDataFeed`, которая эмулирует потоковую передачу данных
+Содержит реализацию `MarketDataProvider`, которая эмулирует потоковую передачу данных
 на основе статического DataFrame. Это позволяет "проигрывать" историю свеча за свечой.
 """
 
 import pandas as pd
-from app.core.interfaces import IDataFeed
+from app.shared.interfaces import MarketDataProvider
 
 
-class BacktestDataFeed(IDataFeed):
+class BacktestDataProvider(MarketDataProvider):
     """
     Эмулятор потока рыночных данных.
 

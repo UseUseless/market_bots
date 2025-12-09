@@ -1,9 +1,9 @@
 """
 Базовый класс стратегий.
 
-Определяет каркас для всех торговых алгоритмов. Реализует паттерн "Шаблонный метод" (Template Method):
-базовый класс берет на себя инфраструктурные задачи (получение данных, расчет индикаторов,
-работа с конфигом), а наследники реализуют только специфичную логику сигналов.
+Определяет каркас для всех торговых алгоритмов. Базовый класс берет на себя инфраструктурные
+задачи (получение данных, расчет индикаторов,работа с конфигом),
+а наследники реализуют только специфичную логику сигналов.
 """
 
 from abc import ABC, abstractmethod
@@ -14,14 +14,14 @@ import logging
 import pandas as pd
 
 from app.core.calculations.indicators import FeatureEngine
-from app.core.interfaces import IDataFeed
+from app.shared.interfaces import MarketDataProvider
 from app.shared.schemas import StrategyConfigModel
 
 logger = logging.getLogger(__name__)
 
 class BaseStrategy(ABC):
     """
-    Абстрактный родительский класс для торговых стратегий.
+    Родительский класс для торговых стратегий.
 
     Обеспечивает унифицированный интерфейс для работы как в режиме бэктеста,
     так и в реальном времени (Live).
@@ -166,7 +166,7 @@ class BaseStrategy(ABC):
         """
         return data
 
-    def on_candle(self, feed: IDataFeed):
+    def on_candle(self, feed: MarketDataProvider):
         """
         Обработчик новой свечи (Итеративный режим).
 
@@ -174,7 +174,7 @@ class BaseStrategy(ABC):
         Запрашивает историю, извлекает текущую и предыдущую свечи и запускает логику сигналов.
 
         Args:
-            feed (IDataFeed): Источник данных, предоставляющий доступ к истории.
+            feed (MarketDataProvider): Источник данных, предоставляющий доступ к истории.
         """
         # 1. Запрашиваем историю. Берем с запасом, чтобы хватило на расчеты.
         # В Live-режиме индикаторы уже посчитаны в Feed, но стратегии часто

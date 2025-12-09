@@ -1,26 +1,29 @@
 """
 Модуль вспомогательных функций времени.
 
-Содержит утилиты для конвертации строковых представлений интервалов
-в объекты времени Python и управления часовыми поясами.
+Содержит утилиты для конвертации интервалов и управления часовыми поясами.
 """
 
-from datetime import timedelta, timezone
+from datetime import timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from functools import lru_cache
+import logging
+
+from app.shared.config import config
+
+logger = logging.getLogger(__name__)
 
 
+@lru_cache(maxsize=8)
 def interval_to_timedelta(interval_str: str) -> timedelta:
     """
     Преобразует строку интервала (из конфига или API) в объект `timedelta`.
 
-    Поддерживает форматы: 'Xmin', 'Xhour', 'Xday', 'Xweek', 'Xmonth'.
-    Для месяца используется упрощение: 1 месяц = 30 дней.
-
     Args:
-        interval_str (str): Строка интервала, например '5min', '4hour', '1week'.
+        interval_str (str): Строка интервала, например '5min', '4hour'.
 
     Returns:
         timedelta: Объект разницы во времени.
-                   Возвращает `timedelta(0)`, если формат не распознан.
     """
     if not interval_str:
         return timedelta(0)
@@ -28,48 +31,38 @@ def interval_to_timedelta(interval_str: str) -> timedelta:
     s = interval_str.lower().strip()
 
     try:
-        # Парсинг минут
         if s.endswith("min"):
-            value = int(s.replace("min", ""))
-            return timedelta(minutes=value)
+            return timedelta(minutes=int(s.replace("min", "")))
 
-        # Парсинг часов
         elif s.endswith("hour"):
-            value = int(s.replace("hour", ""))
-            return timedelta(hours=value)
+            return timedelta(hours=int(s.replace("hour", "")))
 
-        # Парсинг дней
         elif s.endswith("day"):
-            value = int(s.replace("day", ""))
-            return timedelta(days=value)
+            return timedelta(days=int(s.replace("day", "")))
 
-        # Парсинг недель
         elif s.endswith("week"):
-            value = int(s.replace("week", ""))
-            return timedelta(weeks=value)
+            return timedelta(weeks=int(s.replace("week", "")))
 
-        # Парсинг месяцев (аппроксимация)
         elif s.endswith("month"):
-            value = int(s.replace("month", ""))
-            # Timedelta не поддерживает месяцы, берем среднее
-            return timedelta(days=value * 30)
+            # Упрощение: 1 месяц = 30 дней
+            return timedelta(days=int(s.replace("month", "")) * 30)
 
     except ValueError:
-        # Если не удалось преобразовать числовую часть (например, 'min' без числа)
         pass
 
-    # Дефолтное значение для неизвестных форматов (например, тикер без интервала)
     return timedelta(0)
 
 
-def msk_timezone() -> timezone:
+def get_display_timezone() -> ZoneInfo:
     """
-    Возвращает объект часового пояса UTC+3 (Москва).
+    Возвращает объект часового пояса из настроек.
+    Используется для форматирования уведомлений пользователю.
 
-    Используется для форматирования времени в логах и уведомлениях,
-    чтобы пользователю было удобнее читать время событий.
-
-    Returns:
-        timezone: Объект таймзоны с смещением +3 часа.
+    Если зона в конфиге указана неверно, откатывается к UTC.
     """
-    return timezone(timedelta(hours=3))
+    tz_name = config.DISPLAY_TIMEZONE
+    try:
+        return ZoneInfo(tz_name)
+    except ZoneInfoNotFoundError:
+        logger.error(f"Timezone '{tz_name}' not found in system. Falling back to UTC.")
+        return ZoneInfo("UTC")

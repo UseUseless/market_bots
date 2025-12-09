@@ -19,14 +19,14 @@ from typing import Dict, Any, Tuple, List
 
 from tqdm import tqdm
 
-from app.core.interfaces import BaseDataClient
+from app.shared.interfaces import ExchangeDataGetter
 from app.shared.config import config
 
 logger = logging.getLogger(__name__)
 
 
 def _fetch_and_save_candles(
-    client: BaseDataClient,
+    client: ExchangeDataGetter,
     instrument: str,
     interval: str,
     days: int,
@@ -37,7 +37,7 @@ def _fetch_and_save_candles(
     Запрашивает исторические свечи у клиента и сохраняет их в формате Parquet.
 
     Args:
-        client (BaseDataClient): Инициализированный клиент биржи.
+        client (ExchangeDataGetter): Инициализированный клиент биржи.
         instrument (str): Тикер инструмента.
         interval (str): Временной интервал.
         days (int): Глубина истории в днях.
@@ -64,7 +64,7 @@ def _fetch_and_save_candles(
 
 
 def _fetch_and_save_instrument_info(
-    client: BaseDataClient,
+    client: ExchangeDataGetter,
     instrument: str,
     category: str,
     save_path: str
@@ -73,7 +73,7 @@ def _fetch_and_save_instrument_info(
     Запрашивает метаданные инструмента и сохраняет их в JSON.
 
     Args:
-        client (BaseDataClient): Клиент биржи.
+        client (ExchangeDataGetter): Клиент биржи.
         instrument (str): Тикер инструмента.
         category (str): Категория рынка.
         save_path (str): Полный путь для сохранения файла.
@@ -99,7 +99,7 @@ def _fetch_and_save_instrument_info(
 
 def _process_single_instrument_download(
     instrument: str,
-    client: BaseDataClient,
+    client: ExchangeDataGetter,
     exchange_path: str,
     interval: str,
     days: int,
@@ -114,7 +114,7 @@ def _process_single_instrument_download(
 
     Args:
         instrument (str): Тикер инструмента.
-        client (BaseDataClient): Клиент биржи (должен быть потокобезопасным).
+        client (ExchangeDataGetter): Клиент биржи (должен быть потокобезопасным).
         exchange_path (str): Путь к директории биржи/интервала.
         interval (str): Интервал свечей.
         days (int): Глубина истории.
@@ -152,7 +152,7 @@ def _process_single_instrument_download(
     return f"✅ {instrument_upper}: {', '.join(status_parts)}"
 
 
-def update_lists_flow(args_settings: Dict[str, Any], client: BaseDataClient) -> Tuple[bool, str]:
+def update_lists_flow(args_settings: Dict[str, Any], client: ExchangeDataGetter) -> Tuple[bool, str]:
     """
     Сценарий обновления списка ликвидных инструментов.
 
@@ -160,7 +160,7 @@ def update_lists_flow(args_settings: Dict[str, Any], client: BaseDataClient) -> 
 
     Args:
         args_settings (Dict[str, Any]): Настройки запуска.
-        client (BaseDataClient): Клиент биржи.
+        client (ExchangeDataGetter): Клиент биржи.
 
     Returns:
         Tuple[bool, str]: (Успех, Сообщение).
@@ -203,7 +203,7 @@ def update_lists_flow(args_settings: Dict[str, Any], client: BaseDataClient) -> 
         return False, error_msg
 
 
-def download_data_flow(args_settings: Dict[str, Any], client: BaseDataClient) -> None:
+def download_data_flow(args_settings: Dict[str, Any], client: ExchangeDataGetter) -> None:
     """
     Сценарий массовой загрузки исторических данных.
 
@@ -215,7 +215,7 @@ def download_data_flow(args_settings: Dict[str, Any], client: BaseDataClient) ->
 
     Args:
         args_settings (Dict[str, Any]): Параметры загрузки.
-        client (BaseDataClient): Клиент биржи.
+        client (ExchangeDataGetter): Клиент биржи.
     """
     instrument_list: List[str] = []
 

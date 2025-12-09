@@ -26,14 +26,14 @@ from tinkoff.invest import (
 )
 from tinkoff.invest.utils import now, quotation_to_decimal
 
-from app.infrastructure.exchanges.base import BaseExchangeHandler
+from app.infrastructure.exchanges.base import ExchangeExchangeHandler
 from app.shared.primitives import ExchangeType
 from app.shared.config import config
 
 logger = logging.getLogger(__name__)
 
 
-class TinkoffHandler(BaseExchangeHandler):
+class TinkoffHandler(ExchangeExchangeHandler):
     """
     Адаптер для биржи Tinkoff Invest.
     Работает в режиме Read-Only.

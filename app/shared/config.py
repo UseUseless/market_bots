@@ -31,6 +31,12 @@ class AppConfig(BaseSettings):
         extra="ignore"  # Игнорировать лишние переменные в .env, не выбрасывая ошибку
     )
 
+
+    # --- Настройки Времени ---
+    # Часовой пояс для отображения в логах и Telegram.
+    # Можно менять через .env (DISPLAY_TIMEZONE=Asia/Novosibirsk)
+    DISPLAY_TIMEZONE: str = "Europe/Moscow"
+
     # 1. Основные пути (File System Paths)
 
     # Определяем корень проекта относительно текущего файла.

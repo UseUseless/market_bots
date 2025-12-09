@@ -1,7 +1,7 @@
 """
 Базовый класс для адаптеров бирж (Base Exchange Handler).
 
-Этот модуль определяет родительский класс `BaseExchangeHandler`, который реализует
+Этот модуль определяет родительский класс `ExchangeExchangeHandler`, который реализует
 общую логику для всех коннекторов к биржам (Bybit, Tinkoff и др.).
 
 Основные задачи модуля:
@@ -9,7 +9,7 @@
     формату Pandas DataFrame с правильными типами данных и таймзоной UTC.
 2.  **Безопасное исполнение:** Обертка над отправкой ордеров с централизованным
     логированием и перехватом критических ошибок (Safety Net).
-3.  **Соблюдение контрактов:** Реализация интерфейсов `BaseDataClient` и `BaseTradeClient`.
+3.  **Соблюдение контрактов:** Реализация интерфейсов `ExchangeDataGetter` и `BaseTradeClient`.
 """
 
 import logging
@@ -17,12 +17,12 @@ from typing import List, Dict, Any
 
 import pandas as pd
 
-from app.core.interfaces import BaseDataClient
+from app.shared.interfaces import ExchangeDataGetter
 
 logger = logging.getLogger(__name__)
 
 
-class BaseExchangeHandler(BaseDataClient):
+class ExchangeExchangeHandler(ExchangeDataGetter):
     """
     Абстрактный базовый класс адаптера биржи.
     """

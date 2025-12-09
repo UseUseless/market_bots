@@ -13,13 +13,12 @@ import pandas as pd
 from typing import Any, Dict
 
 from app.shared.events import OrderEvent, FillEvent
-from app.core.interfaces import BaseExecutionHandler
 from app.shared.primitives import TradeDirection
 
 
-class SimulatedExecutionHandler(BaseExecutionHandler):
+class BacktestExecutionHandler:
     """
-    Симулятор биржевого исполнения.
+    Симулятор биржевого исполнения для бэктеста.
 
     Превращает `OrderEvent` в `FillEvent` мгновенно (без сетевых задержек),
     но с корректировкой цены и расчетом комиссий.

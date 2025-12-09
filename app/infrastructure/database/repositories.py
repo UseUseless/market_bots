@@ -13,7 +13,6 @@ from sqlalchemy.orm import selectinload
 
 from app.core.portfolio.state import PortfolioState
 from app.shared.primitives import TradeDirection, Position
-from app.core.interfaces import IPortfolioRepository
 from app.infrastructure.database.models import (
     PortfolioDB,
     PositionDB,
@@ -221,7 +220,7 @@ class BotRepository:
         return result.scalars().all()
 
 
-class PortfolioRepository(IPortfolioRepository):
+class PortfolioStateStorage:
     """
     Реализация интерфейса сохранения состояния портфеля в БД.
     Обеспечивает персистентность данных между перезапусками.

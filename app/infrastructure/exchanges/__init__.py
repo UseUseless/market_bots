@@ -3,7 +3,7 @@
 
 Этот пакет содержит реализации интерфейсов взаимодействия с внешними торговыми площадками.
 В терминологии Гексагональной архитектуры (Ports & Adapters), классы здесь являются
-**Secondary (Driven) Adapters**, реализующими порты `BaseDataClient` и `BaseTradeClient`.
+**Secondary (Driven) Adapters**, реализующими порты `ExchangeDataGetter` и `BaseTradeClient`.
 
 Основные задачи пакета:
 1.  **Унификация API**: Преобразование специфичных для каждой биржи форматов данных
@@ -14,5 +14,5 @@
 Доступные реализации:
     - :class:`~.bybit.BybitHandler`: Адаптер для Bybit Unified Trading (Spot/Linear/Inverse).
     - :class:`~.tinkoff.TinkoffHandler`: Адаптер для Tinkoff Invest API (MOEX/SPB).
-    - :class:`~.base.BaseExchangeHandler`: Базовый абстрактный класс с общей логикой.
+    - :class:`~.base.ExchangeExchangeHandler`: Базовый абстрактный класс с общей логикой.
 """

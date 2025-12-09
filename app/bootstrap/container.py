@@ -17,7 +17,6 @@ from typing import Dict, Optional, Any
 
 from app.infrastructure.database.session import async_session_factory
 from app.core.calculations.indicators import FeatureEngine
-from app.core.event_bus import SignalBus
 from app.adapters.telegram.manager import BotManager
 from app.infrastructure.exchanges.tinkoff import TinkoffHandler
 from app.infrastructure.exchanges.bybit import BybitHandler
@@ -37,7 +36,6 @@ class Container:
 
     def __init__(self):
         # Кэши для синглтонов (инициализируются None)
-        self._bus: Optional[SignalBus] = None
         self._bot_manager: Optional[BotManager] = None
         self._feature_engine: Optional[FeatureEngine] = None
 
@@ -62,22 +60,6 @@ class Container:
         Используется для создания подключений к БД внутри сервисов.
         """
         return async_session_factory
-
-    @property
-    def bus(self) -> SignalBus:
-        """
-        Глобальная шина событий (Event Bus).
-
-        Используется для асинхронного обмена сообщениями между:
-        - Поставщиками данных (Feeds)
-        - Стратегиями
-        - Исполнителями ордеров (Execution)
-        - Логгерами и Телеграмом
-        """
-        if not self._bus:
-            self._bus = SignalBus()
-            logger.debug("Container: SignalBus initialized.")
-        return self._bus
 
     @property
     def feature_engine(self) -> FeatureEngine:

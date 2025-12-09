@@ -1,7 +1,7 @@
 """
 Унифицированный фид данных (Unified Data Feed).
 
-Этот модуль предоставляет реализацию интерфейса `IDataFeed` для работы в режиме
+Этот модуль предоставляет реализацию интерфейса `MarketDataProvider` для работы в режиме
 реального времени (Live Trading). Он объединяет загрузку исторических данных (REST)
 и получение обновлений через WebSocket.
 
@@ -20,7 +20,7 @@ from typing import Optional, List, Dict
 
 import pandas as pd
 
-from app.core.interfaces import IDataFeed, BaseDataClient
+from app.shared.interfaces import MarketDataProvider, ExchangeDataGetter
 from app.core.calculations.indicators import FeatureEngine
 from app.infrastructure.feeds.bybit_stream import BybitStreamDataHandler
 from app.infrastructure.feeds.tinkoff_stream import TinkoffStreamDataHandler
@@ -30,7 +30,7 @@ from app.shared.primitives import ExchangeType
 logger = logging.getLogger(__name__)
 
 
-class UnifiedDataFeed(IDataFeed):
+class UnifiedDataProvider(MarketDataProvider):
     """
     Основной поставщик данных для Live-стратегий.
 
@@ -38,14 +38,14 @@ class UnifiedDataFeed(IDataFeed):
     и предоставляет потокобезопасный доступ к истории для стратегий.
 
     Attributes:
-        client (BaseDataClient): Клиент для загрузки исторической части данных.
+        client (ExchangeDataGetter): Клиент для загрузки исторической части данных.
         exchange (str): Название биржи.
         instrument (str): Тикер инструмента.
         max_buffer_size (int): Максимальное количество хранящихся свечей.
     """
 
     def __init__(self,
-                 client: BaseDataClient,
+                 client: ExchangeDataGetter,
                  exchange: str,
                  instrument: str,
                  interval: str,
@@ -56,7 +56,7 @@ class UnifiedDataFeed(IDataFeed):
         Инициализирует фид.
 
         Args:
-            client (BaseDataClient): API клиент биржи.
+            client (ExchangeDataGetter): API клиент биржи.
             exchange (str): Имя биржи.
             instrument (str): Тикер.
             interval (str): Интервал свечей.
@@ -185,7 +185,7 @@ class UnifiedDataFeed(IDataFeed):
         # FeatureEngine модифицирует DF in-place (добавляет колонки)
         self.feature_engine.add_required_features(self._df, self.required_indicators)
 
-    # --- Реализация интерфейса IDataFeed ---
+    # --- Реализация интерфейса MarketDataProvider ---
 
     def get_history(self, length: int = 0) -> pd.DataFrame:
         """

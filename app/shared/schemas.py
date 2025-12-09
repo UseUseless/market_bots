@@ -1,22 +1,22 @@
 """
 Модуль схем валидации данных (Schemas).
 
-Содержит Pydantic-модели, которые используются для проверки структуры и типов данных,
-поступающих из внешних источников (база данных, API, пользовательский ввод),
-перед тем как передать их во внутренние компоненты системы (Стратегии).
+Содержит Pydantic-модели, которые используются для проверки структуры и типов данных.
+Гарантирует, что в стратегию попадут только те настройки,
+которые реально поддерживаются выбранной биржей (согласно config.py)
 """
 
 from typing import Dict, Any
-from pydantic import BaseModel, Field, field_validator, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 
+from app.shared.config import config
 
 class StrategyConfigModel(BaseModel):
     """
     Универсальная модель конфигурации для инициализации любой стратегии.
 
     Служит контрактом: гарантирует, что класс стратегии получит валидный набор
-    параметров, и избавляет стратегию от необходимости проверять ключи словарей вручную.
-    Экземпляры модели неизменяемы (`frozen=True`).
+    параметров. Экземпляры модели неизменяемы (`frozen=True`).
 
     Attributes:
         strategy_name (str): Имя класса стратегии (например, 'SimpleSMACross').
@@ -44,22 +44,27 @@ class StrategyConfigModel(BaseModel):
     # Настройки Pydantic
     model_config = ConfigDict(frozen=True)  # Запрет на изменение полей после создания
 
-    @field_validator('interval')
-    @classmethod
-    def validate_interval(cls, v: str) -> str:
+    @model_validator(mode='after')
+    def validate_exchange_interval(self) -> 'StrategyConfigModel':
         """
-        Проверяет формат интервала на соответствие поддерживаемым суффиксам.
+        Проверяет, поддерживает ли указанная биржа выбранный интервал.
 
-        Args:
-            v (str): Строка интервала (например, '15min').
-
-        Returns:
-            str: Исходная строка, если проверка пройдена.
-
-        Raises:
-            ValueError: Если интервал имеет неизвестный суффикс.
+        Использует `config.EXCHANGE_INTERVAL_MAPS` как единственный источник истины.
         """
-        valid_suffixes = ['min', 'hour', 'day', 'week', 'month']
-        if not any(v.endswith(s) for s in valid_suffixes):
-            raise ValueError(f"Некорректный формат интервала: '{v}'. Ожидаются суффиксы: {valid_suffixes}")
-        return v
+        # 1. Получаем доступные интервалы для этой биржи из конфига
+        # Если биржа неизвестна (нет в конфиге), выдаем ошибку
+        available_intervals = config.EXCHANGE_INTERVAL_MAPS.get(self.exchange)
+
+        if available_intervals is None:
+            raise ValueError(f"Неизвестная биржа: '{self.exchange}'. "
+                             f"Доступные: {list(config.EXCHANGE_INTERVAL_MAPS.keys())}")
+
+        # 2. Проверяем наличие интервала в списке ключей
+        if self.interval not in available_intervals:
+            sorted_intervals = sorted(list(available_intervals.keys()))
+            raise ValueError(
+                f"Интервал '{self.interval}' не поддерживается биржей '{self.exchange}'.\n"
+                f"Доступные варианты: {sorted_intervals}"
+            )
+
+        return self
