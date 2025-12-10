@@ -23,7 +23,7 @@ import signal
 from typing import Tuple, Any, List
 
 # Импорты схем и БД
-from app.shared.schemas import StrategyConfigModel
+from app.shared.schemas import TradingConfig
 from app.infrastructure.database.session import async_session_factory
 from app.infrastructure.database.repositories import ConfigRepository
 from app.infrastructure.database.models import StrategyConfig
@@ -31,7 +31,7 @@ from app.infrastructure.database.models import StrategyConfig
 # Глобальные зависимости
 from app.bootstrap.container import container
 from app.core.engine.live.loop import SignalEngine
-from app.infrastructure.feeds.unified import UnifiedDataProvider
+from app.infrastructure.feeds.live import LiveDataProvider
 
 # Обработчики сигналов (Signal Handlers)
 from app.adapters.cli.signal_viewer import ConsoleSignalViewer
@@ -61,7 +61,7 @@ async def _config_loader() -> List[StrategyConfig]:
         return configs
 
 
-async def _pair_builder(config: StrategyConfig) -> Tuple[UnifiedDataProvider, Any]:
+async def _pair_builder(config: StrategyConfig) -> Tuple[LiveDataProvider, Any]:
     """
     Функция-фабрика (Factory Callback).
 
@@ -72,7 +72,7 @@ async def _pair_builder(config: StrategyConfig) -> Tuple[UnifiedDataProvider, An
         config (StrategyConfig): ORM-объект конфигурации стратегии.
 
     Returns:
-        Tuple[UnifiedDataProvider, Any]: Кортеж (DataFeed, Strategy), готовый
+        Tuple[LiveDataProvider, Any]: Кортеж (DataFeed, Strategy), готовый
         для запуска в движке.
 
     Raises:
@@ -92,7 +92,7 @@ async def _pair_builder(config: StrategyConfig) -> Tuple[UnifiedDataProvider, An
         strategy_params.update(config.parameters)
 
     # 4. Создание валидированной модели конфигурации
-    pydantic_config = StrategyConfigModel(
+    pydantic_config = TradingConfig(
         strategy_name=config.strategy_name,
         instrument=config.instrument,
         exchange=config.exchange,
@@ -114,7 +114,7 @@ async def _pair_builder(config: StrategyConfig) -> Tuple[UnifiedDataProvider, An
     strategy.name = config.strategy_name
 
     # 6. Инициализация фида данных
-    feed = UnifiedDataProvider(
+    feed = LiveDataProvider(
         client=client,
         exchange=config.exchange,
         instrument=config.instrument,

@@ -13,7 +13,7 @@ import pandas as pd
 from tinkoff.invest import AsyncClient
 from tinkoff.invest.market_data_stream.async_market_data_stream_manager import AsyncMarketDataStreamManager
 
-from app.infrastructure.feeds.stream_base import BaseStreamDataHandler
+from app.infrastructure.feeds.live.streams.base import BaseStreamDataHandler
 from app.shared.events import MarketEvent
 from app.shared.config import config
 

@@ -1,87 +1,100 @@
 """
-Модуль базовых примитивов данных.
+Базовые примитивы данных.
 
-Содержит перечисления (Enums) и структуры данных (Dataclasses).
-Используются для типизации аргументов функций, событий и состояния портфеля.
+Содержит перечисления (Enums) и структуры данных (Dataclasses),
+которые используются во всех слоях приложения.
 """
 
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-
-
-class TradeDirection(StrEnum):
-    """
-    Направление торговой операции или позиции.
-    """
-    BUY = "BUY"
-    SELL = "SELL"
-
-
-class TriggerReason(StrEnum):
-    """
-    Причина генерации события (сигнала или ордера).
-    Используется для аналитики: позволяет понять, был ли выход из позиции плановым
-    (по стратегии) или аварийным (Stop Loss).
-    """
-    SIGNAL = "SIGNAL"       # Штатный вход/выход по логике стратегии
-    STOP_LOSS = "SL"        # Срабатывание защитного стоп-ордера
-    TAKE_PROFIT = "TP"      # Срабатывание ордера фиксации прибыли
+from typing import Optional
 
 
 class ExchangeType(StrEnum):
     """
-    Константы поддерживаемых бирж.
-    Используются в фабриках и конфигах для выбора адаптера.
+    Поддерживаемые биржи.
+    Используется для выбора адаптера и валидации конфига.
     """
     TINKOFF = "tinkoff"
     BYBIT = "bybit"
 
 
+class TradeDirection(StrEnum):
+    """Направление позиции."""
+    BUY = "BUY"
+    SELL = "SELL"
+
+
+class TriggerReason(StrEnum):
+    """Причина генерации события (для аналитики)."""
+    SIGNAL = "SIGNAL"       # Штатный вход/выход по стратегии
+    STOP_LOSS = "SL"        # Сработал защитный стоп
+    TAKE_PROFIT = "TP"      # Сработал тейк-профит
+
+
 @dataclass
-class Position:
+class Trade:
     """
-    Описывает состояние одной открытой позиции.
-
-    Хранится в `PortfolioState`. Создается при получении FillEvent на открытие,
-    удаляется при получении FillEvent на закрытие.
-
-    Attributes:
-        instrument (str): Тикер инструмента (например, 'BTCUSDT' или 'SBER').
-        direction (TradeDirection): Направление (Long/Short).
-        entry_timestamp (datetime): Время открытия позиции (UTC).
-        quantity (float): Текущий объем позиции.
-        entry_commission (float): Комиссия, уплаченная при входе (для расчета чистого PnL при выходе).
-        entry_price (float): Цена входа.
-        stop_loss (float): Текущий уровень Stop Loss.
-        take_profit (float): Текущий уровень Take Profit.
+    Единая сущность сделки.
+    Используется и как активная позиция (в памяти), и как запись в журнале (на диске).
     """
-    instrument: str
+    # Идентификация
+    id: str  # UUID или уникальный хеш
+    symbol: str
     direction: TradeDirection
-    entry_timestamp: datetime
-    quantity: float
-    entry_commission: float
+
+    # --- ВХОД (Entry) ---
+    entry_time: datetime
     entry_price: float
-    stop_loss: float
-    take_profit: float
+    quantity: float
+    entry_commission: float = 0.0
 
+    # --- РИСК (Metadata) ---
+    stop_loss: float = 0.0
+    take_profit: float = 0.0
 
-@dataclass
-class TradeRiskProfile:
-    """
-    Результат расчета риск-менеджера для потенциальной сделки.
+    # --- ВЫХОД (Exit) - Заполняется при закрытии ---
+    exit_time: Optional[datetime] = None
+    exit_price: Optional[float] = None
+    exit_commission: Optional[float] = 0.0
+    exit_reason: Optional[TriggerReason] = None
 
-    Этот объект передается из `RiskManager` в `PositionSizer`.
+    # --- РЕЗУЛЬТАТ ---
+    pnl: float = 0.0        # Чистый PnL
+    pnl_pct: float = 0.0    # PnL в процентах
 
-    Attributes:
-        stop_loss_price (float): Рассчитанная цена стоп-лосса (уровень отмены сценария).
-        take_profit_price (float): Рассчитанная цена тейк-профита (целевой уровень).
-        risk_per_share (float): Денежный риск на 1 единицу актива.
-                                Формула: `abs(entry_price - stop_loss_price)`.
-        risk_amount (float): Общий допустимый денежный риск на всю сделку.
-                             Обычно это % от текущего капитала (например, 1% от $1000 = $10).
-    """
-    stop_loss_price: float
-    take_profit_price: float
-    risk_per_share: float
-    risk_amount: float
+    @property
+    def is_closed(self) -> bool:
+        """Позиция закрыта, если есть время выхода."""
+        return self.exit_time is not None
+
+    def close(self, exit_time: datetime, exit_price: float, reason: TriggerReason, commission: float = 0.0):
+        """
+        Метод для закрытия сделки и расчета PnL.
+
+        Args:
+            exit_time: Время выхода.
+            exit_price: Цена исполнения выхода.
+            reason: Причина выхода (SL/TP/Signal).
+            commission: Комиссия за выход.
+        """
+        self.exit_time = exit_time
+        self.exit_price = exit_price
+        self.exit_reason = reason
+        self.exit_commission = commission
+
+        # Расчет Валовой Прибыли (Gross PnL)
+        gross_pnl = 0.0
+        if self.direction == TradeDirection.BUY:
+            gross_pnl = (self.exit_price - self.entry_price) * self.quantity
+        else:
+            gross_pnl = (self.entry_price - self.exit_price) * self.quantity
+
+        # Чистая Прибыль (Net PnL)
+        self.pnl = gross_pnl - self.entry_commission - self.exit_commission
+
+        # Расчет процентов (ROI)
+        invested = self.entry_price * self.quantity
+        if invested > 0:
+            self.pnl_pct = (self.pnl / invested) * 100

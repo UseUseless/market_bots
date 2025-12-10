@@ -1,9 +1,8 @@
 """
 Базовый класс стратегий.
 
-Определяет каркас для всех торговых алгоритмов. Базовый класс берет на себя инфраструктурные
-задачи (получение данных, расчет индикаторов,работа с конфигом),
-а наследники реализуют только специфичную логику сигналов.
+Определяет каркас для всех торговых алгоритмов.
+Интегрирован с новой системой конфигурации (TradingConfig).
 """
 
 from abc import ABC, abstractmethod
@@ -15,26 +14,24 @@ import pandas as pd
 
 from app.core.calculations.indicators import FeatureEngine
 from app.shared.interfaces import MarketDataProvider
-from app.shared.schemas import StrategyConfigModel
+from app.shared.schemas import TradingConfig
 
 logger = logging.getLogger(__name__)
+
 
 class BaseStrategy(ABC):
     """
     Родительский класс для торговых стратегий.
 
     Обеспечивает унифицированный интерфейс для работы как в режиме бэктеста,
-    так и в реальном времени (Live).
+    так и в реальном времени.
 
     Attributes:
         params_config (Dict): Конфигурация параметров для оптимизации (Optuna).
-            Определяет типы, диапазоны и шаги перебора параметров.
             Пример: `{"sma_period": {"type": "int", "low": 10, "high": 50}}`.
         required_indicators (List[Dict]): Список индикаторов, необходимых стратегии.
-            Автоматически рассчитываются `FeatureEngine`.
             Пример: `[{"name": "sma", "params": {"period": 20}}]`.
-        min_history_needed (int): Минимальное количество свечей, необходимых для расчета
-            индикаторов (warm-up period).
+        min_history_needed (int): Минимальное количество свечей для разогрева.
     """
 
     # Дефолтные значения (переопределяются в наследниках)
@@ -42,172 +39,120 @@ class BaseStrategy(ABC):
     required_indicators: List[Dict[str, Any]] = []
     min_history_needed: int = 1
 
-    def __init__(self,
-                 events_queue: Queue,
-                 feature_engine: FeatureEngine,
-                 config: StrategyConfigModel):
+    def __init__(self, events_queue: Queue, config: TradingConfig):
         """
         Инициализирует стратегию.
 
         Args:
-            events_queue (Queue): Очередь для отправки сигналов (SignalEvent).
-            feature_engine (FeatureEngine): Сервис расчета индикаторов.
-            config (StrategyConfigModel): Полная конфигурация стратегии (параметры, инструмент и т.д.).
+            events_queue (Queue): Очередь для отправки сигналов.
+            config (TradingConfig): Полная конфигурация сессии.
         """
         self.events_queue = events_queue
-        self.feature_engine = feature_engine
         self.config = config
 
-        # Распаковка часто используемых полей для удобства доступа в наследниках
+        # Распаковка часто используемых полей
         self.instrument: str = config.instrument
-        self.params: Dict[str, Any] = config.params
         self.name: str = config.strategy_name
+        self.params: Dict[str, Any] = config.strategy_params
 
-        # Автоматическое добавление индикаторов, необходимых для выбранного риск-менеджера
-        # (например, ATR для ATRRiskManager)
-        self._add_risk_manager_requirements(
-            config.risk_manager_type,
-            config.risk_manager_params
-        )
+        # Инициализируем движок индикаторов внутри (симплфикация)
+        self.feature_engine = FeatureEngine()
+
+        # Автоматическое добавление индикаторов для Риск-менеджера
+        self._add_risk_manager_requirements()
 
     @classmethod
     def get_default_params(cls) -> Dict[str, Any]:
         """
-        Собирает дефолтные параметры стратегии из `params_config` всех родительских классов.
-
-        Returns:
-            Dict[str, Any]: Словарь {имя_параметра: значение_по_умолчанию}.
+        Собирает дефолтные параметры из конфигурации всех родительских классов.
         """
         config = {}
-        # Проходим по MRO (Method Resolution Order) в обратном порядке,
-        # чтобы параметры наследников перезаписывали параметры родителей.
         for base_class in reversed(cls.__mro__):
             if hasattr(base_class, 'params_config'):
                 config.update(base_class.params_config)
         return {name: p_config['default'] for name, p_config in config.items()}
 
-    def _add_risk_manager_requirements(self, risk_manager_type: str, risk_manager_params: Dict[str, Any]):
+    def _add_risk_manager_requirements(self):
         """
-        Динамически добавляет индикаторы риск-менеджера в список требований стратегии.
+        Проверяет конфиг риска и добавляет ATR, если это нужно риск-менеджеру.
         """
-        if risk_manager_type == "ATR":
-            atr_period = risk_manager_params.get("atr_period", 14)
-            atr_requirement = {"name": "atr", "params": {"period": atr_period}}
+        risk_cfg = self.config.risk_config
+        risk_type = risk_cfg.get("type", "FIXED")
 
-            # Проверяем, нет ли уже такого требования, чтобы не дублировать
+        if risk_type == "ATR":
+            atr_period = risk_cfg.get("atr_period", 14)
+            atr_req = {"name": "atr", "params": {"period": atr_period}}
+
+            # Копируем список, чтобы не менять атрибут класса
             current_requirements = list(self.required_indicators)
+
+            # Проверка на дубликаты
             is_present = any(
                 req.get('name') == 'atr' and req.get('params', {}).get('period') == atr_period
                 for req in current_requirements
             )
 
             if not is_present:
-                current_requirements.append(atr_requirement)
+                current_requirements.append(atr_req)
                 self.required_indicators = current_requirements
 
     def process_data(self, data: pd.DataFrame) -> pd.DataFrame:
         """
-        Подготавливает исторические данные (Векторный режим).
-
-        Используется ТОЛЬКО при инициализации бэктеста для предварительного расчета
-        всех индикаторов сразу на всем датасете.
-
-        Args:
-            data (pd.DataFrame): Сырые данные OHLCV.
-
-        Returns:
-            pd.DataFrame: Обогащенный данными DataFrame (без NaN в начале).
+        Векторный расчет индикаторов (для бэктеста).
         """
         original_columns = set(data.columns)
 
-        # 1. Расчет стандартных индикаторов через FeatureEngine
-        enriched_data = self.feature_engine.add_required_features(data, self.required_indicators)
+        # 1. Расчет стандартных индикаторов
+        enriched_data = self.feature_engine.add_required_features(
+            data, self.required_indicators
+        )
 
-        # 2. Расчет специфичных для стратегии фичей (хук для наследников)
+        # 2. Хук для кастомных фичей
         final_data = self._prepare_custom_features(enriched_data)
 
-        # 3. Удаление строк с NaN, которые появились из-за лагов индикаторов (Warm-up)
-        current_columns = set(final_data.columns)
-        new_columns = list(current_columns - original_columns)
+        # 3. Умная очистка NaN (Smart Dropna)
+        new_columns = list(set(final_data.columns) - original_columns)
 
         if new_columns:
-            # Проверяем колонки на полную пустоту (failed calculation)
-            failed_columns = []
-            valid_subset = []
+            valid_indicators = [col for col in new_columns if not final_data[col].isna().all()]
+            broken_indicators = [col for col in new_columns if col not in valid_indicators]
 
-            for col in new_columns:
-                if final_data[col].isna().all():
-                    failed_columns.append(col)
-                else:
-                    valid_subset.append(col)
-
-            # Если есть битые индикаторы, предупреждаем, но не даем им удалить все данные
-            if failed_columns:
+            if broken_indicators:
                 logger.warning(
-                    f"Strategy {self.name}: Индикаторы {failed_columns} содержат ТОЛЬКО NaN. "
-                    "Они исключены из фильтрации dropna, но могут вызвать ошибки в логике."
+                    f"⚠️ Strategy '{self.name}': Индикаторы {broken_indicators} пусты. "
+                    "Проверьте историю данных."
                 )
 
-            # Удаляем строки только на основе тех индикаторов, которые реально посчитались
-            if valid_subset:
-                final_data.dropna(subset=valid_subset, inplace=True)
-
-            # Если valid_subset пуст (все индикаторы упали), мы ничего не удаляем,
-            # чтобы движок не крашнулся сразу, а выдал осмысленную ошибку позже.
+            if valid_indicators:
+                final_data.dropna(subset=valid_indicators, inplace=True)
 
         final_data.reset_index(drop=True, inplace=True)
-
         return final_data
 
     def _prepare_custom_features(self, data: pd.DataFrame) -> pd.DataFrame:
-        """
-        Хук для расчета кастомных индикаторов, которые не поддерживаются FeatureEngine.
-        Может быть переопределен в наследниках (например, для Z-Score).
-        """
+        """Хук для дочерних классов (Z-Score и т.п.)."""
         return data
 
     def on_candle(self, feed: MarketDataProvider):
         """
-        Обработчик новой свечи (Итеративный режим).
-
-        Вызывается движком (LiveEngine или BacktestLoop) при закрытии каждой свечи.
-        Запрашивает историю, извлекает текущую и предыдущую свечи и запускает логику сигналов.
-
-        Args:
-            feed (MarketDataProvider): Источник данных, предоставляющий доступ к истории.
+        Обработчик новой свечи. Запускает логику стратегии.
         """
-        # 1. Запрашиваем историю. Берем с запасом, чтобы хватило на расчеты.
-        # В Live-режиме индикаторы уже посчитаны в Feed, но стратегии часто
-        # нужно сравнить текущее значение с предыдущим (кроссовер).
+        # Берем историю с запасом
         history_needed = max(self.min_history_needed, 2)
         history_df = feed.get_history(length=history_needed)
 
-        # Если данных недостаточно (например, самое начало работы), пропускаем такт.
         if len(history_df) < 2:
             return
 
-        # 2. Извлекаем ключевые свечи
-        # .iloc[-1] -> Текущая только что закрытая свеча (на основе которой принимаем решение)
-        # .iloc[-2] -> Предыдущая свеча (для определения пересечений/трендов)
         last_candle = history_df.iloc[-1]
         prev_candle = history_df.iloc[-2]
-
         timestamp = last_candle.get('time', last_candle.name)
 
-        # 3. Делегируем принятие решения конкретной стратегии
         self._calculate_signals(prev_candle, last_candle, timestamp)
 
     @abstractmethod
     def _calculate_signals(self, prev_candle: pd.Series, last_candle: pd.Series, timestamp: pd.Timestamp):
         """
-        Ядро торговой логики.
-
-        Должен быть реализован в каждой стратегии. Анализирует свечи и, при выполнении
-        условий, кладет `SignalEvent` в `self.events_queue`.
-
-        Args:
-            prev_candle (pd.Series): Предыдущая свеча (t-1).
-            last_candle (pd.Series): Текущая закрытая свеча (t).
-            timestamp (pd.Timestamp): Время текущей свечи.
+        Ядро торговой логики. Реализуется в наследниках.
         """
-        raise NotImplementedError("Метод _calculate_signals должен быть реализован.")
+        raise NotImplementedError

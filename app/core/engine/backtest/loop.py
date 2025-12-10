@@ -12,17 +12,17 @@ import pandas as pd
 from typing import Dict, Any, Optional
 
 from app.shared.events import MarketEvent, SignalEvent, OrderEvent, FillEvent
-from app.core.portfolio.state import PortfolioState
-from app.shared.schemas import StrategyConfigModel
+from app.core.portfolio import PortfolioState
+from app.shared.schemas import TradingConfig
 from app.core.portfolio.manager import Portfolio
-from app.infrastructure.feeds.local import HistoricLocalDataHandler
-from app.core.execution.simulator import BacktestExecutionHandler
+from app.infrastructure.feeds.backtest.local import BacktestDataLoader
+from app.core.engine.backtest.simulator import BacktestExecutionHandler
 from app.core.risk.sizer import FixedRiskSizer
 from app.core.risk.manager import AVAILABLE_RISK_MANAGERS
 from app.core.risk.monitor import RiskMonitor
 from app.core.execution.order_logic import OrderManager
 from app.core.portfolio.accounting import FillProcessor
-from app.core.engine.backtest.feeds import BacktestDataProvider
+from app.infrastructure.feeds.backtest import BacktestDataProvider
 from app.core.calculations.indicators import FeatureEngine
 
 from app.strategies.base_strategy import BaseStrategy
@@ -94,7 +94,7 @@ class BacktestEngine:
         strategy_class = self.settings["strategy_class"]
         strategy_params = self.settings.get("strategy_params") or strategy_class.get_default_params()
 
-        strategy_config = StrategyConfigModel(
+        strategy_config = TradingConfig(
             strategy_name=strategy_class.__name__,
             instrument=self.settings["instrument"],
             exchange=self.settings["exchange"],
@@ -172,7 +172,7 @@ class BacktestEngine:
         else:
             data_path = self.settings.get("data_dir", config.PATH_CONFIG["DATA_DIR"])
 
-            data_handler = HistoricLocalDataHandler(
+            data_handler = BacktestDataLoader(
                 exchange=self.settings["exchange"],
                 instrument_id=self.settings["instrument"],
                 interval_str=self.settings["interval"],
@@ -188,7 +188,7 @@ class BacktestEngine:
         enriched_data = strategy.process_data(raw_data.copy())
 
         if len(enriched_data) < strategy.min_history_needed:
-            logger.error(f"Ошибка: Недостаточно данных для запуска стратегии '{strategy.name}'. "
+            logger.error(f"Ошибка: Недостаточно данных для запуска стратегии '{strategy.strategy_name}'. "
                          f"Требуется {strategy.min_history_needed}, доступно {len(enriched_data)}.")
             return None
 

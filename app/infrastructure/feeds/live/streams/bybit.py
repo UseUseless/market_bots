@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 import pandas as pd
 from pybit.unified_trading import WebSocket
 
-from app.infrastructure.feeds.stream_base import BaseStreamDataHandler
+from app.infrastructure.feeds.live.streams.base import BaseStreamDataHandler
 from app.shared.events import MarketEvent
 from app.shared.config import config
 

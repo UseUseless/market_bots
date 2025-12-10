@@ -4,9 +4,8 @@ import logging
 
 from app.shared.events import SignalEvent
 from app.strategies.base_strategy import BaseStrategy
-from app.core.calculations.indicators import FeatureEngine
 from app.shared.primitives import TradeDirection
-from app.shared.schemas import StrategyConfigModel
+from app.shared.schemas import TradingConfig
 
 logger = logging.getLogger('backtester')
 
@@ -51,15 +50,11 @@ class MeanReversionStrategy(BaseStrategy):
         }
     }
 
-    def __init__(self,
-                 events_queue: Queue,
-                 feature_engine: FeatureEngine,
-                 config: StrategyConfigModel):
-
-        # 1. Извлекаем параметры из config.params
-        self.sma_period = config.params["sma_period"]
-        self.upper_threshold = config.params["z_score_upper_threshold"]
-        self.lower_threshold = config.params["z_score_lower_threshold"]
+    def __init__(self, events_queue: Queue, config: TradingConfig):
+        # 1. Извлекаем параметры из config.strategy_params (FIXED: было params)
+        self.sma_period = config.strategy_params["sma_period"]
+        self.upper_threshold = config.strategy_params["z_score_upper_threshold"]
+        self.lower_threshold = config.strategy_params["z_score_lower_threshold"]
 
         # 2. Динамически формируем зависимости
         self.min_history_needed = self.sma_period + 1
@@ -68,7 +63,8 @@ class MeanReversionStrategy(BaseStrategy):
         ]
 
         # 3. Вызываем родительский __init__
-        super().__init__(events_queue, feature_engine, config)
+        # FIXED: Убран feature_engine из аргументов
+        super().__init__(events_queue, config)
 
     def _prepare_custom_features(self, data: pd.DataFrame) -> pd.DataFrame:
         """
@@ -87,35 +83,43 @@ class MeanReversionStrategy(BaseStrategy):
         return data
 
     def _calculate_signals(self, prev_candle: pd.Series, last_candle: pd.Series, timestamp: pd.Timestamp):
-        # Логика этого метода остается без изменений, так как она уже использует
-        # атрибуты экземпляра (self.lower_threshold и т.д.)
         current_z_score = last_candle['z_score']
         prev_z_score = prev_candle['z_score']
 
+        # FIXED: Убран аргумент strategy_id из SignalEvent
+
         # Сигнал на покупку (возврат к среднему снизу)
         if prev_z_score < self.lower_threshold and current_z_score >= self.lower_threshold:
-            self.events_queue.put(SignalEvent(timestamp=timestamp,
-                                              instrument=self.instrument,
-                                              direction=TradeDirection.BUY,
-                                              strategy_id=self.name))
+            self.events_queue.put(SignalEvent(
+                timestamp=timestamp,
+                instrument=self.instrument,
+                direction=TradeDirection.BUY,
+                price=last_candle['close']
+            ))
 
         # Сигнал на продажу (возврат к среднему сверху)
         elif prev_z_score > self.upper_threshold and current_z_score <= self.upper_threshold:
-            self.events_queue.put(SignalEvent(timestamp=timestamp,
-                                              instrument=self.instrument,
-                                              direction=TradeDirection.SELL,
-                                              strategy_id=self.name))
+            self.events_queue.put(SignalEvent(
+                timestamp=timestamp,
+                instrument=self.instrument,
+                direction=TradeDirection.SELL,
+                price=last_candle['close']
+            ))
 
         # Сигнал на закрытие лонга (пересечение нулевой линии)
         elif prev_z_score < 0 and current_z_score >= 0:
-            self.events_queue.put(SignalEvent(timestamp=timestamp,
-                                              instrument=self.instrument,
-                                              direction=TradeDirection.SELL,
-                                              strategy_id=self.name))
+            self.events_queue.put(SignalEvent(
+                timestamp=timestamp,
+                instrument=self.instrument,
+                direction=TradeDirection.SELL,
+                price=last_candle['close']
+            ))
 
         # Сигнал на закрытие шорта (пересечение нулевой линии)
         elif prev_z_score > 0 and current_z_score <= 0:
-            self.events_queue.put(SignalEvent(timestamp=timestamp,
-                                              instrument=self.instrument,
-                                              direction=TradeDirection.BUY,
-                                              strategy_id=self.name))
+            self.events_queue.put(SignalEvent(
+                timestamp=timestamp,
+                instrument=self.instrument,
+                direction=TradeDirection.BUY,
+                price=last_candle['close']
+            ))

@@ -115,7 +115,7 @@ class SignalEngine:
             stream_task = loop.create_task(feed.start_stream(stream_queue, loop))
 
             logger.info(
-                f"✅ [Engine] Started strategy #{config_id}: {strategy.name} on {feed.instrument}. "
+                f"✅ [Engine] Started strategy #{config_id}: {strategy.strategy_name} on {feed.instrument}. "
                 f"Watchdog: {int(watchdog_timeout)}s"
             )
 
@@ -148,7 +148,7 @@ class SignalEngine:
                             signal = strategy.events_queue.get_nowait()
 
                             if isinstance(signal, SignalEvent):
-                                logger.info(f"🔥 SIGNAL: {signal.direction} {signal.instrument} ({strategy.name})")
+                                logger.info(f"🔥 SIGNAL: {signal.direction} {signal.instrument} ({strategy.strategy_name})")
 
                                 # Broadcast: Рассылаем сигнал всем обработчикам.
                                 # Используем create_task для параллельного запуска (Fire-and-Forget).

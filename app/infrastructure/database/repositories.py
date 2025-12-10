@@ -11,8 +11,8 @@ from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.portfolio.state import PortfolioState
-from app.shared.primitives import TradeDirection, Position
+from app.core.portfolio import PortfolioState
+from app.shared.primitives import TradeDirection, Trade
 from app.infrastructure.database.models import (
     PortfolioDB,
     PositionDB,
@@ -316,7 +316,7 @@ class PortfolioStateStorage:
             # Конвертируем строку обратно в Enum
             direction = TradeDirection.BUY if pos_db.direction == "BUY" else TradeDirection.SELL
 
-            position = Position(
+            position = Trade(
                 instrument=pos_db.instrument,
                 quantity=pos_db.quantity,
                 entry_price=pos_db.entry_price,

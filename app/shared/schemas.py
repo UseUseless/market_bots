@@ -1,70 +1,43 @@
 """
-Модуль схем валидации данных (Schemas).
+Схемы конфигурации (Schemas).
 
-Содержит Pydantic-модели, которые используются для проверки структуры и типов данных.
-Гарантирует, что в стратегию попадут только те настройки,
-которые реально поддерживаются выбранной биржей (согласно config.py)
+Здесь определен единый класс конфигурации `TradingConfig`.
+Он заменяет собой разрозненные словари настроек и передается
+во все компоненты системы (Стратегия, Портфель, Риск).
 """
 
-from typing import Dict, Any
-from pydantic import BaseModel, Field, ConfigDict, model_validator
+from typing import Dict, Any, Optional, Literal
+from pydantic import BaseModel, Field
 
-from app.shared.config import config
-
-class StrategyConfigModel(BaseModel):
+class TradingConfig(BaseModel):
     """
-    Универсальная модель конфигурации для инициализации любой стратегии.
+    Единый паспорт торговой сессии.
 
-    Служит контрактом: гарантирует, что класс стратегии получит валидный набор
-    параметров. Экземпляры модели неизменяемы (`frozen=True`).
-
-    Attributes:
-        strategy_name (str): Имя класса стратегии (например, 'SimpleSMACross').
-        instrument (str): Тикер инструмента (например, 'BTCUSDT').
-        exchange (str): Название биржи (например, 'bybit').
-        interval (str): Таймфрейм свечей (например, '1hour', '5min').
-                        Проверяется валидатором на наличие корректного суффикса.
-        params (Dict[str, Any]): Словарь специфичных параметров стратегии
-                                 (периоды индикаторов, пороги и т.д.).
-        risk_manager_type (str): Тип риск-менеджера (например, 'FIXED', 'ATR').
-        risk_manager_params (Dict[str, Any]): Параметры для настройки риск-менеджера.
+    Содержит полную информацию, необходимую для запуска стратегии
+    в любом режиме (Бэктест, Лайв, Оптимизация).
     """
+    # --- 1. Контекст Запуска ---
+    mode: Literal["BACKTEST", "LIVE", "OPTIMIZATION"]
+
+    # --- 2. Рыночные данные ---
+    exchange: str        # 'bybit', 'tinkoff'
+    instrument: str      # 'BTCUSDT' (Renamed back from symbol for consistency)
+    interval: str        # '1h', '5min'
+
+    # --- 3. Стратегия ---
     strategy_name: str
-    instrument: str
-    exchange: str
-    interval: str
+    # Параметры стратегии.
+    strategy_params: Dict[str, Any] = Field(default_factory=dict)
 
-    # Field(default_factory=dict) используется, чтобы не создавать
-    # один и тот же изменяемый словарь для всех экземпляров
-    params: Dict[str, Any] = Field(default_factory=dict)
+    # --- 4. Риск-менеджмент ---
+    # Пример: {"type": "ATR", "atr_period": 14, "risk_per_trade": 1.0}
+    # Пример: {"type": "FIXED", "stop_loss_pct": 2.0}
+    risk_config: Dict[str, Any] = Field(default_factory=lambda: {"type": "FIXED"})
 
-    risk_manager_type: str = "FIXED"
-    risk_manager_params: Dict[str, Any] = Field(default_factory=dict)
+    # --- 5. Деньги и Бэктест ---
+    initial_capital: float = 10000.0
+    commission_rate: float = 0.001  # 0.1% по умолчанию
 
-    # Настройки Pydantic
-    model_config = ConfigDict(frozen=True)  # Запрет на изменение полей после создания
-
-    @model_validator(mode='after')
-    def validate_exchange_interval(self) -> 'StrategyConfigModel':
-        """
-        Проверяет, поддерживает ли указанная биржа выбранный интервал.
-
-        Использует `config.EXCHANGE_INTERVAL_MAPS` как единственный источник истины.
-        """
-        # 1. Получаем доступные интервалы для этой биржи из конфига
-        # Если биржа неизвестна (нет в конфиге), выдаем ошибку
-        available_intervals = config.EXCHANGE_INTERVAL_MAPS.get(self.exchange)
-
-        if available_intervals is None:
-            raise ValueError(f"Неизвестная биржа: '{self.exchange}'. "
-                             f"Доступные: {list(config.EXCHANGE_INTERVAL_MAPS.keys())}")
-
-        # 2. Проверяем наличие интервала в списке ключей
-        if self.interval not in available_intervals:
-            sorted_intervals = sorted(list(available_intervals.keys()))
-            raise ValueError(
-                f"Интервал '{self.interval}' не поддерживается биржей '{self.exchange}'.\n"
-                f"Доступные варианты: {sorted_intervals}"
-            )
-
-        return self
+    # Даты для обрезки истории (только для Backtest/Optimization)
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None

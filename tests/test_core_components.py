@@ -3,7 +3,7 @@ import pytest
 from queue import Queue
 from datetime import datetime
 
-from app.infrastructure.feeds.local import HistoricLocalDataHandler
+from app.infrastructure.feeds.backtest.local import BacktestDataLoader
 
 
 @pytest.fixture
@@ -46,7 +46,7 @@ def test_main_session_filter(sample_unfiltered_data):
     # 1. ПОДГОТОВКА (Arrange)
     # Создаем экземпляр DataHandler (путь к файлу не важен, т.к. мы не будем его читать)
     # Важно, что мы передаем exchange='tinkoff', чтобы фильтр активировался
-    data_handler = HistoricLocalDataHandler(
+    data_handler = BacktestDataLoader(
         events_queue=Queue(),
         exchange='tinkoff',
         instrument_id='TEST',

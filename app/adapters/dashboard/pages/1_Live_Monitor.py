@@ -2,13 +2,13 @@
 Страница мониторинга сигналов (Live Monitor).
 
 Этот модуль отвечает за визуализацию текущего состояния торговой системы в реальном времени.
-Он подключается к базе данных PostgreSQL, извлекает оперативные метрики и отображает их
-в интерфейсе Streamlit.
+Он подключается к базе данных PostgreSQL, извлекает оперативные метрики через ORM
+и отображает их в интерфейсе Streamlit.
 
 Функциональность:
-    1. **KPI Метрики:** Количество активных ботов, стратегий, подписчиков и время последнего сигнала.
-    2. **Лента сигналов:** Таблица последних сгенерированных сигналов с цветовой кодировкой.
-    3. **Статус системы:** Сводные таблицы по активным ботам и запущенным стратегиям.
+    1. **KPI Метрики**: Количество активных ботов, стратегий, подписчиков и время последнего сигнала.
+    2. **Лента сигналов**: Таблица последних сгенерированных сигналов с цветовой кодировкой.
+    3. **Статус системы**: Сводные таблицы по активным ботам и запущенным стратегиям.
 """
 
 import logging
@@ -16,9 +16,16 @@ from typing import Tuple
 
 import pandas as pd
 import streamlit as st
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, select, func, desc
+from sqlalchemy.orm import sessionmaker
 
 from app.shared.config import config
+from app.infrastructure.database.models import (
+    BotInstance,
+    StrategyConfig,
+    SignalLog,
+    TelegramSubscriber
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,58 +38,82 @@ st.set_page_config(
 st.title("🚀 Live Signal Monitor")
 
 # --- Настройка подключения к БД ---
-# Используем синхронный драйвер psycopg2 для Streamlit
+# Streamlit работает в синхронном режиме, поэтому заменяем драйвер asyncpg на psycopg2
 SYNC_DB_URL = config.DATABASE_URL.replace("+asyncpg", "+psycopg2")
 engine = create_engine(SYNC_DB_URL)
+SessionLocal = sessionmaker(bind=engine)
 
 
 def load_operational_data() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
-    Загружает полный набор оперативных данных из базы данных.
+    Загружает полный набор оперативных данных из базы данных используя ORM.
 
-    Выполняет четыре SQL-запроса в рамках одного подключения для оптимизации производительности.
-    Извлекает информацию о ботах, стратегиях, сигналах и подписчиках.
+    Выполняет четыре запроса в рамках одной сессии для оптимизации производительности.
 
     Returns:
         Tuple[pd.DataFrame, ...]: Кортеж из четырех DataFrame:
             - bots: Список всех ботов и их статусов.
             - strategies: Активные стратегии с привязкой к именам ботов.
-            - signals: Последние 20 торговых сигналов (Time, Exchange, Ticker, Direction, Price).
+            - signals: Последние 20 торговых сигналов.
             - subscribers: Агрегированная статистика подписчиков по ботам.
     """
     try:
-        with engine.connect() as conn:
+        with SessionLocal() as session:
             # 1. Активные Боты
-            bots = pd.read_sql(text("""
-                SELECT id, name, is_active, created_at 
-                FROM bot_instances
-            """), conn)
+            # Эквивалент: SELECT id, name, is_active, created_at FROM bot_instances
+            stmt_bots = select(
+                BotInstance.id,
+                BotInstance.name,
+                BotInstance.is_active,
+                BotInstance.created_at
+            )
+            bots = pd.read_sql(stmt_bots, session.bind)
 
             # 2. Активные Стратегии (с Join для получения имени бота)
-            strats = pd.read_sql(text("""
-                SELECT s.id, s.strategy_name, s.exchange, s.instrument, s.interval, 
-                       b.name as bot_name, s.is_active
-                FROM strategy_configs s
-                LEFT JOIN bot_instances b ON s.bot_id = b.id
-                WHERE s.is_active = true
-            """), conn)
+            # Эквивалент: SELECT s.*, b.name FROM strategy_configs s LEFT JOIN bot_instances b ...
+            stmt_strats = (
+                select(
+                    StrategyConfig.id,
+                    StrategyConfig.strategy_name,
+                    StrategyConfig.exchange,
+                    StrategyConfig.instrument,
+                    StrategyConfig.interval,
+                    StrategyConfig.is_active,
+                    BotInstance.name.label("bot_name")
+                )
+                .join(BotInstance, StrategyConfig.bot_id == BotInstance.id, isouter=True)
+                .where(StrategyConfig.is_active == True)
+            )
+            strats = pd.read_sql(stmt_strats, session.bind)
 
             # 3. Лента Сигналов (последние 20)
-            signals = pd.read_sql(text("""
-                SELECT timestamp, exchange, instrument, strategy_name, direction, price
-                FROM signal_logs
-                ORDER BY timestamp DESC
-                LIMIT 20
-            """), conn)
+            # Эквивалент: SELECT ... FROM signal_logs ORDER BY timestamp DESC LIMIT 20
+            stmt_signals = (
+                select(
+                    SignalLog.timestamp,
+                    SignalLog.exchange,
+                    SignalLog.instrument,
+                    SignalLog.strategy_name,
+                    SignalLog.direction,
+                    SignalLog.price
+                )
+                .order_by(desc(SignalLog.timestamp))
+                .limit(20)
+            )
+            signals = pd.read_sql(stmt_signals, session.bind)
 
             # 4. Статистика подписчиков (Агрегация)
-            subs = pd.read_sql(text("""
-                SELECT b.name as bot_name, COUNT(t.id) as sub_count
-                FROM telegram_subscribers t
-                JOIN bot_instances b ON t.bot_id = b.id
-                WHERE t.is_active = true
-                GROUP BY b.name
-            """), conn)
+            # Эквивалент: SELECT b.name, COUNT(t.id) FROM subscribers t JOIN bots b ... GROUP BY b.name
+            stmt_subs = (
+                select(
+                    BotInstance.name.label("bot_name"),
+                    func.count(TelegramSubscriber.id).label("sub_count")
+                )
+                .join(BotInstance, TelegramSubscriber.bot_id == BotInstance.id)
+                .where(TelegramSubscriber.is_active == True)
+                .group_by(BotInstance.name)
+            )
+            subs = pd.read_sql(stmt_subs, session.bind)
 
             return bots, strats, signals, subs
 
@@ -97,13 +128,11 @@ def _style_direction_cell(val: str) -> str:
     """
     Применяет CSS-стили к ячейке направления торговли.
 
-    Окрашивает текст в зеленый для покупок и красный для продаж.
-
     Args:
         val (str): Значение направления ('BUY' или 'SELL').
 
     Returns:
-        str: CSS-строка стилей (например, 'color: #2ca02c; font-weight: bold').
+        str: CSS-строка стилей.
     """
     color = '#d62728' if val == 'SELL' else '#2ca02c'
     return f'color: {color}; font-weight: bold'

@@ -22,15 +22,15 @@ import pandas as pd
 
 from app.shared.interfaces import MarketDataProvider, ExchangeDataGetter
 from app.core.calculations.indicators import FeatureEngine
-from app.infrastructure.feeds.bybit_stream import BybitStreamDataHandler
-from app.infrastructure.feeds.tinkoff_stream import TinkoffStreamDataHandler
-from app.infrastructure.feeds.stream_base import BaseStreamDataHandler
+from app.infrastructure.feeds.live.streams.bybit import BybitStreamDataHandler
+from app.infrastructure.feeds.live.streams.tinkoff import TinkoffStreamDataHandler
+from app.infrastructure.feeds.live.streams.base import BaseStreamDataHandler
 from app.shared.primitives import ExchangeType
 
 logger = logging.getLogger(__name__)
 
 
-class UnifiedDataProvider(MarketDataProvider):
+class LiveDataProvider(MarketDataProvider):
     """
     Основной поставщик данных для Live-стратегий.
 

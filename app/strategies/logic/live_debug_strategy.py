@@ -3,9 +3,9 @@ import pandas as pd
 
 from app.shared.events import SignalEvent
 from app.strategies.base_strategy import BaseStrategy
-from app.core.calculations.indicators import FeatureEngine
 from app.shared.primitives import TradeDirection
-from app.shared.schemas import StrategyConfigModel
+from app.shared.schemas import TradingConfig
+
 
 class LiveDebugStrategy(BaseStrategy):
     """
@@ -16,15 +16,14 @@ class LiveDebugStrategy(BaseStrategy):
     params_config = {
         "candle_interval": {"type": "str", "default": "1min", "optimizable": False}
     }
-    # Нам не нужны индикаторы, но добавим SMA для проверки работы DataFeed
+    # Добавим SMA для проверки работы DataFeed
     required_indicators = [{"name": "sma", "params": {"period": 5}}]
     min_history_needed = 10
 
     def __init__(self,
                  events_queue: Queue,
-                 feature_engine: FeatureEngine,
-                 config: StrategyConfigModel):
-        super().__init__(events_queue, feature_engine, config)
+                 config: TradingConfig):
+        super().__init__(events_queue, config)
         self.counter = 0
 
     def _calculate_signals(self, prev_candle: pd.Series, last_candle: pd.Series, timestamp: pd.Timestamp):
@@ -42,8 +41,6 @@ class LiveDebugStrategy(BaseStrategy):
             timestamp=timestamp,
             instrument=self.instrument,
             direction=direction,
-            strategy_id=self.name,
-            price=last_candle['close'],
-            interval=self.params.get("candle_interval", "1min")
+            price=last_candle['close']
         )
         self.events_queue.put(signal)

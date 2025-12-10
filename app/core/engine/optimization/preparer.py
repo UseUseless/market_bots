@@ -15,7 +15,7 @@ from tqdm import tqdm
 from typing import Dict, List, Tuple, Any
 
 from app.core.engine.optimization.splitter import split_data_by_periods
-from app.infrastructure.feeds.local import HistoricLocalDataHandler
+from app.infrastructure.feeds.backtest.local import BacktestDataLoader
 from app.shared.config import config
 
 PATH_CONFIG = config.PATH_CONFIG
@@ -51,7 +51,7 @@ class WFODataPreparer:
 
         Алгоритм:
         1. Итерируется по списку инструментов (`instrument_list`).
-        2. Загружает историю через `HistoricLocalDataHandler`.
+        2. Загружает историю через `BacktestDataLoader`.
         3. Разбивает историю на N равных частей (`total_periods`).
         4. Рассчитывает количество доступных шагов WFO (`num_steps`).
 
@@ -72,7 +72,7 @@ class WFODataPreparer:
 
         # Используем tqdm для отображения прогресса загрузки
         for instrument in tqdm(instrument_list, desc="Подготовка данных"):
-            data_handler = HistoricLocalDataHandler(
+            data_handler = BacktestDataLoader(
                 exchange=self.data_settings["exchange"],
                 instrument_id=instrument,
                 interval_str=self.data_settings["interval"],

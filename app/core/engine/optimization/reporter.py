@@ -19,7 +19,7 @@ import optuna
 
 from app.core.analysis.session import AnalysisSession
 from app.core.analysis.constants import METRIC_CONFIG
-from app.infrastructure.feeds.local import HistoricLocalDataHandler
+from app.infrastructure.feeds.backtest.local import BacktestDataLoader
 from app.shared.config import config
 
 BACKTEST_CONFIG = config.BACKTEST_CONFIG
@@ -188,7 +188,7 @@ class OptimizationReporter:
         # В идеале для портфеля нужно строить синтетический индекс, но пока берем первый актив.
         instrument_for_bh = self.settings["instrument_list"][0]
 
-        data_handler_bh = HistoricLocalDataHandler(
+        data_handler_bh = BacktestDataLoader(
             exchange=self.settings["exchange"],
             instrument_id=instrument_for_bh,
             interval_str=self.settings["interval"],

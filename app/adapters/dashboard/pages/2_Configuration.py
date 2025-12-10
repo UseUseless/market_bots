@@ -3,11 +3,11 @@
 
 Этот модуль предоставляет графический интерфейс (GUI) для администрирования системы.
 Позволяет выполнять CRUD-операции (Create, Read, Update, Delete) над сущностями
-Ботов и Торговых Стратегий.
+Ботов и Торговых Стратегий, используя SQLAlchemy ORM.
 
 Технические особенности:
-- Использует синхронный движок SQLAlchemy с драйвером `psycopg2`.
-- Использует параметризованные SQL-запросы для защиты от инъекций.
+    - Использует синхронный движок SQLAlchemy с драйвером `psycopg2` для совместимости со Streamlit.
+    - Реализует транзакционность операций (commit/rollback).
 """
 
 import logging
@@ -15,12 +15,14 @@ from typing import Dict, Any
 
 import pandas as pd
 import streamlit as st
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, select, update, delete
+from sqlalchemy.orm import sessionmaker
 
 from app.strategies import AVAILABLE_STRATEGIES
 from app.core.risk.manager import AVAILABLE_RISK_MANAGERS
 from app.shared.config import config
 from app.shared.primitives import ExchangeType
+from app.infrastructure.database.models import BotInstance, StrategyConfig
 
 logger = logging.getLogger(__name__)
 
@@ -36,38 +38,22 @@ st.set_page_config(
 st.title("⚙️ Управление Конфигурацией")
 
 # --- Инициализация БД ---
+# Streamlit работает синхронно, поэтому меняем драйвер asyncpg на psycopg2
 SYNC_DB_URL = config.DATABASE_URL.replace("+asyncpg", "+psycopg2")
 engine = create_engine(SYNC_DB_URL)
+SessionLocal = sessionmaker(bind=engine)
 
 
-def _execute_transaction(query_str: str, params: Dict[str, Any] = {}) -> None:
+def get_all_bots() -> pd.DataFrame:
     """
-    Выполняет транзакционный SQL-запрос на изменение данных (INSERT, UPDATE, DELETE).
-
-    Использует `engine.begin()`, который автоматически открывает транзакцию
-    и фиксирует её (commit) при успешном завершении блока или откатывает (rollback) при ошибке.
-
-    Args:
-        query_str (str): Текст SQL запроса с именованными параметрами (например, :id).
-        params (Dict[str, Any]): Словарь значений для подстановки в запрос. Defaults to {}.
-    """
-    with engine.begin() as conn:
-        conn.execute(text(query_str), params)
-
-
-def _fetch_data_frame(query_str: str, params: Dict[str, Any] = {}) -> pd.DataFrame:
-    """
-    Выполняет SQL-запрос на чтение данных и возвращает результат в виде Pandas DataFrame.
-
-    Args:
-        query_str (str): Текст SQL запроса SELECT.
-        params (Dict[str, Any]): Словарь параметров запроса. Defaults to {}.
+    Получает список всех ботов через ORM.
 
     Returns:
-        pd.DataFrame: Таблица с результатами выборки.
+        pd.DataFrame: Таблица с колонками [id, name, is_active].
     """
-    with engine.connect() as conn:
-        return pd.read_sql(text(query_str), conn, params=params)
+    with SessionLocal() as session:
+        stmt = select(BotInstance.id, BotInstance.name, BotInstance.is_active).order_by(BotInstance.id)
+        return pd.read_sql(stmt, session.bind)
 
 
 def render_bots_management_section():
@@ -75,8 +61,9 @@ def render_bots_management_section():
     Отрисовывает интерфейс управления Телеграм-ботами.
 
     Включает:
-    1. Форму добавления нового бота (имя, токен).
-    2. Список существующих ботов с возможностью включения/выключения и удаления.
+    1. Форму добавления нового бота (`INSERT`).
+    2. Список существующих ботов с возможностью изменения статуса (`UPDATE`)
+       и удаления (`DELETE`).
     """
     st.header("🤖 Телеграм Боты")
 
@@ -91,10 +78,14 @@ def render_bots_management_section():
             if submitted_bot:
                 if new_bot_name and new_bot_token:
                     try:
-                        _execute_transaction(
-                            "INSERT INTO bot_instances (name, token, is_active) VALUES (:name, :token, true)",
-                            {"name": new_bot_name, "token": new_bot_token}
-                        )
+                        with SessionLocal() as session:
+                            new_bot = BotInstance(
+                                name=new_bot_name,
+                                token=new_bot_token,
+                                is_active=True
+                            )
+                            session.add(new_bot)
+                            session.commit()
                         st.success(f"Бот {new_bot_name} успешно добавлен!")
                         st.rerun()
                     except Exception as e:
@@ -103,7 +94,7 @@ def render_bots_management_section():
                     st.warning("Пожалуйста, заполните все поля.")
 
     # 2. Таблица существующих ботов
-    bots_df = _fetch_data_frame("SELECT id, name, is_active FROM bot_instances ORDER BY id")
+    bots_df = get_all_bots()
 
     if not bots_df.empty:
         st.subheader("Список ботов")
@@ -122,17 +113,24 @@ def render_bots_management_section():
             )
 
             if is_active != bool(row['is_active']):
-                _execute_transaction(
-                    "UPDATE bot_instances SET is_active = :active WHERE id = :id",
-                    {"active": is_active, "id": row['id']}
-                )
+                with SessionLocal() as session:
+                    stmt = (
+                        update(BotInstance)
+                        .where(BotInstance.id == row['id'])
+                        .values(is_active=is_active)
+                    )
+                    session.execute(stmt)
+                    session.commit()
                 st.toast(f"Статус бота {row['name']} обновлен.")
                 st.rerun()
 
             # Кнопка удаления (DELETE)
             if col3.button("Удалить 🗑️", key=f"del_bot_{row['id']}"):
                 try:
-                    _execute_transaction("DELETE FROM bot_instances WHERE id = :id", {"id": row['id']})
+                    with SessionLocal() as session:
+                        stmt = delete(BotInstance).where(BotInstance.id == row['id'])
+                        session.execute(stmt)
+                        session.commit()
                     st.success("Бот удален.")
                     st.rerun()
                 except Exception as e:
@@ -146,14 +144,14 @@ def render_strategies_management_section():
     Отрисовывает интерфейс управления торговыми стратегиями.
 
     Включает:
-    1. Форму создания новой конфигурации стратегии (выбор биржи, инструмента, таймфрейма, РМ).
-    2. Список активных конфигураций с возможностью деактивации и удаления.
+    1. Форму создания новой конфигурации стратегии (связывание бота, биржи и алгоритма).
+    2. Список активных конфигураций с управлением через ORM.
     """
     st.divider()
     st.header("📈 Торговые Стратегии")
 
     # Получаем список доступных ботов для привязки
-    bots_df = _fetch_data_frame("SELECT id, name FROM bot_instances")
+    bots_df = get_all_bots()
 
     # 1. Форма добавления стратегии
     with st.expander("Добавить новую стратегию", expanded=True):
@@ -173,7 +171,9 @@ def render_strategies_management_section():
 
                 # Динамические интервалы в зависимости от выбранной биржи
                 intervals = list(EXCHANGE_INTERVAL_MAPS.get(exchange, {}).keys())
-                interval = c5.selectbox("Таймфрейм", intervals if intervals else ["1min"])
+                # Fallback, если биржа не выбрана или конфиг пуст
+                interval_options = intervals if intervals else ["1min", "5min", "15min", "1hour"]
+                interval = c5.selectbox("Таймфрейм", interval_options)
 
                 risk_manager_type = c6.selectbox("Риск-менеджер", list(AVAILABLE_RISK_MANAGERS.keys()))
 
@@ -184,34 +184,42 @@ def render_strategies_management_section():
                     bot_id = bots_df[bots_df['name'] == selected_bot_name].iloc[0]['id']
 
                     try:
-                        # В parameters всегда пишем пустой JSON "{}",
-                        # чтобы стратегия брала настройки по умолчанию из своего Python-класса.
-                        _execute_transaction("""
-                            INSERT INTO strategy_configs 
-                            (bot_id, exchange, instrument, interval, strategy_name, 
-                             parameters, is_active, risk_manager_type)
-                            VALUES (:bot_id, :ex, :instr, :inter, :strat, '{}', true, :rm)
-                        """, {
-                            "bot_id": int(bot_id),
-                            "ex": exchange,
-                            "instr": instrument,
-                            "inter": interval,
-                            "strat": selected_strategy_cls,
-                            "rm": risk_manager_type
-                        })
+                        with SessionLocal() as session:
+                            new_config = StrategyConfig(
+                                bot_id=int(bot_id),
+                                exchange=exchange,
+                                instrument=instrument,
+                                interval=interval,
+                                strategy_name=selected_strategy_cls,
+                                parameters={},  # Пустой dict, стратегия возьмет default params
+                                is_active=True,
+                                risk_manager_type=risk_manager_type
+                            )
+                            session.add(new_config)
+                            session.commit()
                         st.success("Стратегия успешно добавлена!")
                         st.rerun()
                     except Exception as e:
                         st.error(f"Ошибка сохранения стратегии: {e}")
 
     # 2. Таблица активных конфигураций
-    strats_df = _fetch_data_frame("""
-        SELECT s.id, s.exchange, s.instrument, s.interval, s.strategy_name, 
-               s.is_active, s.risk_manager_type, b.name as bot_name
-        FROM strategy_configs s
-        LEFT JOIN bot_instances b ON s.bot_id = b.id
-        ORDER BY s.id
-    """)
+    # Загружаем данные с Join, чтобы получить имя бота
+    with SessionLocal() as session:
+        stmt = (
+            select(
+                StrategyConfig.id,
+                StrategyConfig.exchange,
+                StrategyConfig.instrument,
+                StrategyConfig.interval,
+                StrategyConfig.strategy_name,
+                StrategyConfig.is_active,
+                StrategyConfig.risk_manager_type,
+                BotInstance.name.label("bot_name")
+            )
+            .join(BotInstance, StrategyConfig.bot_id == BotInstance.id, isouter=True)
+            .order_by(StrategyConfig.id)
+        )
+        strats_df = pd.read_sql(stmt, session.bind)
 
     if not strats_df.empty:
         st.subheader("Активные конфигурации")
@@ -244,16 +252,23 @@ def render_strategies_management_section():
                 )
 
                 if is_active != bool(row['is_active']):
-                    _execute_transaction(
-                        "UPDATE strategy_configs SET is_active = :act WHERE id = :id",
-                        {"act": is_active, "id": row['id']}
-                    )
+                    with SessionLocal() as session:
+                        stmt = (
+                            update(StrategyConfig)
+                            .where(StrategyConfig.id == row['id'])
+                            .values(is_active=is_active)
+                        )
+                        session.execute(stmt)
+                        session.commit()
                     st.rerun()
 
                 # Кнопка удаления (DELETE)
                 if c3.button("🗑️", key=f"del_strat_{row['id']}"):
                     try:
-                        _execute_transaction("DELETE FROM strategy_configs WHERE id = :id", {"id": row['id']})
+                        with SessionLocal() as session:
+                            stmt = delete(StrategyConfig).where(StrategyConfig.id == row['id'])
+                            session.execute(stmt)
+                            session.commit()
                         st.success("Стратегия удалена.")
                         st.rerun()
                     except Exception as e:
