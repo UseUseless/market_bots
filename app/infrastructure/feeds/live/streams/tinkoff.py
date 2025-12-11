@@ -124,7 +124,7 @@ class TinkoffStreamDataHandler(BaseStreamDataHandler):
 
             except asyncio.CancelledError:
                 logging.info("Tinkoff Stream: Получена команда на остановку. Корректный выход.")
-                raise  # Пробрасываем отмену наверх, чтобы loop.py знал, что мы закончили
+                raise  # Пробрасываем отмену наверх, чтобы engine.py знал, что мы закончили
 
             except Exception as e:
                 delay = LIVE_TRADING_CONFIG['LIVE_RECONNECT_DELAY_SECONDS']

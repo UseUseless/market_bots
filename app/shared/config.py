@@ -13,7 +13,7 @@
 from pathlib import Path
 from typing import Dict, Any, Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from app.shared.primitives import ExchangeType
+from app.shared.types import ExchangeType
 
 
 class AppConfig(BaseSettings):

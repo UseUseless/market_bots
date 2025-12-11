@@ -14,7 +14,7 @@ import os
 # Добавляем текущую директорию (корень проекта) в начало sys.path.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from app.adapters.cli.launcher_logic import main as start_launcher_ui
+from app.adapters.cli.menu import main as start_launcher_ui
 from app.shared.decorators import safe_entry
 
 @safe_entry

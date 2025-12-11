@@ -1,28 +1,27 @@
 """
 Клиент для взаимодействия с API Bybit (Unified Trading).
 
-Этот модуль реализует адаптер для работы с криптобиржей Bybit.
-Поддерживает спотовую и фьючерсную торговлю через Unified Trading Account (UTA).
-Использует библиотеку `pybit` для HTTP-запросов.
+Этот модуль реализует адаптер для работы с криптобиржей Bybit через HTTP API V5.
+Поддерживает спотовую и фьючерсную торговлю (Linear) через Единый Торговый Аккаунт (UTA).
 
 Особенности реализации:
-1.  **Unified Trading**: Работает с категорией 'linear' (USDT Perpetual) по умолчанию.
-2.  **Pagination**: Реализует обратную пагинацию по времени для загрузки глубокой истории.
-3.  **Market Scanning**: Эффективно сканирует рынок одним запросом для поиска лидеров оборота.
+1.  **Reverse Pagination:** Реализован алгоритм загрузки истории "из будущего в прошлое",
+    так как API Bybit оптимизировано для выдачи последних данных.
+2.  **Safety Guards:** Встроена защита от зацикливания пагинации и дублирования данных.
+3.  **Market Scanning:** Эффективная фильтрация тикеров для поиска лидеров ликвидности.
 """
 
 import logging
 import time
 from datetime import datetime, timedelta
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 import pandas as pd
 from tqdm import tqdm
 from pybit.unified_trading import HTTP
 
-import app.infrastructure.feeds.backtest.provider
 from app.infrastructure.exchanges.base import ExchangeExchangeHandler
-from app.shared.primitives import ExchangeType
+from app.shared.types import ExchangeType
 from app.shared.config import config
 
 logger = logging.getLogger(__name__)
@@ -31,64 +30,74 @@ logger = logging.getLogger(__name__)
 class BybitHandler(ExchangeExchangeHandler):
     """
     Адаптер для биржи Bybit.
-    Работает в режиме Read-Only.
+
+    Реализует интерфейс `ExchangeDataGetter` для получения исторических данных
+    и метаинформации об инструментах.
+
+    Attributes:
+        client (HTTP): Экземпляр синхронного клиента pybit.
+        default_category (str): Категория рынка по умолчанию (обычно 'linear').
     """
 
     def __init__(self):
         """
-        Инициализирует клиента Bybit.
+        Инициализирует клиента Bybit с настройками из конфигурации.
         """
         super().__init__()
 
-        self.default_category = app.infrastructure.feeds.backtest.provider.EXCHANGE_SPECIFIC_CONFIG[ExchangeType.BYBIT]["DEFAULT_CATEGORY"]
+        # Загрузка дефолтной категории (linear/spot) из конфига
+        bybit_conf = config.EXCHANGE_SPECIFIC_CONFIG.get(ExchangeType.BYBIT, {})
+        self.default_category = bybit_conf.get("DEFAULT_CATEGORY", "linear")
 
+        # Инициализация клиента (testnet=False для реальных данных)
         self.client = HTTP(testnet=False, timeout=10)
 
-        logging.info(f"Bybit Client инициализирован для получения данных.")
+        logging.info(f"Bybit Client инициализирован (Category: {self.default_category}).")
 
     def get_historical_data(self, instrument: str, interval: str, days: int, **kwargs) -> pd.DataFrame:
         """
-        Скачивает исторические свечи (K-Lines).
+        Скачивает исторические свечи (K-Lines) используя обратную пагинацию.
 
-        Реализует сложную логику пагинации, так как Bybit отдает свечи от новых к старым
-        (обратный хронологический порядок) и имеет лимит на кол-во свечей в запросе.
+        Алгоритм запрашивает данные, начиная с текущего момента и двигаясь назад
+        в прошлое, пока не покроет запрошенный диапазон `days` или пока данные не кончатся.
 
         Args:
-            instrument (str): Тикер (например, BTCUSDT).
-            interval (str): Интервал (например, '60' для 1 часа).
-            days (int): Глубина истории.
+            instrument (str): Тикер инструмента (например, 'BTCUSDT').
+            interval (str): Интервал свечей в формате приложения (например, '1hour').
+            days (int): Глубина истории в днях.
             **kwargs:
-                category (str): 'linear' (фьючерсы), 'spot' и т.д. Default: 'linear'.
-                limit (int): Лимит свечей на запрос. Default: 200.
+                category (str): Переопределение категории рынка ('linear', 'spot').
+                limit (int): Количество свечей в одном запросе (max 1000, default 200).
 
         Returns:
-            pd.DataFrame: DataFrame с историей.
+            pd.DataFrame: DataFrame с колонками ['time', 'open', 'high', 'low', 'close', 'volume'].
         """
         instrument_upper = instrument.upper()
         category = kwargs.get("category", self.default_category)
-        # Лимит 200 безопасен и стабилен, хотя API позволяет до 1000
         limit = kwargs.get("limit", 200)
 
-        logging.info(f"Bybit Client: Загрузка {instrument} ({category}), интервал: {interval}")
-
-        # Получаем код интервала для API из конфига
+        # Маппинг интервалов (App format -> Bybit API format)
         api_interval = config.EXCHANGE_INTERVAL_MAPS[ExchangeType.BYBIT].get(interval)
         if not api_interval:
             logging.error(f"Неподдерживаемый интервал для Bybit: {interval}.")
             return pd.DataFrame()
 
+        logging.info(f"Bybit Client: Загрузка {instrument} ({category}), интервал: {interval}...")
+
         all_candles = []
 
-        # Расчет временных границ в миллисекундах
+        # Вычисление временных границ (в миллисекундах)
         end_ts = int(datetime.now().timestamp() * 1000)
         start_ts = int((datetime.now() - timedelta(days=days)).timestamp() * 1000)
 
-        # Используем общий цикл с TQDM для визуализации прогресса
+        # Переменная для защиты от бесконечного цикла (хранит время последней полученной свечи)
+        last_processed_ts = None
+
         with tqdm(total=days, desc=f"Bybit {instrument}", unit="d") as pbar:
             current_end_ts = end_ts
 
             # Цикл пагинации "назад во времени"
-            while start_ts < current_end_ts:
+            while current_end_ts > start_ts:
                 try:
                     resp = self.client.get_kline(
                         category=category,
@@ -102,17 +111,19 @@ class BybitHandler(ExchangeExchangeHandler):
                         logging.error(f"Ошибка API Bybit для {instrument}: {resp['retMsg']}")
                         break
 
+                    # Bybit возвращает список списков: [time, open, high, low, close, volume, turnover]
+                    # Сортировка: от новых к старым (descending by time).
                     candles_list = resp['result']['list']
+
                     if not candles_list:
-                        # Данные кончились раньше, чем мы ожидали
+                        # Данные закончились
                         break
 
-                    # Преобразуем формат Bybit [time, open, high, low, close, volume, turnover]
-                    # в список словарей для передачи в базовый метод.
-                    # ВАЖНО: Bybit отдает timestamp как строку в ms.
+                    # --- Парсинг данных ---
+                    batch_data = []
                     for c in candles_list:
-                        all_candles.append({
-                            "time": int(c[0]),
+                        batch_data.append({
+                            "time": int(c[0]),  # Timestamp ms
                             "open": c[1],
                             "high": c[2],
                             "low": c[3],
@@ -120,53 +131,66 @@ class BybitHandler(ExchangeExchangeHandler):
                             "volume": c[5]
                         })
 
-                    # Обновляем курсор времени: берем время самой старой полученной свечи (последней в списке)
-                    oldest_candle_time = int(candles_list[-1][0])
+                    all_candles.extend(batch_data)
 
-                    # Если API вернул данные, где самая старая свеча новее или равна нашему запросу (странность API),
-                    # прерываем, чтобы не уйти в вечный цикл.
-                    if oldest_candle_time >= current_end_ts:
+                    # --- Обновление курсора пагинации ---
+                    # Берем время самой старой свечи в батче (последняя в списке)
+                    oldest_candle_ts = int(candles_list[-1][0])
+
+                    # Защита от зацикливания: если API вернул те же данные, прерываем
+                    if last_processed_ts == oldest_candle_ts:
+                        logging.warning("Bybit Pagination: Обнаружено зацикливание данных. Остановка.")
                         break
+                    last_processed_ts = oldest_candle_ts
 
-                    # Сдвигаем курсор НАЗАД на 1 мс от самой старой свечи, чтобы не получить её дубль
-                    current_end_ts = oldest_candle_time - 1
+                    # Следующий запрос должен быть ДО самой старой полученной свечи (-1 мс)
+                    current_end_ts = oldest_candle_ts - 1
 
-                    # Обновление прогресс-бара
-                    days_loaded = (datetime.fromtimestamp(end_ts / 1000) - datetime.fromtimestamp(current_end_ts / 1000)).days
-                    if days_loaded > pbar.n:
-                        pbar.update(days_loaded - pbar.n)
+                    # --- Визуализация прогресса ---
+                    # Рассчитываем, сколько дней мы уже прошли
+                    days_processed = (datetime.fromtimestamp(end_ts / 1000) -
+                                      datetime.fromtimestamp(current_end_ts / 1000)).days
 
-                    # Если вернули меньше лимита, значит история исчерпана
+                    # Обновляем бар только на дельту
+                    delta = days_processed - pbar.n
+                    if delta > 0:
+                        pbar.update(delta)
+
+                    # Если API вернул меньше свечей, чем лимит, значит история кончилась
                     if len(candles_list) < limit:
                         break
 
-                    # Небольшая пауза для вежливости к API
+                    # Rate Limiting: небольшая пауза для вежливости
                     time.sleep(kwargs.get("sleep", 0.1))
 
                 except Exception as e:
-                    logging.error(f"Непредвиденная ошибка при запросе к Bybit: {e}")
+                    logging.error(f"Непредвиденная ошибка при запросе к Bybit: {e}", exc_info=True)
                     break
 
-            # Завершаем бар визуально
+            # Завершаем прогресс-бар визуально
             if pbar.n < pbar.total:
                 pbar.update(pbar.total - pbar.n)
 
-        # Делегируем создание DataFrame базовому классу
         return self._process_candles_to_df(all_candles)
 
     def get_instrument_info(self, instrument: str, **kwargs) -> Dict[str, Any]:
         """
-        Получает спецификацию инструмента (шаг цены, лотность).
+        Получает спецификацию инструмента (размер лота, шаг цены).
+
+        Используется для настройки округления ордеров в RiskManager.
 
         Args:
             instrument (str): Тикер.
-            **kwargs: category ('linear'/'spot').
+            **kwargs: category (str) - категория рынка.
 
         Returns:
-            Dict[str, Any]: Словарь с 'min_order_qty' и 'qty_step'.
+            Dict[str, Any]: Словарь с ключами:
+                - min_order_qty (float): Минимальный объем ордера.
+                - qty_step (float): Шаг изменения объема.
         """
         category = kwargs.get("category", self.default_category)
         instrument_upper = instrument.upper()
+
         try:
             response = self.client.get_instruments_info(category=category, symbol=instrument_upper)
 
@@ -178,28 +202,33 @@ class BybitHandler(ExchangeExchangeHandler):
                     "min_order_qty": float(lot_size_filter.get("minOrderQty", 0)),
                     "qty_step": float(lot_size_filter.get("qtyStep", 0))
                 }
+
+            logging.warning(f"Bybit Info: Не найдены данные для {instrument}")
             return {}
+
         except Exception as e:
             logging.error(f"Bybit Info Error: {e}")
             return {}
 
     def get_top_liquid_by_turnover(self, count: int) -> List[str]:
         """
-        Возвращает топ ликвидных инструментов (USDT-margined).
+        Возвращает список самых ликвидных инструментов (USDT-margined).
 
-        Использует один эффективный запрос `get_tickers`, который возвращает
-        снэпшот рынка за 24 часа. Фильтрует инструменты, оставляя только
-        USDT-контракты (исключая USDC и инверсные).
+        Скачивает снепшот всех тикеров за 24 часа и сортирует их по обороту.
+        Исключает USDC пары и инверсные контракты.
 
         Args:
-            count (int): Кол-во инструментов.
+            count (int): Количество инструментов в топе.
 
         Returns:
-            List[str]: Список тикеров, отсортированных по обороту.
+            List[str]: Список тикеров, отсортированных по убыванию оборота.
         """
         try:
+            # Получаем снепшот рынка (один легкий запрос)
             tickers_response = self.client.get_tickers(category=self.default_category)
+
             if tickers_response.get("retCode") != 0:
+                logging.error(f"Ошибка получения тикеров Bybit: {tickers_response}")
                 return []
 
             all_tickers = tickers_response.get("result", {}).get("list", [])
@@ -208,7 +237,8 @@ class BybitHandler(ExchangeExchangeHandler):
             for ticker in all_tickers:
                 symbol = ticker.get('symbol', '')
 
-                # Фильтр: только USDT контракты (исключаем USDC и опционы)
+                # Фильтрация: Оставляем только USDT-контракты
+                # Исключаем USDC, опционы и прочее
                 if not symbol.endswith('USDT') or 'USDC' in symbol:
                     continue
 
@@ -221,6 +251,7 @@ class BybitHandler(ExchangeExchangeHandler):
 
             # Сортировка по убыванию оборота
             sorted_pairs = sorted(liquid_pairs, key=lambda x: x['turnover'], reverse=True)
+
             return [item['symbol'] for item in sorted_pairs[:count]]
 
         except Exception as e:

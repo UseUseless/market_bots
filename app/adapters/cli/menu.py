@@ -14,7 +14,7 @@ from typing import Dict, Any, List
 import questionary
 from rich.console import Console
 
-from . import user_prompts
+from . import dialogs
 from app.shared.config import config
 
 BASE_DIR = config.BASE_DIR
@@ -106,19 +106,19 @@ SCRIPT_CONFIG = {
     },
     "run_backtest.py": {
         "name": "🧪 Одиночный Бэктест",
-        "prompt_func": lambda: user_prompts.prompt_for_backtest_settings(force_mode="single"),
+        "prompt_func": lambda: dialogs.prompt_for_backtest_settings(force_mode="single"),
     },
     "run_batch_backtest.py": {
         "name": "📦 Пакетный Бэктест",
-        "prompt_func": lambda: user_prompts.prompt_for_backtest_settings(force_mode="batch"),
+        "prompt_func": lambda: dialogs.prompt_for_backtest_settings(force_mode="batch"),
     },
     "run_optimization.py": {
         "name": "🧬 Оптимизация (WFO)",
-        "prompt_func": user_prompts.prompt_for_optimization_settings,
+        "prompt_func": dialogs.prompt_for_optimization_settings,
     },
     "run_signals.py": {
         "name": "📡 Монитор Сигналов (Live)",
-        "prompt_func": user_prompts.prompt_for_live_settings,
+        "prompt_func": dialogs.prompt_for_live_settings,
     },
     "run_dashboard.py": {
         "name": "📊 Дашборд (Web UI)",

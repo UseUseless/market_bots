@@ -21,7 +21,7 @@ from app.adapters.telegram.manager import BotManager
 from app.infrastructure.exchanges.tinkoff import TinkoffHandler
 from app.infrastructure.exchanges.bybit import BybitHandler
 from app.shared.config import config
-from app.shared.primitives import ExchangeType
+from app.shared.types import ExchangeType
 
 logger = logging.getLogger(__name__)
 

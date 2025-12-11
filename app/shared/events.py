@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Optional
 import pandas as pd
 
-from app.shared.primitives import TradeDirection, TriggerReason
+from app.shared.types import TradeDirection, TriggerReason
 
 
 @dataclass

@@ -112,10 +112,6 @@ class StrategyConfig(Base):
 
     bot = relationship("BotInstance", back_populates="strategies")
 
-    # Связь 1-к-1 с состоянием портфеля. При удалении конфига удаляется и портфель.
-    portfolio_state = relationship("PortfolioDB", back_populates="strategy_config", uselist=False,
-                                   cascade="all, delete-orphan")
-
 
 class SignalLog(Base):
     """
@@ -142,63 +138,3 @@ class SignalLog(Base):
     direction = Column(String, nullable=False)
     price = Column(Float, nullable=True)
     created_at = Column(DateTime(timezone=True), default=utc_now)
-
-
-class PortfolioDB(Base):
-    """
-    Персистентное состояние портфеля для стратегии.
-
-    Позволяет сохранять финансовый результат и открытые позиции между
-    перезапусками приложения. Связана 1-к-1 с `StrategyConfig`.
-
-    Attributes:
-        strategy_config_id (int): Ссылка на конфиг стратегии (FK, Unique).
-        current_capital (float): Текущий баланс стратегии.
-        initial_capital (float): Стартовый капитал.
-    """
-    __tablename__ = "portfolios"
-
-    id = Column(Integer, primary_key=True, index=True)
-    strategy_config_id = Column(Integer, ForeignKey("strategy_configs.id"), unique=True, nullable=False)
-
-    current_capital = Column(Float, default=0.0)
-    initial_capital = Column(Float, default=0.0)
-    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
-
-    strategy_config = relationship("StrategyConfig", back_populates="portfolio_state")
-    positions = relationship("PositionDB", back_populates="portfolio", cascade="all, delete-orphan")
-
-
-class PositionDB(Base):
-    """
-    Активная позиция в базе данных.
-
-    Хранит информацию о текущих открытых сделках для восстановления
-    состояния RiskManager после перезагрузки.
-
-    Attributes:
-        portfolio_id (int): Ссылка на портфель (FK).
-        instrument (str): Тикер.
-        quantity (float): Объем позиции.
-        entry_price (float): Цена входа.
-        direction (str): Направление (BUY/SELL).
-        stop_loss (float): Уровень стоп-лосса.
-        take_profit (float): Уровень тейк-профита.
-    """
-    __tablename__ = "positions"
-
-    id = Column(Integer, primary_key=True, index=True)
-    portfolio_id = Column(Integer, ForeignKey("portfolios.id"), nullable=False)
-
-    instrument = Column(String, nullable=False)
-    quantity = Column(Float, nullable=False)
-    entry_price = Column(Float, nullable=False)
-    direction = Column(String, nullable=False)
-
-    stop_loss = Column(Float, nullable=True)
-    take_profit = Column(Float, nullable=True)
-
-    entry_timestamp = Column(DateTime, nullable=False)
-    entry_commission = Column(Float, default=0.0)
-
-    portfolio = relationship("PortfolioDB", back_populates="positions")

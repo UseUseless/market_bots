@@ -1,9 +1,8 @@
 """
-CLI-скрипт для запуска оптимизации параметров (Walk-Forward Optimization).
+Запуск оптимизации параметров стратегии и риск-менеджера.
 
-Управляет процессом подбора оптимальных параметров стратегии.
 Использует метод Walk-Forward, который позволяет проверить
-устойчивость параметров во времени и избежать переобучения (overfitting).
+устойчивость параметров во времени и избежать переобучения.
 
 Процесс включает:
 1. Разделение истории на периоды (Train/Test).
@@ -24,7 +23,7 @@ import os
 # Добавляем корневую директорию проекта в sys.path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.core.engine.optimization.optimizer import WFOOptimizer
+from app.core.engine.optimization.engine import WFOEngine
 from app.shared.logging_setup import setup_global_logging
 from app.strategies import AVAILABLE_STRATEGIES
 from app.core.risk import RISK_MANAGEMENT_TYPES
@@ -41,7 +40,6 @@ def main() -> None:
     1. Настраивает логирование в режиме 'tqdm' для корректного отображения прогресс-баров.
     2. Парсит аргументы командной строки (параметры WFO, метрики, цели).
     3. Запускает `run_optimization_flow`, передавая словарь настроек.
-    4. Обрабатывает исключения и гарантирует восстановление настроек логирования при выходе.
     """
     # Включаем режим tqdm, чтобы логи не ломали прогресс-бар Optuna
     setup_global_logging(mode='tqdm', log_level=logging.INFO)
@@ -88,7 +86,7 @@ def main() -> None:
         logger.info("--- Запуск потока Walk-Forward Optimization ---")
 
         # Создаем и запускаем оптимизатор напрямую
-        optimizer = WFOOptimizer(settings)
+        optimizer = WFOEngine(settings)
         optimizer.run()
 
         logger.info("--- Поток Walk-Forward Optimization успешно завершен ---")

@@ -19,13 +19,12 @@ from app.shared.decorators import safe_entry
 @safe_entry
 async def main() -> None:
     """
-    Мастер настройки:
     1. Запрашивает у пользователя токен и имя бота.
     2. Сохраняет бота в базу данных.
     """
     print("--- Мастер настройки Ботов ---")
 
-    # Используем ask_async(), чтобы ввод не блокировал событийный цикл asyncio.
+    # Используем ask_async(), чтобы ввод не блокировал цикл asyncio.
     bot_token = await questionary.password("Введите токен бота (от @BotFather):").ask_async()
     if not bot_token:
         return

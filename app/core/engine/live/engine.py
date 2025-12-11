@@ -19,7 +19,7 @@ from typing import Dict, Callable, Awaitable, List, Any
 from app.shared.events import SignalEvent
 from app.shared.interfaces import MarketDataProvider, SignalHandler
 from app.strategies.base_strategy import BaseStrategy
-from app.shared.time_helper import interval_to_timedelta
+from app.shared.time_utils import interval_to_timedelta
 from app.shared.config import config
 
 logger = logging.getLogger(__name__)

@@ -15,7 +15,7 @@ import pandas as pd
 from typing import List, Dict, Tuple, Optional
 
 import app.infrastructure.feeds.backtest.provider
-from app.infrastructure.storage.file_io import load_trades_from_file
+from app.infrastructure.files.file_io import load_trades_from_file
 from app.shared.config import config
 from app.core.analysis.metrics import PortfolioMetricsCalculator
 

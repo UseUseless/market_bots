@@ -1,13 +1,9 @@
 """
-CLI-скрипт для управления рыночными данными (Data Manager).
+CLI-скрипт для управления рыночными данными.
 
-Предоставляет интерфейс командной строки для двух основных операций:
 1. `update`: Обновление (создание) списков ликвидных инструментов (скачивает топ по обороту)
     и сохраняет их в текстовые файлы в папке `datalists/.
 2. `download`: Загрузка исторических свечей (OHLCV) и метаданных инструментов.
-
-Скрипт инициализирует необходимые зависимости (клиенты бирж)
-через DI-контейнер и передает управление функциям-оркестраторам в `app.infrastructure`.
 
 Примеры запуска:
     Обновить список ликвидных монет для Bybit:
@@ -27,7 +23,7 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.infrastructure.storage.data_manager import update_lists_flow, download_data_flow
+from app.infrastructure.files.data_manager import update_lists_flow, download_data_flow
 from app.bootstrap.container import container
 from app.shared.config import config
 from app.shared.logging_setup import setup_global_logging
@@ -45,8 +41,7 @@ def main() -> None:
     1. Настраивает tqdm логирование
     2. Парсит аргументы командной строки (argparse).
     3. Создает соответствующий клиент биржи.
-    4. Вызывает соответствующую функцию бизнес-логики (`update_lists_flow` или `download_data_flow`),
-       передавая ей настройки и готовый клиент.
+    4. Вызывает соответствующую функцию(`update_lists_flow` или `download_data_flow`).
     """
     # Включаем режим tqdm, чтобы логи не ломали прогресс-бар загрузки
     setup_global_logging(mode='tqdm', log_level=logging.INFO)

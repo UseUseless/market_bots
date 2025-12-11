@@ -4,7 +4,7 @@ import logging
 
 from app.shared.events import SignalEvent
 from app.strategies.base_strategy import BaseStrategy
-from app.shared.primitives import TradeDirection
+from app.shared.types import TradeDirection
 from app.shared.schemas import TradingConfig
 
 logger = logging.getLogger('backtester')
@@ -51,7 +51,6 @@ class MeanReversionStrategy(BaseStrategy):
     }
 
     def __init__(self, events_queue: Queue, config: TradingConfig):
-        # 1. Извлекаем параметры из config.strategy_params (FIXED: было params)
         self.sma_period = config.strategy_params["sma_period"]
         self.upper_threshold = config.strategy_params["z_score_upper_threshold"]
         self.lower_threshold = config.strategy_params["z_score_lower_threshold"]
@@ -63,7 +62,6 @@ class MeanReversionStrategy(BaseStrategy):
         ]
 
         # 3. Вызываем родительский __init__
-        # FIXED: Убран feature_engine из аргументов
         super().__init__(events_queue, config)
 
     def _prepare_custom_features(self, data: pd.DataFrame) -> pd.DataFrame:
@@ -85,8 +83,6 @@ class MeanReversionStrategy(BaseStrategy):
     def _calculate_signals(self, prev_candle: pd.Series, last_candle: pd.Series, timestamp: pd.Timestamp):
         current_z_score = last_candle['z_score']
         prev_z_score = prev_candle['z_score']
-
-        # FIXED: Убран аргумент strategy_id из SignalEvent
 
         # Сигнал на покупку (возврат к среднему снизу)
         if prev_z_score < self.lower_threshold and current_z_score >= self.lower_threshold:

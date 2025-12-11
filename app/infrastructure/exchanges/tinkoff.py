@@ -28,7 +28,7 @@ from tinkoff.invest.utils import now, quotation_to_decimal
 
 import app.infrastructure.feeds.backtest.provider
 from app.infrastructure.exchanges.base import ExchangeExchangeHandler
-from app.shared.primitives import ExchangeType
+from app.shared.types import ExchangeType
 from app.shared.config import config
 
 logger = logging.getLogger(__name__)

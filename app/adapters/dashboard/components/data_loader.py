@@ -16,7 +16,7 @@ import streamlit as st
 import numpy as np
 from typing import Dict, Any, Optional, List, Tuple
 
-from app.infrastructure.storage.file_io import load_trades_from_file
+from app.infrastructure.files.file_io import load_trades_from_file
 from app.core.analysis.session import AnalysisSession
 from app.shared.config import config
 

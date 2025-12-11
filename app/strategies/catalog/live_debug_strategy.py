@@ -3,7 +3,7 @@ import pandas as pd
 
 from app.shared.events import SignalEvent
 from app.strategies.base_strategy import BaseStrategy
-from app.shared.primitives import TradeDirection
+from app.shared.types import TradeDirection
 from app.shared.schemas import TradingConfig
 
 
@@ -29,7 +29,6 @@ class LiveDebugStrategy(BaseStrategy):
     def _calculate_signals(self, prev_candle: pd.Series, last_candle: pd.Series, timestamp: pd.Timestamp):
         self.counter += 1
 
-        # Проверяем, что индикатор реально посчитался (DataFeed работает)
         sma_val = last_candle.get('SMA_5')
 
         direction = TradeDirection.BUY if self.counter % 2 == 0 else TradeDirection.SELL

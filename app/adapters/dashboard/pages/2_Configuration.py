@@ -21,7 +21,7 @@ from sqlalchemy.orm import sessionmaker
 from app.strategies import AVAILABLE_STRATEGIES
 from app.core.risk import RISK_MANAGEMENT_TYPES
 from app.shared.config import config
-from app.shared.primitives import ExchangeType
+from app.shared.types import ExchangeType
 from app.infrastructure.database.models import BotInstance, StrategyConfig
 
 logger = logging.getLogger(__name__)

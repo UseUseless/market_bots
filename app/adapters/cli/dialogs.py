@@ -2,8 +2,8 @@
 Интерактивные диалоги с пользователем (CLI Prompts).
 
 Этот модуль отвечает за сбор и валидацию пользовательского ввода через
-библиотеку `questionary`. Он формирует конфигурационные словари (settings)
-для запуска различных режимов работы приложения (бэктест, оптимизация, загрузка данных).
+библиотеку `questionary`. Он формирует конфигурационные словари (settings),
+которые затем передаются в скрипты запуска.
 
 Роль в архитектуре:
     Адаптер ввода (Input Adapter). Преобразует ответы пользователя в терминале
@@ -22,16 +22,15 @@ import questionary
 from app.strategies.base_strategy import BaseStrategy
 from app.core.analysis.constants import METRIC_CONFIG
 from app.core.risk import RISK_MANAGEMENT_TYPES
-from app.shared.primitives import ExchangeType
+from app.shared.types import ExchangeType
 from app.shared.config import config
-from docs.help_texts import HELP_TOPICS
 
-
+# Глобальные настройки путей и маппинги
 PATH_CONFIG = config.PATH_CONFIG
 EXCHANGE_INTERVAL_MAPS = config.EXCHANGE_INTERVAL_MAPS
 DATA_LOADER_CONFIG = config.DATA_LOADER_CONFIG
 
-# Константы для меню
+# Константы меню
 GO_BACK_OPTION = "Назад"
 OPT_SINGLE_CRITERION = "Один критерий"
 OPT_MULTI_CRITERION = "Два критерия (фронт Парето)"
@@ -51,8 +50,8 @@ def _initialize_tk() -> tk.Tk:
     """
     Инициализирует скрытое корневое окно Tkinter.
 
-    Необходимо для корректного отображения диалоговых окон без запуска
-    полноценного графического интерфейса приложения.
+    Необходимо для корректного отображения системных диалоговых окон
+    без запуска полноценного графического интерфейса приложения.
 
     Returns:
         tk.Tk: Объект корневого окна.
@@ -60,7 +59,7 @@ def _initialize_tk() -> tk.Tk:
     root = tk.Tk()
     root.withdraw()  # Скрываем главное окно, оставляем только диалог
 
-    # Хак, чтобы окно диалога появилось поверх всех окон (особенно актуально для Windows)
+    # Хак: делаем окно "поверх всех", чтобы диалог не потерялся за терминалом
     root.wm_attributes("-topmost", 1)
     root.update()
     return root
@@ -68,7 +67,7 @@ def _initialize_tk() -> tk.Tk:
 
 def select_single_instrument() -> Optional[Dict[str, str]]:
     """
-    Открывает диалог выбора одного файла данных (.parquet).
+    Открывает системный диалог выбора одного файла данных (.parquet).
 
     Выполняет валидацию выбранного файла:
     1. Проверяет наличие парного файла метаданных (.json).
@@ -87,10 +86,11 @@ def select_single_instrument() -> Optional[Dict[str, str]]:
 
     filepath_str = filedialog.askopenfilename(
         title="Выберите .parquet файл с историческими данными",
+        initialdir=PATH_CONFIG["DATA_DIR"],
         filetypes=[("Parquet files", "*.parquet")]
     )
 
-    root.destroy()  # Освобождаем ресурсы GUI
+    root.destroy()  # Освобождаем ресурсы GUI сразу после выбора
 
     if not filepath_str:
         print("\nВыбор файла отменен.")
@@ -98,14 +98,14 @@ def select_single_instrument() -> Optional[Dict[str, str]]:
 
     filepath = Path(filepath_str)
 
-    # 1. Проверка целостности данных (должен быть JSON с лотностью)
+    # Проверка целостности данных (должен быть JSON с лотностью рядом)
     json_path = filepath.with_suffix('.json')
     if not json_path.exists():
         print(f"\n[Ошибка] Файл метаданных не найден: {json_path.name}")
         print("Для каждого .parquet файла должен существовать .json файл с тем же именем.")
         return None
 
-    # 2. Автоматическое определение параметров из пути
+    # Парсинг параметров из пути к файлу
     # Ожидаемая структура: .../data/{exchange}/{interval}/{instrument}.parquet
     try:
         instrument = filepath.stem  # Имя файла без расширения
@@ -134,20 +134,17 @@ def select_instrument_folder() -> Optional[Dict[str, str]]:
     Открывает диалог выбора папки с данными для пакетного тестирования.
 
     Используется, когда нужно запустить стратегию сразу на всех инструментах
-    внутри выбранной директории (например, на всех акциях с 5-минутным таймфреймом).
+    внутри выбранной директории.
 
     Returns:
         Optional[Dict[str, str]]: Словарь с параметрами группы:
-            {
-                "exchange": "tinkoff",
-                "interval": "5min"
-            }
-            Возвращает None при отмене или ошибке.
+            { "exchange": "...", "interval": "..." }
     """
     root = _initialize_tk()
 
     dirpath_str = filedialog.askdirectory(
-        title="Выберите папку с данными (например, '.../data/tinkoff/5min')"
+        title="Выберите папку с данными (например, '.../data/tinkoff/5min')",
+        initialdir=PATH_CONFIG["DATA_DIR"]
     )
 
     root.destroy()
@@ -158,20 +155,14 @@ def select_instrument_folder() -> Optional[Dict[str, str]]:
 
     dirpath = Path(dirpath_str)
 
-    # Предупреждение, если папка пуста (но не блокировка, так как может быть дозагрузка)
+    # Предупреждение, если папка пуста
     if not any(dirpath.glob('*.parquet')):
         print(f"\n[Предупреждение] В папке '{dirpath.name}' не найдено .parquet файлов.")
 
     try:
         interval = dirpath.name
         exchange = dirpath.parent.name
-
-        if not interval or not exchange:
-            raise IndexError
-
     except IndexError:
-        print("\n[Ошибка] Не удалось определить параметры из пути к папке.")
-        print(f"Папка должна соответствовать структуре: '.../data/{{exchange}}/{{interval}}/'")
         return None
 
     print(f"\nВыбрана папка: {exchange.upper()} / {interval}")
@@ -184,7 +175,7 @@ def select_instrument_folder() -> Optional[Dict[str, str]]:
 
 def ask(question_func, *args, **kwargs):
     """
-    Обертка для вызова функций questionary с обработкой отмены.
+    Обертка для вызова функций questionary с обработкой отмены (Ctrl+C).
     """
     try:
         answer = question_func(*args, **kwargs).ask()
@@ -197,7 +188,7 @@ def ask(question_func, *args, **kwargs):
 
 def get_available_strategies() -> Dict[str, Type[BaseStrategy]]:
     """
-    Динамически находит и импортирует все доступные стратегии.
+    Динамически находит все доступные стратегии через механизм реестра.
     """
     from app.strategies import AVAILABLE_STRATEGIES
     return AVAILABLE_STRATEGIES
@@ -205,7 +196,8 @@ def get_available_strategies() -> Dict[str, Type[BaseStrategy]]:
 
 def _select_metrics_for_optimization() -> List[str]:
     """
-    Диалог выбора метрик для оптимизации (WFO).
+    Вспомогательный диалог выбора целевых метрик для WFO.
+    Поддерживает выбор одной или двух метрик (для Парето-оптимизации).
     """
     mode = ask(
         questionary.select,
@@ -214,7 +206,7 @@ def _select_metrics_for_optimization() -> List[str]:
         use_indicator=True
     )
 
-    # Подготовка вариантов выбора с описанием
+    # Подготовка вариантов выбора с описанием из констант
     metric_choices = [
         questionary.Choice(
             title=f"{v['name']} ({v['direction']})",
@@ -224,55 +216,56 @@ def _select_metrics_for_optimization() -> List[str]:
     ]
 
     # Поиск дефолтных значений для удобства
-    default_metric_choice = next((c for c in metric_choices if c.value == "calmar_ratio"), None)
+    default_metric = next((c for c in metric_choices if c.value == "calmar_ratio"), None)
 
     if mode == OPT_SINGLE_CRITERION:
         selected_metric = ask(
             questionary.select, "Выберите целевую метрику:",
-            choices=metric_choices, use_indicator=True, default=default_metric_choice
+            choices=metric_choices, use_indicator=True, default=default_metric
         )
         return [selected_metric]
     else:
+        # Для мульти-критериальной оптимизации выбираем две разные метрики
         first_metric = ask(
             questionary.select, "Выберите первую метрику (Цель №1):",
-            choices=metric_choices, use_indicator=True, default=default_metric_choice
+            choices=metric_choices, use_indicator=True, default=default_metric
         )
-        # Исключаем первую метрику из списка для второй
-        second_metric_choices = [c for c in metric_choices if c.value != first_metric]
-        default_second = next((c for c in second_metric_choices if c.value == "max_drawdown"), None)
+
+        # Исключаем уже выбранную
+        second_choices = [c for c in metric_choices if c.value != first_metric]
+        default_second = next((c for c in second_choices if c.value == "max_drawdown"), None)
 
         second_metric = ask(
             questionary.select, "Выберите вторую метрику (Цель №2):",
-            choices=second_metric_choices, use_indicator=True, default=default_second
+            choices=second_choices, use_indicator=True, default=default_second
         )
         return [first_metric, second_metric]
 
 
 def prompt_for_data_management() -> Optional[Dict[str, Any]]:
     """
-    Диалог управления данными (скачивание, обновление списков).
+    Диалог настройки менеджера данных (скачивание, обновление списков).
     """
     UPDATE_LISTS = "Обновить списки ликвидных инструментов"
     DOWNLOAD_DATA = "Скачать исторические данные"
 
     try:
-        selected_action_text = ask(
+        action = ask(
             questionary.select, "Выберите действие:",
             choices=[UPDATE_LISTS, DOWNLOAD_DATA, GO_BACK_OPTION]
         )
 
-        # Маппинг текста меню на команды скрипта manage_data.py
-        if selected_action_text == UPDATE_LISTS:
+        if action == UPDATE_LISTS:
             exchange = ask(
                 questionary.select, "Выберите биржу:",
                 choices=[ExchangeType.TINKOFF, ExchangeType.BYBIT, GO_BACK_OPTION]
             )
             return {"action": "update", "exchange": exchange}
 
-        elif selected_action_text == DOWNLOAD_DATA:
-            download_mode = ask(
-                questionary.select, "Что вы хотите скачать?",
-                choices=["Отдельные тикеры (ручной ввод)", "Готовый список инструментов", GO_BACK_OPTION]
+        elif action == DOWNLOAD_DATA:
+            mode = ask(
+                questionary.select, "Режим скачивания:",
+                choices=["Ручной ввод тикеров", "Из готового списка", GO_BACK_OPTION]
             )
             exchange = ask(
                 questionary.select, "Выберите биржу:",
@@ -281,11 +274,12 @@ def prompt_for_data_management() -> Optional[Dict[str, Any]]:
 
             settings = {"action": "download", "exchange": exchange}
 
-            if "Отдельные тикеры" in download_mode:
+            # Логика выбора инструментов
+            if "Ручной ввод" in mode:
                 instruments_str = ask(questionary.text, f"Введите тикеры для {exchange.upper()} через пробел:")
-                # manage_data.py ожидает список для --instrument
                 settings["instrument"] = instruments_str.split()
             else:
+                # Поиск файлов списков в папке datalists
                 lists_dir = PATH_CONFIG["DATALISTS_DIR"]
                 available_lists = []
                 if os.path.isdir(lists_dir):
@@ -293,16 +287,16 @@ def prompt_for_data_management() -> Optional[Dict[str, Any]]:
                                        f.startswith(exchange) and f.endswith('.txt')]
 
                 if not available_lists:
-                    print(f"Не найдено списков для {exchange.upper()}. Создайте их через меню.")
+                    print(f"Не найдено списков для {exchange.upper()}. Сначала обновите списки.")
                     return None
 
                 selected_list = ask(questionary.select, "Выберите список:", choices=[*available_lists, GO_BACK_OPTION])
                 settings["list"] = selected_list
 
+            # Выбор интервала и глубины истории
             available_intervals = list(EXCHANGE_INTERVAL_MAPS[exchange].keys())
             interval = ask(questionary.select, "Выберите интервал:", choices=[*available_intervals, GO_BACK_OPTION])
 
-            # DRY: Берем дефолтное кол-во дней из конфига
             default_days = str(DATA_LOADER_CONFIG["DAYS_TO_LOAD"])
             days = ask(
                 questionary.text, "Количество дней загрузки:", default=default_days,
@@ -311,8 +305,8 @@ def prompt_for_data_management() -> Optional[Dict[str, Any]]:
 
             settings.update({"interval": interval, "days": int(days)})
 
+            # Специфичные настройки бирж
             if exchange == ExchangeType.BYBIT:
-                # DRY: Берем дефолтную категорию из конфига
                 default_cat = config.EXCHANGE_SPECIFIC_CONFIG[ExchangeType.BYBIT]["DEFAULT_CATEGORY"]
                 category = ask(
                     questionary.select, "Категория рынка Bybit:",
@@ -328,7 +322,10 @@ def prompt_for_data_management() -> Optional[Dict[str, Any]]:
 
 def prompt_for_backtest_settings(force_mode: str = None) -> Optional[Dict[str, Any]]:
     """
-    Диалог настройки бэктеста.
+    Диалог настройки параметров бэктеста.
+
+    Args:
+        force_mode (str): Если задан ('single' или 'batch'), пропускает выбор режима.
     """
     try:
         strategies = get_available_strategies()
@@ -336,6 +333,7 @@ def prompt_for_backtest_settings(force_mode: str = None) -> Optional[Dict[str, A
             print("Ошибка: не найдено ни одной доступной стратегии.")
             return None
 
+        # Выбор режима (если не форсирован)
         if force_mode:
             test_mode = "Один инструмент" if force_mode == "single" else "Несколько инструментов"
         else:
@@ -344,9 +342,9 @@ def prompt_for_backtest_settings(force_mode: str = None) -> Optional[Dict[str, A
                 choices=["Один инструмент (выбор файла)", "Несколько инструментов (выбор папки)", GO_BACK_OPTION]
             )
 
+        # Выбор стратегии и Риск-менеджера
         strategy_name = ask(questionary.select, "Выберите стратегию:", choices=[*strategies.keys(), GO_BACK_OPTION])
 
-        # Динамический список риск-менеджеров
         rm_options = RISK_MANAGEMENT_TYPES + [GO_BACK_OPTION]
         rm_type = ask(
             questionary.select, "Выберите риск-менеджер:",
@@ -355,6 +353,7 @@ def prompt_for_backtest_settings(force_mode: str = None) -> Optional[Dict[str, A
 
         settings = {"strategy": strategy_name, "risk_manager_type": rm_type}
 
+        # Вызов системного диалога для выбора данных
         if "Один инструмент" in test_mode:
             data_params = select_single_instrument()
             if not data_params: return None
@@ -373,7 +372,7 @@ def prompt_for_backtest_settings(force_mode: str = None) -> Optional[Dict[str, A
 
 def prompt_for_optimization_settings() -> Optional[Dict[str, Any]]:
     """
-    Диалог настройки оптимизации (WFO).
+    Диалог настройки параметров оптимизации (WFO).
     """
     try:
         strategies = get_available_strategies()
@@ -384,9 +383,7 @@ def prompt_for_optimization_settings() -> Optional[Dict[str, Any]]:
         strategy_name = ask(questionary.select, "Стратегия для оптимизации:",
                             choices=[*strategies.keys(), GO_BACK_OPTION])
 
-        # Динамический список риск-менеджеров
-        rm_options = RISK_MANAGEMENT_TYPES + [GO_BACK_OPTION]
-        rm_type = ask(questionary.select, "Риск-менеджер:", choices=rm_options)
+        rm_type = ask(questionary.select, "Риск-менеджер:", choices=RISK_MANAGEMENT_TYPES + [GO_BACK_OPTION])
 
         opt_mode = ask(
             questionary.select, "Объект оптимизации:",
@@ -396,6 +393,7 @@ def prompt_for_optimization_settings() -> Optional[Dict[str, Any]]:
         settings = {"strategy": strategy_name, "rm": rm_type}
         data_params = None
 
+        # Выбор данных
         if "Один инструмент" in opt_mode:
             data_params = select_single_instrument()
             if data_params:
@@ -403,13 +401,14 @@ def prompt_for_optimization_settings() -> Optional[Dict[str, Any]]:
         else:
             data_params = select_instrument_folder()
             if data_params:
+                # Формируем полный путь к папке портфеля
                 full_path = os.path.join(PATH_CONFIG["DATA_DIR"], data_params['exchange'], data_params['interval'])
                 settings.update(data_params)
-                # Для скрипта run_optimization.py ключ должен быть portfolio_path
                 settings["portfolio_path"] = full_path
 
         if not data_params: return None
 
+        # Настройка параметров WFO
         selected_metrics = _select_metrics_for_optimization()
 
         n_trials = ask(
@@ -420,6 +419,7 @@ def prompt_for_optimization_settings() -> Optional[Dict[str, Any]]:
             questionary.text, "Частей для разбиения истории (например, 10):", default="10",
             validate=lambda text: text.isdigit() and int(text) > 1
         )
+        # Валидация train window: должно быть меньше total
         train_periods = ask(
             questionary.text, f"Частей для обучения (1-{int(total_periods) - 1}):", default="5",
             validate=lambda text: text.isdigit() and 0 < int(text) < int(total_periods)
@@ -430,7 +430,7 @@ def prompt_for_optimization_settings() -> Optional[Dict[str, Any]]:
             "n_trials": int(n_trials),
             "total_periods": int(total_periods),
             "train_periods": int(train_periods),
-            "test_periods": 1
+            "test_periods": 1 # По умолчанию OOS тест всегда на 1 следующий период
         })
         return settings
     except UserCancelledError:
@@ -439,35 +439,17 @@ def prompt_for_optimization_settings() -> Optional[Dict[str, Any]]:
 
 def prompt_for_live_settings() -> Optional[Dict[str, Any]]:
     """
-    Подтверждение запуска Live-режима.
+    Простой диалог подтверждения запуска Live-режима.
+    Основные настройки берутся из базы данных.
     """
     try:
         confirmation = ask(
             questionary.confirm,
-            "Запустить монитор сигналов используя конфигурации из Базы Данных?",
+            "Запустить монитор сигналов (конфигурации из БД)?",
             default=True
         )
         if not confirmation:
             return None
         return {}
-    except UserCancelledError:
-        return None
-
-
-def prompt_for_help_topic() -> Optional[str]:
-    """
-    Показывает меню выбора темы помощи (если доступно).
-    """
-    try:
-        choices = list(HELP_TOPICS.keys()) + [GO_BACK_OPTION]
-        topic_key = ask(
-            questionary.select,
-            "Выберите раздел справки:",
-            choices=choices,
-            use_indicator=True
-        )
-        if topic_key == GO_BACK_OPTION:
-            return None
-        return topic_key
     except UserCancelledError:
         return None

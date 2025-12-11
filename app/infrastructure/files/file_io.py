@@ -15,7 +15,7 @@ from typing import Dict, Any, Optional
 import pandas as pd
 
 from app.shared.config import config
-from app.shared.primitives import Trade
+from app.shared.types import Trade
 from app.shared.schemas import TradingConfig
 
 PATH_CONFIG = config.PATH_CONFIG
@@ -46,49 +46,6 @@ def load_trades_from_file(file_path: str) -> pd.DataFrame:
 
     # lines=True позволяет читать файл, где каждая строка — отдельный JSON объект
     return pd.read_json(file_path, lines=True)
-
-
-def save_trade_log(trade_log_file: Optional[str], trade: Trade, config: TradingConfig):
-    """
-    Сохраняет завершенную сделку в файл.
-
-    Args:
-        trade_log_file: Путь к файлу.
-        trade: Объект сделки.
-        config: Конфигурация для контекста (биржа, таймфрейм).
-    """
-    if trade_log_file is None:
-        return
-
-    try:
-        os.makedirs(os.path.dirname(trade_log_file), exist_ok=True)
-
-        # Собираем данные в плоский словарь
-        row_data = {
-            'entry_timestamp_utc': trade.entry_time.isoformat(),
-            'exit_timestamp_utc': trade.exit_time.isoformat() if trade.exit_time else None,
-
-            'strategy_name': config.strategy_name,
-            'exchange': config.exchange,
-            'instrument': trade.symbol,
-            'interval': config.interval,
-
-            'direction': trade.direction,
-            'entry_price': round(trade.entry_price, 4),
-            'exit_price': round(trade.exit_price, 4) if trade.exit_price else 0.0,
-            'quantity': trade.quantity,
-            'pnl': round(trade.pnl, 4),
-            'exit_reason': trade.exit_reason,
-
-            # Доп инфо
-            'risk_manager': config.risk_config.get('type', 'Unknown')
-        }
-
-        with open(trade_log_file, 'a', encoding='utf-8') as f:
-            f.write(json.dumps(row_data) + '\n')
-
-    except Exception as e:
-        logger.error(f"Failed to save trade log: {e}")
 
 
 def load_instrument_info(

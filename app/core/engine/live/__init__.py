@@ -12,7 +12,7 @@
     DataFeed -> Strategy -> SignalEvent -> Notification Handlers.
 
 Состав пакета:
-    - **loop.py**: Содержит `SignalEngine` — асинхронный менеджер задач.
+    - **engine.py**: Содержит `SignalEngine` — асинхронный менеджер задач.
       Он управляет жизненным циклом отдельных стратегий, обеспечивает их данными
       через `MarketDataProvider` и маршрутизирует сигналы подписчикам.
 

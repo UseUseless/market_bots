@@ -2,8 +2,8 @@
 Модуль-реестр торговых стратегий.
 
 Отвечает за автоматическое обнаружение и загрузку всех доступных
-стратегий из подпапки `app/strategies/_дирестория_со_стратегиями_ - сейчас logic/`.
-Чтобы добавить новую стратегию, достаточно создать файл в папке `logic/`.
+стратегий из подпапки `app/strategies/_дирестория_со_стратегиями_ - сейчас catalog/`.
+Чтобы добавить новую стратегию, достаточно создать файл в папке `catalog/`.
 и унаследовать класс от `BaseStrategy` реализовав def _calculate_signals.
 
 - **AVAILABLE_STRATEGIES**: Словарь `{имя_файла: КлассСтратегии}`, содержащий
@@ -20,7 +20,7 @@ from app.strategies.base_strategy import BaseStrategy
 
 logger = logging.getLogger(__name__)
 
-STRATEGIES_DIR_NAME = 'logic'
+STRATEGIES_DIR_NAME = 'catalog'
 
 def _discover_strategies() -> Dict[str, Type[BaseStrategy]]:
     """

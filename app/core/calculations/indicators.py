@@ -2,13 +2,14 @@
 Модуль расчета технических индикаторов (Feature Engineering).
 
 Содержит класс `FeatureEngine`, который выступает оберткой над библиотекой `pandas-ta`.
-Его задача — преобразовать список необходимых индикаторов из стратегии
-в конкретные числовые столбцы DataFrame.
+Его задача — преобразовать декларативный список требований индикаторов из конфигурации
+стратегии в конкретные числовые столбцы DataFrame.
 """
 
-import pandas as pd
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
+
+import pandas as pd
 import pandas_ta as ta
 
 logger = logging.getLogger(__name__)
@@ -18,11 +19,16 @@ class FeatureEngine:
     """
     Сервис для расчета технических индикаторов.
 
-    Стратегия передает список требований, а движок добавляет соответствующие колонки в DataFrame.
+    Использует библиотеку pandas-ta для векторных вычислений.
+    Позволяет стратегиям запрашивать индикаторы через конфигурационные словари,
+    не заботясь о деталях реализации вызовов библиотеки.
     """
 
     def __init__(self):
-        """Инициализирует маппинг доступных индикаторов."""
+        """
+        Инициализирует движок и регистрирует доступные калькуляторы.
+        """
+        # Маппинг строковых имен индикаторов на методы класса
         self._indicator_calculators = {
             "sma": self._calculate_sma,
             "ema": self._calculate_ema,
@@ -37,45 +43,71 @@ class FeatureEngine:
         """
         Добавляет в DataFrame запрошенные индикаторы.
 
-        Метод изменяет DataFrame **in-place** (по ссылке).
+        Метод изменяет DataFrame **in-place** (по ссылке), добавляя новые колонки.
 
         Args:
             data (pd.DataFrame): Исходные данные свечей (OHLCV).
+                Должен содержать колонки: open, high, low, close, volume.
             requirements (List[Dict]): Список конфигураций индикаторов.
                 Пример: `[{"name": "sma", "params": {"period": 20}}]`.
 
         Returns:
             pd.DataFrame: Ссылка на тот же объект data, но с добавленными колонками.
         """
+        if data.empty:
+            return data
+
         for req in requirements:
-            indicator_name = req.get("name")
+            indicator_name = req.get("name", "").lower()
             params = req.get("params", {})
 
             calculator = self._indicator_calculators.get(indicator_name)
+
             if calculator:
                 try:
+                    # Вызов соответствующего метода расчета с распаковкой параметров
                     calculator(data, **params)
                 except Exception as e:
-                    logger.error(f"Ошибка расчета индикатора {indicator_name} с параметрами {params}: {e}")
+                    logger.error(
+                        f"FeatureEngine: Ошибка расчета {indicator_name} с параметрами {params}: {e}",
+                        exc_info=True
+                    )
             else:
                 logger.warning(f"FeatureEngine: Неизвестный индикатор '{indicator_name}'. Пропускаем.")
+
         return data
+
+    # --- Implementations ---
 
     def _calculate_sma(self, data: pd.DataFrame, period: int, column: str = 'close'):
         """
         Считает простую скользящую среднюю (SMA).
-        Колонка: `SMA_{period}`.
+
+        Args:
+            data: DataFrame с данными.
+            period: Период усреднения.
+            column: Колонка, по которой считать (default: close).
+
+        Output Column: `SMA_{period}`
         """
         col_name = f'SMA_{period}'
-        # Если колонка уже есть, pandas_ta может добавить дубль с суффиксом, поэтому удаляем заранее
+
+        # Удаляем колонку, если она уже есть, чтобы pandas-ta не создавал дубли (SMA_20_1)
         if col_name in data.columns:
             data.drop(columns=[col_name], inplace=True)
+
         data.ta.sma(length=period, close=column, append=True, col_names=(col_name,))
 
     def _calculate_ema(self, data: pd.DataFrame, period: int, column: str = 'close'):
         """
         Считает экспоненциальную скользящую среднюю (EMA).
-        Колонка: `EMA_{period}`.
+
+        Args:
+            data: DataFrame с данными.
+            period: Период усреднения.
+            column: Колонка источника.
+
+        Output Column: `EMA_{period}`
         """
         col_name = f'EMA_{period}'
         if col_name in data.columns:
@@ -86,7 +118,12 @@ class FeatureEngine:
     def _calculate_atr(self, data: pd.DataFrame, period: int):
         """
         Считает средний истинный диапазон (ATR).
-        Колонка: `ATR_{period}`.
+
+        Args:
+            data: DataFrame.
+            period: Период сглаживания.
+
+        Output Column: `ATR_{period}`
         """
         col_name = f'ATR_{period}'
         if col_name in data.columns:
@@ -97,7 +134,12 @@ class FeatureEngine:
     def _calculate_rsi(self, data: pd.DataFrame, period: int):
         """
         RSI (Relative Strength Index).
-        Колонка: `RSI_{period}`.
+
+        Args:
+            data: DataFrame.
+            period: Период.
+
+        Output Column: `RSI_{period}`
         """
         col_name = f'RSI_{period}'
         if col_name in data.columns:
@@ -109,16 +151,21 @@ class FeatureEngine:
         """
         Считает Полосы Боллинджера (Bollinger Bands).
 
-        Колонки:
+        Args:
+            data: DataFrame.
+            period: Период средней.
+            std: Множитель стандартного отклонения.
+
+        Output Columns:
             - `BBL_{period}` (Lower)
             - `BBM_{period}` (Mid)
             - `BBU_{period}` (Upper)
             - `BBB_{period}` (Bandwidth)
             - `BBP_{period}` (%B)
         """
-        std_str = str(std).replace('.', '_')
-
-        # Точечно удаляем только колонки для ЭТИХ параметров
+        # Формируем имена колонок жестко, чтобы избежать авто-именования pandas-ta
+        # std может быть дробным (2.5), pandas-ta форматирует это специфично,
+        # поэтому задаем имена вручную для предсказуемости в стратегиях.
         col_names = (
             f'BBL_{period}',
             f'BBM_{period}',
@@ -127,7 +174,7 @@ class FeatureEngine:
             f'BBP_{period}'
         )
 
-        # Удаляем старые, если есть (чтобы избежать конфликтов)
+        # Очистка старых данных
         cols_to_drop = [c for c in col_names if c in data.columns]
         if cols_to_drop:
             data.drop(columns=cols_to_drop, inplace=True)
@@ -138,11 +185,17 @@ class FeatureEngine:
         """
         Считает канал Дончиана (Donchian Channel).
 
-        Колонки:
+        Args:
+            data: DataFrame.
+            lower_period: Период для нижней границы.
+            upper_period: Период для верхней границы.
+
+        Output Columns:
             - `DCL_{upper}` (Lower)
             - `DCM_{upper}` (Mid)
             - `DCU_{upper}` (Upper)
         """
+        # Используем upper_period как суффикс для унификации
         col_names = (
             f'DCL_{upper_period}',
             f'DCM_{upper_period}',
@@ -153,18 +206,26 @@ class FeatureEngine:
         if cols_to_drop:
             data.drop(columns=cols_to_drop, inplace=True)
 
-        data.ta.donchian(lower_length=lower_period, upper_length=upper_period, append=True, col_names=col_names)
+        data.ta.donchian(
+            lower_length=lower_period,
+            upper_length=upper_period,
+            append=True,
+            col_names=col_names
+        )
 
     def _calculate_adx(self, data: pd.DataFrame, period: int):
         """
         Считает индекс направленного движения (ADX).
 
-        Колонки:
+        Args:
+            data: DataFrame.
+            period: Период сглаживания.
+
+        Output Columns:
             - `ADX_{period}`
-            - `DMP_{period}` (DI+)
-            - `DMN_{period}` (DI-)
+            - `DMP_{period}` (Positive Directional Index)
+            - `DMN_{period}` (Negative Directional Index)
         """
-        # Порядок pandas_ta для adx: ADX, DMP, DMN
         col_names = (
             f'ADX_{period}',
             f'DMP_{period}',
