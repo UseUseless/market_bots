@@ -13,12 +13,13 @@
 import pandas as pd
 from typing import Dict, Any, Optional
 
+import app.infrastructure.feeds.backtest.provider
 from app.core.analysis.metrics import PortfolioMetricsCalculator, BenchmarkMetricsCalculator
 from app.core.analysis.reports.plot_report import PlotReportGenerator
 from app.core.analysis.reports.console_report import ConsoleReportGenerator
 from app.shared.config import config
 
-EXCHANGE_SPECIFIC_CONFIG = config.EXCHANGE_SPECIFIC_CONFIG
+EXCHANGE_SPECIFIC_CONFIG = app.infrastructure.feeds.backtest.provider.EXCHANGE_SPECIFIC_CONFIG
 
 
 class AnalysisSession:

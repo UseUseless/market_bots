@@ -19,7 +19,7 @@ from sqlalchemy import create_engine, select, update, delete
 from sqlalchemy.orm import sessionmaker
 
 from app.strategies import AVAILABLE_STRATEGIES
-from app.core.risk.manager import AVAILABLE_RISK_MANAGERS
+from app.core.risk import RISK_MANAGEMENT_TYPES
 from app.shared.config import config
 from app.shared.primitives import ExchangeType
 from app.infrastructure.database.models import BotInstance, StrategyConfig
@@ -175,7 +175,7 @@ def render_strategies_management_section():
                 interval_options = intervals if intervals else ["1min", "5min", "15min", "1hour"]
                 interval = c5.selectbox("Таймфрейм", interval_options)
 
-                risk_manager_type = c6.selectbox("Риск-менеджер", list(AVAILABLE_RISK_MANAGERS.keys()))
+                risk_manager_type = c6.selectbox("Риск-менеджер", list(RISK_MANAGEMENT_TYPES.keys()))
 
                 submitted_strat = st.form_submit_button("Добавить стратегию")
 

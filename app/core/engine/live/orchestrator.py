@@ -31,7 +31,7 @@ from app.infrastructure.database.models import StrategyConfig
 # Глобальные зависимости
 from app.bootstrap.container import container
 from app.core.engine.live.loop import SignalEngine
-from app.infrastructure.feeds.live import LiveDataProvider
+from app.infrastructure.feeds.live.provider import LiveDataProvider
 
 # Обработчики сигналов (Signal Handlers)
 from app.adapters.cli.signal_viewer import ConsoleSignalViewer
@@ -93,16 +93,23 @@ async def _pair_builder(config: StrategyConfig) -> Tuple[LiveDataProvider, Any]:
 
     # 4. Создание валидированной модели конфигурации
     pydantic_config = TradingConfig(
-        strategy_name=config.strategy_name,
-        instrument=config.instrument,
+        mode="LIVE",
         exchange=config.exchange,
+        instrument=config.instrument,
         interval=config.interval,
-        params=strategy_params,
-        # Риск-менеджер здесь нужен только для того, чтобы стратегия знала,
-        # какие индикаторы (напр. ATR) добавить в required_indicators.
-        # Сами расчеты рисков и сайзинга в режиме Monitor отключены.
-        risk_manager_type=config.risk_manager_type or "FIXED",
-        risk_manager_params={}
+        strategy_name=config.strategy_name,
+        strategy_params=strategy_params,
+
+        # Конвертируем структуру риска из БД в словарь
+        risk_config={
+            "type": config.risk_manager_type or "FIXED"
+            # Сюда можно добавить params, если они хранятся в БД отдельно,
+            # но пока мы берем дефолты.
+        },
+
+        # Капитал для Live можно брать из настроек или ставить заглушку,
+        # так как PortfolioState в Live отключен.
+        initial_capital=strategy_params.get("initial_capital", 10000.0)
     )
 
     # 5. Инстанцирование стратегии

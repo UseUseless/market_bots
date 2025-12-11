@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.core.engine.backtest.runners import run_single_backtest_flow
 from app.strategies import AVAILABLE_STRATEGIES
-from app.core.risk.manager import AVAILABLE_RISK_MANAGERS
+from app.core.risk import RISK_MANAGEMENT_TYPES
 from app.shared.decorators import safe_entry
 
 
@@ -69,7 +69,7 @@ def main() -> None:
         dest="risk_manager_type",
         type=str,
         default="FIXED",
-        choices=list(AVAILABLE_RISK_MANAGERS.keys()),
+        choices=list(RISK_MANAGEMENT_TYPES.keys()),
         help="Тип риск-менеджера."
     )
 

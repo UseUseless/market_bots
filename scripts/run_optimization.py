@@ -20,24 +20,19 @@ import argparse
 import logging
 import sys
 import os
-from typing import List, Dict, Any
 
 # Добавляем корневую директорию проекта в sys.path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.core.engine.optimization.runner import run_optimization_flow
+from app.core.engine.optimization.optimizer import WFOOptimizer
 from app.shared.logging_setup import setup_global_logging
 from app.strategies import AVAILABLE_STRATEGIES
-from app.core.risk.manager import AVAILABLE_RISK_MANAGERS
+from app.core.risk import RISK_MANAGEMENT_TYPES
 from app.core.analysis.constants import METRIC_CONFIG
 from app.shared.decorators import safe_entry
 
 logger = logging.getLogger(__name__)
 
-
-def _get_available_choices(config_dict: Dict[str, Any]) -> List[str]:
-    """Вспомогательная функция для получения списка ключей словаря."""
-    return list(config_dict.keys())
 
 @safe_entry
 def main() -> None:
@@ -66,19 +61,19 @@ def main() -> None:
     parser.add_argument("--interval", type=str, required=True, help="Таймфрейм.")
     parser.add_argument(
         "--strategy", type=str, required=True,
-        choices=_get_available_choices(AVAILABLE_STRATEGIES),
+        choices=list(AVAILABLE_STRATEGIES.keys()),
         help="Стратегия."
     )
     parser.add_argument(
         "--rm", dest="risk_manager_type", type=str, default="FIXED",
-        choices=_get_available_choices(AVAILABLE_RISK_MANAGERS),
+        choices=list(RISK_MANAGEMENT_TYPES.keys()),
         help="Тип риск-менеджера."
     )
 
     # --- Настройки Optuna и WFO ---
     parser.add_argument(
         "--metrics", type=str, nargs='+', default=["calmar_ratio"],
-        choices=_get_available_choices(METRIC_CONFIG),
+        choices=list(METRIC_CONFIG.keys()),
         help="Целевые метрики."
     )
     parser.add_argument("--n_trials", type=int, default=100, help="Итераций Optuna на шаг.")
@@ -90,10 +85,19 @@ def main() -> None:
     settings = vars(args)
 
     try:
-        run_optimization_flow(settings)
+        logger.info("--- Запуск потока Walk-Forward Optimization ---")
+
+        # Создаем и запускаем оптимизатор напрямую
+        optimizer = WFOOptimizer(settings)
+        optimizer.run()
+
+        logger.info("--- Поток Walk-Forward Optimization успешно завершен ---")
 
     except (FileNotFoundError, ValueError) as e:
         logger.error(f"Ошибка подготовки WFO: {e}")
+        sys.exit(1)
+    except Exception as e:
+        logger.critical("Произошла непредвиденная критическая ошибка!", exc_info=True)
         sys.exit(1)
 
 

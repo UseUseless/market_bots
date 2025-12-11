@@ -34,6 +34,18 @@ class TriggerReason(StrEnum):
 
 
 @dataclass
+class TradeRiskProfile:
+    """
+    Результат расчета риск-менеджера.
+    Используется для передачи параметров от RiskManager к Portfolio.
+    """
+    stop_loss_price: float
+    take_profit_price: float
+    quantity: float
+    risk_amount: float  # Денежный риск на сделку
+
+
+@dataclass
 class Trade:
     """
     Единая сущность сделки.

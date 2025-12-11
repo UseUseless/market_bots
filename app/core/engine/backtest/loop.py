@@ -1,336 +1,245 @@
 """
 Модуль основного цикла бэктеста (Backtest Engine).
 
-Отвечает за оркестрацию процесса тестирования одной стратегии на одном инструменте.
-Этот класс собирает все компоненты (Стратегия, Портфель, Риск-менеджер, Исполнение)
-и запускает цикл обработки исторических данных свеча за свечой.
+Этот модуль отвечает за оркестрацию симуляции торговли на исторических данных.
+Он связывает поток данных, торговую стратегию, управление портфелем и
+симуляцию исполнения ордеров в единый событийный цикл.
+
+Основные функции:
+    - Загрузка и подготовка данных (расчет индикаторов).
+    - Инициализация компонентов через Dependency Injection.
+    - Запуск цикла по свечам (Event Loop).
+    - Сбор результатов и формирование DataFrame сделок.
 """
 
 import queue
 import logging
-import pandas as pd
 from typing import Dict, Any, Optional
 
-from app.shared.events import MarketEvent, SignalEvent, OrderEvent, FillEvent
-from app.core.portfolio import PortfolioState
-from app.shared.schemas import TradingConfig
-from app.core.portfolio.manager import Portfolio
-from app.infrastructure.feeds.backtest.local import BacktestDataLoader
-from app.core.engine.backtest.simulator import BacktestExecutionHandler
-from app.core.risk.sizer import FixedRiskSizer
-from app.core.risk.manager import AVAILABLE_RISK_MANAGERS
-from app.core.risk.monitor import RiskMonitor
-from app.core.execution.order_logic import OrderManager
-from app.core.portfolio.accounting import FillProcessor
-from app.infrastructure.feeds.backtest import BacktestDataProvider
-from app.core.calculations.indicators import FeatureEngine
+import pandas as pd
 
-from app.strategies.base_strategy import BaseStrategy
+from app.shared.events import MarketEvent, SignalEvent, OrderEvent, FillEvent
+from app.shared.schemas import TradingConfig
 from app.shared.logging_setup import backtest_time_filter
+from app.shared.config import config as app_config
+
+from app.infrastructure.feeds.backtest.provider import BacktestDataProvider, BacktestDataLoader
 from app.infrastructure.storage.file_io import load_instrument_info
-from app.shared.config import config
+
+from app.core.portfolio import Portfolio
+from app.core.engine.backtest.simulator import BacktestExecutionHandler
+from app.strategies import AVAILABLE_STRATEGIES
 
 logger = logging.getLogger('backtester')
 
 
 class BacktestEngine:
     """
-    Движок одиночного бэктеста.
+    Движок для запуска одиночной симуляции стратегии.
 
-    Управляет жизненным циклом симуляции:
-    1.  Загрузка данных.
-    2.  Инициализация компонентов (Dependency Injection).
-    3.  Запуск событийного цикла (Event Loop).
-    4.  Сбор результатов.
+    Управляет процессом прогона истории свеча за свечой, эмулируя поведение
+    рынка и исполнение ордеров.
 
     Attributes:
-        settings (Dict): Конфигурация запуска (инструмент, таймфрейм, стратегия).
-        events_queue (queue.Queue): Очередь событий для коммуникации компонентов.
-        feature_engine (FeatureEngine): Сервис для расчета индикаторов.
-        components (Dict): Реестр созданных объектов (portfolio, strategy и т.д.).
-        pending_strategy_order (Optional[OrderEvent]): Буфер для отложенного исполнения
-            рыночного ордера (симуляция задержки исполнения на 1 тик).
+        config (TradingConfig): Полная конфигурация сессии.
+        data_slice (Optional[pd.DataFrame]): Предоставленные данные (для WFO).
+        events_queue (queue.Queue): Шина событий.
+        components (Dict): Реестр инициализированных компонентов.
     """
 
-    def __init__(self, settings: Dict[str, Any], events_queue: queue.Queue, feature_engine: FeatureEngine):
+    def __init__(self, config: TradingConfig, data_slice: Optional[pd.DataFrame] = None):
         """
-        Создает экземпляр движка.
+        Инициализирует движок.
 
         Args:
-            settings (Dict[str, Any]): Словарь с параметрами теста.
-            events_queue (queue.Queue): Очередь событий.
-            feature_engine (FeatureEngine): Инстанс движка индикаторов.
+            config: Конфигурация запуска (инструмент, стратегия, риск).
+            data_slice: DataFrame с данными. Если None, загружается с диска.
         """
-        self.settings = settings
-        self.events_queue = events_queue
-        self.feature_engine = feature_engine
+        self.config = config
+        self.data_slice = data_slice
 
+        self.events_queue = queue.Queue()
         self.components: Dict[str, Any] = {}
-        # Ордер, сгенерированный стратегией на свече T, исполняется на открытии T+1
-        self.pending_strategy_order: Optional[Any] = None
+        self.current_candle: Optional[pd.Series] = None
+
+        # Буфер для рыночного ордера стратегии.
+        # Сигнал возникает на Close(T), ордер исполняется на Open(T+1).
+        self.pending_strategy_order: Optional[OrderEvent] = None
 
     def _initialize_components(self) -> None:
         """
-        Собирает архитектуру приложения (Composition Root).
-
-        Создает экземпляры всех необходимых классов (Strategy, Portfolio, RiskManager и т.д.)
-        и связывает их друг с другом через внедрение зависимостей (DI).
+        Инициализирует и связывает основные компоненты системы (Composition Root).
         """
         logger.info("Инициализация компонентов бэктеста...")
-        events_queue = self.events_queue
-        self.components['events_queue'] = events_queue
 
-        data_dir = self.settings.get("data_dir", config.PATH_CONFIG["DATA_DIR"])
-
-        # Загрузка метаданных инструмента (шаг цены, лотность)
+        # 1. Загрузка метаданных инструмента (лотность, шаги цены)
         instrument_info = load_instrument_info(
-            exchange=self.settings["exchange"],
-            instrument=self.settings["instrument"],
-            interval=self.settings["interval"],
-            data_dir=data_dir
+            self.config.exchange, self.config.instrument, self.config.interval
         )
 
-        # Инициализация стратегии
-        strategy_class = self.settings["strategy_class"]
-        strategy_params = self.settings.get("strategy_params") or strategy_class.get_default_params()
-
-        strategy_config = TradingConfig(
-            strategy_name=strategy_class.__name__,
-            instrument=self.settings["instrument"],
-            exchange=self.settings["exchange"],
-            interval=self.settings["interval"],
-            params=strategy_params,
-            risk_manager_type=self.settings["risk_manager_type"],
-            risk_manager_params=self.settings.get("risk_manager_params") or {}
-        )
-
-        strategy = strategy_class(
+        # 2. Инициализация Стратегии
+        StrategyClass = AVAILABLE_STRATEGIES[self.config.strategy_name]
+        strategy = StrategyClass(
             events_queue=self.events_queue,
-            feature_engine=self.feature_engine,
-            config=strategy_config
+            config=self.config
         )
         self.components['strategy'] = strategy
 
-        # Инициализация компонентов портфеля
-        rm_class = AVAILABLE_RISK_MANAGERS[self.settings["risk_manager_type"]]
-        rm_params = self.settings.get("risk_manager_params") or rm_class.get_default_params()
-        risk_manager = rm_class(params=rm_params)
-        position_sizer = FixedRiskSizer()
-
-        risk_monitor = RiskMonitor(events_queue)
-        order_manager = OrderManager(events_queue, risk_manager, position_sizer, instrument_info)
-
-        fill_processor = FillProcessor(
-            trade_log_file=self.settings.get("trade_log_path"),
-            exchange=self.settings["exchange"],
-            interval=self.settings["interval"],
-            strategy_name=strategy.name,
-            risk_manager_name=risk_manager.__class__.__name__,
-            risk_manager_params=rm_params
+        # 3. Инициализация Портфеля (включает Риск-менеджер и Учет)
+        portfolio = Portfolio(
+            config=self.config,
+            events_queue=self.events_queue,
+            instrument_info=instrument_info
         )
+        self.components['portfolio'] = portfolio
 
-        slippage_conf = config.BACKTEST_CONFIG.get("SLIPPAGE_CONFIG", {})
-
+        # 4. Инициализация Симулятора исполнения
+        slippage_conf = app_config.BACKTEST_CONFIG.get("SLIPPAGE_CONFIG", {})
         execution_handler = BacktestExecutionHandler(
-            events_queue,
-            commission_rate=self.settings["commission_rate"],
+            events_queue=self.events_queue,
+            commission_rate=self.config.commission_rate,
             slippage_config=slippage_conf
         )
         self.components['execution_handler'] = execution_handler
 
-        portfolio_state = PortfolioState(initial_capital=self.settings["initial_capital"])
-
-        # Сборка фасада портфеля
-        portfolio = Portfolio(
-            events_queue=events_queue,
-            portfolio_state=portfolio_state,
-            risk_monitor=risk_monitor,
-            order_manager=order_manager,
-            fill_processor=fill_processor
-        )
-        self.components['portfolio'] = portfolio
-
-    def _prepare_data(self) -> pd.DataFrame | None:
+    def _prepare_data(self) -> Optional[pd.DataFrame]:
         """
-        Загружает и подготавливает исторические данные.
-
-        1. Загружает сырые данные из файла или принимает срез (для WFO).
-        2. Запускает `strategy.process_data` для векторного расчета индикаторов.
-        3. Проверяет достаточность длины истории.
+        Загружает исторические данные и рассчитывает индикаторы.
 
         Returns:
-            pd.DataFrame: Обогащенные данные, готовые к симуляции.
+            pd.DataFrame: Обогащенные данные или None в случае ошибки.
         """
-        logger.info("Начало этапа подготовки данных...")
-        strategy: BaseStrategy = self.components['strategy']
+        strategy = self.components['strategy']
 
-        # Если передан готовый срез данных (например, из оптимизатора), используем его
-        data_slice = self.settings.get("data_slice")
-
-        if data_slice is not None:
-            raw_data = data_slice
+        # Если данные переданы извне (например, при Оптимизации)
+        if self.data_slice is not None:
+            raw_data = self.data_slice
         else:
-            data_path = self.settings.get("data_dir", config.PATH_CONFIG["DATA_DIR"])
-
-            data_handler = BacktestDataLoader(
-                exchange=self.settings["exchange"],
-                instrument_id=self.settings["instrument"],
-                interval_str=self.settings["interval"],
-                data_path=data_path
+            # Загрузка с диска
+            loader = BacktestDataLoader(
+                exchange=self.config.exchange,
+                instrument_id=self.config.instrument,
+                interval_str=self.config.interval,
+                data_path=app_config.PATH_CONFIG["DATA_DIR"]
             )
-            raw_data = data_handler.load_raw_data()
+            raw_data = loader.load()
 
-        if raw_data is None or raw_data.empty:
-            logger.error(f"Не удалось получить данные для бэктеста по инструменту {self.settings['instrument']}.")
+        if raw_data.empty:
+            logger.error(f"Нет данных для {self.config.instrument}")
             return None
 
-        # Векторный расчет индикаторов (оптимизация скорости)
+        # Векторный расчет индикаторов через стратегию
         enriched_data = strategy.process_data(raw_data.copy())
 
         if len(enriched_data) < strategy.min_history_needed:
-            logger.error(f"Ошибка: Недостаточно данных для запуска стратегии '{strategy.strategy_name}'. "
-                         f"Требуется {strategy.min_history_needed}, доступно {len(enriched_data)}.")
+            logger.error("Недостаточно истории после расчета индикаторов.")
             return None
 
-        logger.info("Этап подготовки данных завершен.")
         return enriched_data
 
-    def _process_queue(self, current_candle: pd.Series, phase: str):
+    def _process_queue(self):
         """
-        Разбирает очередь событий до полного опустошения.
-
-        Маршрутизирует события соответствующим обработчикам.
-
-        Args:
-            current_candle (pd.Series): Текущие рыночные данные.
-            phase (str): Текущая фаза цикла (для отладки).
+        Разбирает очередь событий и маршрутизирует их между компонентами.
         """
-        events_queue = self.components['events_queue']
         portfolio = self.components['portfolio']
-        execution_handler = self.components['execution_handler']
+        execution = self.components['execution_handler']
 
-        while not events_queue.empty():
+        # Используем локальную ссылку для безопасности
+        current_candle = self.current_candle
+
+        while not self.events_queue.empty():
             try:
-                event = events_queue.get(block=False)
+                event = self.events_queue.get(block=False)
             except queue.Empty:
                 break
 
             if isinstance(event, SignalEvent):
-                portfolio.on_signal(event)
+                # Стратегия -> Портфель (Запрос на вход/выход)
+                portfolio.on_signal(event, current_candle)
 
             elif isinstance(event, OrderEvent):
-                # Если это рыночный ордер от стратегии, откладываем его до открытия следующей свечи
-                if event.trigger_reason == 'SIGNAL':
+                # Портфель -> Симулятор (Ордер на исполнение)
+                if event.price is None:
+                    # Market Order от стратегии: исполняем на следующей свече
                     self.pending_strategy_order = event
                 else:
-                    # Стоп-ордера исполняются немедленно (внутри этой же свечи)
-                    execution_handler.execute_order(event, current_candle)
+                    # Limit/Stop (SL/TP): проверяем исполнение внутри текущей свечи
+                    execution.execute_order(event, current_candle)
 
             elif isinstance(event, FillEvent):
+                # Симулятор -> Портфель (Подтверждение сделки)
                 portfolio.on_fill(event)
-
-    def _run_event_loop(self, enriched_data: pd.DataFrame) -> None:
-        """
-        Основной цикл симуляции (Event Loop).
-
-        Итерируется по историческим данным, эмулируя ход времени.
-
-        Последовательность действий на каждой свече:
-        1.  **Phase 1 (Open):** Исполнение отложенных ордеров (вход по Open).
-        2.  **Phase 2 (High/Low):** Проверка рисков (SL/TP внутри свечи).
-        3.  **Phase 3 (Close):** Анализ стратегии (генерация сигналов по Close).
-
-        Args:
-            enriched_data (pd.DataFrame): Подготовленные данные.
-        """
-        logger.info("Запуск основного цикла обработки событий...")
-
-        portfolio = self.components['portfolio']
-        strategy = self.components['strategy']
-        execution_handler = self.components['execution_handler']
-        instrument = self.settings['instrument']
-
-        # Инициализация фида данных
-        feed = BacktestDataProvider(data=enriched_data, interval=self.settings['interval'])
-
-        while feed.next():
-            current_candle = feed.get_current_candle()
-
-            # Создаем MarketEvent для обновления состояния портфеля
-            market_event = MarketEvent(
-                timestamp=current_candle['time'],
-                instrument=instrument,
-                data=current_candle
-            )
-
-            # Обновляем время в логгере
-            backtest_time_filter.set_sim_time(market_event.timestamp)
-
-            # --- ФАЗА 1: ИСПОЛНЕНИЕ (Начало бара) ---
-            # Исполняем ордера, сгенерированные на закрытии ПРОШЛОЙ свечи.
-            # Цена исполнения будет Open ТЕКУЩЕЙ свечи.
-            if self.pending_strategy_order:
-                execution_handler.execute_order(self.pending_strategy_order, current_candle)
-                self.pending_strategy_order = None
-                self._process_queue(current_candle, phase='EXECUTION')
-
-            # --- ФАЗА 2: РИСКИ (Внутри бара) ---
-            # Обновляем цену в портфеле и проверяем, не задеты ли SL/TP ценами High/Low.
-            portfolio.update_market_price(market_event)
-            self._process_queue(current_candle, phase='RISK')
-
-            # --- ФАЗА 3: СТРАТЕГИЯ (Конец бара) ---
-            # Анализируем данные по цене Close.
-            strategy.on_candle(feed)
-
-            # Если стратегия сгенерировала сигнал, он попадет в pending_strategy_order
-            # после обработки очереди в _process_queue
-            self._process_queue(current_candle, phase='STRATEGY')
-
-        backtest_time_filter.reset_sim_time()
-        logger.info("Основной цикл завершен.")
 
     def run(self) -> Dict[str, Any]:
         """
-        Запускает процесс бэктеста от начала до конца.
+        Запускает основной цикл симуляции.
 
         Returns:
-            Dict[str, Any]: Результаты теста.
-                - status: "success" / "error"
-                - trades_df: Список сделок.
-                - final_capital: Итоговый капитал.
-                - enriched_data: Использованные данные (для отрисовки графиков).
+            Dict[str, Any]: Результаты теста (статус, сделки, капитал).
         """
         try:
             self._initialize_components()
+            data = self._prepare_data()
+            if data is None:
+                return {"status": "error", "message": "No data available"}
 
-            enriched_data = self._prepare_data()
-            if enriched_data is None:
-                raise ValueError("Data preparation failed, no data returned.")
+            feed = BacktestDataProvider(data, self.config.interval)
 
-            self._run_event_loop(enriched_data)
+            portfolio = self.components['portfolio']
+            strategy = self.components['strategy']
+            execution = self.components['execution_handler']
 
-            portfolio: Portfolio = self.components["portfolio"]
-            trades_df = pd.DataFrame(portfolio.state.closed_trades) if portfolio.state.closed_trades else pd.DataFrame()
+            # --- Event Loop (Цикл по свечам) ---
+            while feed.next():
+                self.current_candle = feed.get_current_candle()
+
+                # Создаем событие рынка для обновления оценки портфеля
+                market_event = MarketEvent(
+                    timestamp=self.current_candle['time'],
+                    instrument=self.config.instrument,
+                    data=self.current_candle
+                )
+
+                # Обновляем время в логгере
+                backtest_time_filter.set_sim_time(market_event.timestamp)
+
+                # 1. Фаза исполнения (Open): Исполняем отложенные рыночные ордера
+                if self.pending_strategy_order:
+                    # Исполнение по цене Open текущей свечи
+                    execution.execute_order(self.pending_strategy_order, self.current_candle)
+                    self.pending_strategy_order = None
+                    self._process_queue()
+
+                # 2. Фаза контроля рисков (High/Low): Проверка SL/TP внутри свечи
+                portfolio.on_market_data(market_event)
+                self._process_queue()
+
+                # 3. Фаза стратегии (Close): Анализ закрытой свечи
+                strategy.on_candle(feed)
+                self._process_queue()
+
+            # --- Завершение ---
+            backtest_time_filter.reset_sim_time()
+
+            # Конвертация сделок в DataFrame для модуля аналитики
+            # Мапим имена полей Trade в формат, ожидаемый AnalysisSession
+            trade_dicts = []
+            for t in portfolio.closed_trades:
+                d = t.__dict__.copy()
+                d['entry_timestamp_utc'] = d['entry_time']
+                d['exit_timestamp_utc'] = d['exit_time']
+                trade_dicts.append(d)
+
+            trades_df = pd.DataFrame(trade_dicts)
 
             return {
                 "status": "success",
                 "trades_df": trades_df,
-                "final_capital": portfolio.state.current_capital,
-                "initial_capital": self.settings["initial_capital"],
-                "enriched_data": enriched_data,
-                "open_positions": portfolio.state.positions
+                "final_capital": portfolio.balance,
+                "initial_capital": self.config.initial_capital,
+                "enriched_data": data
             }
+
         except Exception as e:
-            logger.error(
-                f"BacktestEngine столкнулся с ошибкой на верхнем уровне для {self.settings['instrument']}: {e}",
-                exc_info=True)
-            return {
-                "status": "error",
-                "message": str(e),
-                "trades_df": pd.DataFrame(),
-                "final_capital": self.settings.get("initial_capital", 0),
-                "initial_capital": self.settings.get("initial_capital", 0),
-                "enriched_data": pd.DataFrame(),
-                "open_positions": {}
-            }
+            logger.error(f"Backtest Critical Error: {e}", exc_info=True)
+            return {"status": "error", "message": str(e)}

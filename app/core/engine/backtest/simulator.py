@@ -1,16 +1,20 @@
 """
-Модуль симуляции исполнения ордеров (Simulated Execution).
+Симулятор исполнения ордеров (Execution Simulator).
 
-Используется в бэктестах для эмуляции поведения биржи.
-В отличие от "наивных" тестеров, этот модуль учитывает:
-1.  **Проскальзывание (Slippage):** Цена ухудшается при больших объемах или низкой ликвидности.
-2.  **Комиссии:** Расчет затрат на сделку.
-3.  **Реалистичные цены входа:** Исполнение по Open следующей свечи для сигналов.
+Этот модуль эмулирует работу биржевого движка (Matching Engine) в режиме бэктеста.
+Его задача — превратить ордер (намерение) в сделку (факт) с учетом рыночных условий.
+
+Основные функции:
+    - Расчет цены исполнения (Market vs Limit).
+    - Симуляция проскальзывания (Slippage) на основе объема свечи.
+    - Расчет торговых комиссий.
+    - Проброс параметров риска (SL/TP) в событие исполнения.
 """
 
 from queue import Queue
+from typing import Dict, Any
+
 import pandas as pd
-from typing import Any, Dict
 
 from app.shared.events import OrderEvent, FillEvent
 from app.shared.primitives import TradeDirection
@@ -18,125 +22,114 @@ from app.shared.primitives import TradeDirection
 
 class BacktestExecutionHandler:
     """
-    Симулятор биржевого исполнения для бэктеста.
+    Обработчик исполнения ордеров для симуляции.
 
-    Превращает `OrderEvent` в `FillEvent` мгновенно (без сетевых задержек),
-    но с корректировкой цены и расчетом комиссий.
-
-    Attributes:
-        commission_rate (float): Ставка комиссии (например, 0.0005 для 0.05%).
-        slippage_enabled (bool): Включена ли симуляция проскальзывания.
-        impact_coefficient (float): Коэффициент чувствительности цены к объему.
-                                    Чем выше, тем сильнее цена уходит против нас при большом объеме.
+    Принимает OrderEvent, рассчитывает итоговую цену и комиссию,
+    генерирует FillEvent и помещает его в очередь событий.
     """
 
-    def __init__(self,
-                 events_queue: Queue,
-                 commission_rate: float,
-                 slippage_config: Dict[str, Any]):
+    def __init__(self, events_queue: Queue, commission_rate: float, slippage_config: Dict[str, Any]):
         """
         Инициализирует симулятор.
 
         Args:
-            events_queue (Queue): Очередь для отправки событий исполнения (Fill).
-            commission_rate (float): Размер комиссии (в долях единицы).
-            slippage_config (Dict[str, Any]): Настройки проскальзывания.
-                                              Пример: {"ENABLED": True, "IMPACT_COEFFICIENT": 0.1}.
+            events_queue: Очередь для отправки событий исполнения (FillEvent).
+            commission_rate: Размер комиссии (в долях, например 0.001 для 0.1%).
+            slippage_config: Настройки проскальзывания (ENABLED, IMPACT_COEFFICIENT).
         """
-        super().__init__(events_queue)
+        self.events_queue = events_queue
         self.commission_rate = commission_rate
         self.slippage_enabled = slippage_config.get("ENABLED", False)
         self.impact_coefficient = slippage_config.get("IMPACT_COEFFICIENT", 0.1)
 
-    def _simulate_slippage(self, ideal_price: float, quantity: int,
-                           direction: TradeDirection, candle_volume: int) -> float:
+    def _simulate_slippage(self, ideal_price: float, quantity: float,
+                           direction: TradeDirection, candle_volume: float) -> float:
         """
-        Рассчитывает цену исполнения с учетом влияния объема ордера на стакан.
+        Рассчитывает цену с учетом влияния объема на рынок (Market Impact).
 
-        Модель: "Square Root Law of Market Impact".
-        `Slippage % = Impact_Coeff * sqrt(Order_Qty / Candle_Volume)`
+        Использует модель "Square Root Law": чем больше объем заявки относительно
+        объема свечи, тем хуже цена исполнения.
 
         Args:
-            ideal_price (float): "Чистая" цена (например, Open свечи или уровень SL).
-            quantity (int): Объем ордера.
-            direction (TradeDirection): Направление сделки.
-            candle_volume (int): Общий объем торгов в этой свече (ликвидность).
+            ideal_price: Базовая цена исполнения.
+            quantity: Объем ордера.
+            direction: Направление сделки.
+            candle_volume: Объем торгов в текущей свече.
 
         Returns:
-            float: Ухудшенная цена исполнения.
+            float: Скорректированная цена исполнения.
         """
         if not self.slippage_enabled or candle_volume <= 0:
             return ideal_price
 
-        # Доля нашего ордера в объеме свечи
+        # Доля ордера в объеме свечи (ограничена 100%)
         volume_ratio = min(quantity / candle_volume, 1.0)
 
-        # Расчет процента проскальзывания
+        # Расчет процента сдвига цены
         slippage_percent = self.impact_coefficient * (volume_ratio ** 0.5)
 
-        # Hard cap: проскальзывание не может быть больше 20% (защита от аномалий в данных)
-        MAX_SLIPPAGE_PERCENT = 0.20
-        slippage_percent = min(slippage_percent, MAX_SLIPPAGE_PERCENT)
+        # Жесткое ограничение проскальзывания (макс 20%), чтобы избежать аномалий
+        slippage_percent = min(slippage_percent, 0.20)
 
-        # Ухудшаем цену: Покупка дороже, Продажа дешевле
+        # Покупка исполняется дороже, Продажа — дешевле
         if direction == TradeDirection.BUY:
             return ideal_price * (1 + slippage_percent)
-        else:  # TradeDirection.SELL
+        else:
             return ideal_price * (1 - slippage_percent)
 
-    def execute_order(self, event: OrderEvent, last_candle: pd.Series):
+    def execute_order(self, order: OrderEvent, last_candle: pd.Series):
         """
-        Исполняет ордер.
+        Исполняет ордер по текущим рыночным данным.
 
-        Логика выбора цены:
-        1. Если это StopLoss/TakeProfit (`price` задан): Исполняем по уровню стопа
-           (с добавлением проскальзывания).
-        2. Если это Рыночный вход по сигналу (`price` is None): Исполняем по цене
-           OPEN текущей свечи (`last_candle['open']`).
-           *Почему Open?* Потому что сигнал генерируется по Close предыдущей свечи (`t-1`).
-           Физически мы можем войти только на открытии следующей (`t`).
+        Алгоритм:
+        1. Определяет базовую цену (Limit Price из ордера или Open свечи для Market).
+        2. Применяет проскальзывание.
+        3. Считает комиссию.
+        4. Создает FillEvent и копирует в него параметры SL/TP для портфеля.
 
         Args:
-            event (OrderEvent): Ордер на исполнение.
-            last_candle (pd.Series): Данные свечи, на которой происходит исполнение.
-                                     (Это свеча T, следующая за свечой генерации сигнала T-1).
-
-        Raises:
-            ValueError: Если не переданы данные свечи.
+            order: Событие ордера.
+            last_candle: Данные свечи, на которой происходит исполнение.
         """
         if last_candle is None:
-            raise ValueError("Для симуляции исполнения необходимы данные последней свечи.")
+            return
 
-        # 1. Определение базовой цены
-        if event.price is not None:
-            # Исполнение отложенного ордера (SL/TP)
-            ideal_price = event.price
+        # 1. Определение цены
+        if order.price is not None:
+            # Лимитный/Стоп ордер: исполняем по заданной цене
+            base_price = order.price
         else:
-            # Рыночный вход (Market Order)
-            ideal_price = last_candle['open']
+            # Рыночный ордер: исполняем по цене открытия свечи
+            base_price = last_candle['open']
 
-        # 2. Симуляция проскальзывания
-        execution_price = self._simulate_slippage(
-            ideal_price=ideal_price,
-            quantity=event.quantity,
-            direction=event.direction,
-            candle_volume=last_candle['volume']
+        # 2. Проскальзывание
+        exec_price = self._simulate_slippage(
+            ideal_price=base_price,
+            quantity=order.quantity,
+            direction=order.direction,
+            candle_volume=last_candle.get('volume', 1000000)
         )
 
-        # 3. Расчет комиссии
-        # Считается от объема сделки (quantity * price)
-        commission = execution_price * event.quantity * self.commission_rate
+        # 3. Комиссия
+        commission = exec_price * order.quantity * self.commission_rate
 
-        # 4. Генерация события исполнения
-        fill_event = FillEvent(
-            timestamp=event.timestamp,  # Используем время инициации ордера
-            instrument=event.instrument,
-            quantity=event.quantity,
-            direction=event.direction,
-            price=execution_price,
+        # 4. Генерация события
+        fill = FillEvent(
+            timestamp=order.timestamp,
+            instrument=order.instrument,
+            direction=order.direction,
+            quantity=order.quantity,
+            price=exec_price,
             commission=commission,
-            trigger_reason=event.trigger_reason,
-            stop_loss=event.stop_loss,
-            take_profit=event.take_profit
+            trigger_reason=order.trigger_reason,
+            stop_loss=order.stop_loss,
+            take_profit=order.take_profit
         )
-        self.events_queue.put(fill_event)
+
+        # Динамически прикрепляем уровни SL/TP к событию исполнения,
+        # чтобы Portfolio мог сохранить их в объекте Trade.
+        # my_question а нафига так сделано?
+        fill.stop_loss = order.stop_loss
+        fill.take_profit = order.take_profit
+
+        self.events_queue.put(fill)

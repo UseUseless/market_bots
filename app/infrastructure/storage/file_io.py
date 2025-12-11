@@ -10,12 +10,13 @@
 import json
 import os
 import logging
-from datetime import datetime
 from typing import Dict, Any, Optional
 
 import pandas as pd
 
 from app.shared.config import config
+from app.shared.primitives import Trade
+from app.shared.schemas import TradingConfig
 
 PATH_CONFIG = config.PATH_CONFIG
 logger = logging.getLogger(__name__)
@@ -47,72 +48,47 @@ def load_trades_from_file(file_path: str) -> pd.DataFrame:
     return pd.read_json(file_path, lines=True)
 
 
-def save_trade_log(
-        trade_log_file: Optional[str],
-        strategy_name: str,
-        exchange: str,
-        instrument: str,
-        direction: str,
-        entry_timestamp: datetime,
-        exit_timestamp: datetime,
-        entry_price: float,
-        exit_price: float,
-        pnl: float,
-        exit_reason: str,
-        interval: str,
-        risk_manager: str
-):
+def save_trade_log(trade_log_file: Optional[str], trade: Trade, config: TradingConfig):
     """
-    Записывает информацию о завершенной сделке в файл.
-
-    Использует режим 'append' (добавление в конец файла), что эффективно
-    и безопасно для параллельной записи (в рамках разумного).
+    Сохраняет завершенную сделку в файл.
 
     Args:
-        trade_log_file (Optional[str]): Путь к файлу. Если None, запись не производится.
-        strategy_name (str): Имя стратегии.
-        exchange (str): Биржа.
-        instrument (str): Тикер.
-        direction (str): Направление сделки (BUY/SELL).
-        entry_timestamp (datetime): Время входа.
-        exit_timestamp (datetime): Время выхода.
-        entry_price (float): Цена входа.
-        exit_price (float): Цена выхода.
-        pnl (float): Реализованная прибыль/убыток.
-        exit_reason (str): Причина выхода (Signal, SL, TP).
-        interval (str): Таймфрейм.
-        risk_manager (str): Имя использованного риск-менеджера.
+        trade_log_file: Путь к файлу.
+        trade: Объект сделки.
+        config: Конфигурация для контекста (биржа, таймфрейм).
     """
     if trade_log_file is None:
         return
 
     try:
-        # Гарантируем существование директории
         os.makedirs(os.path.dirname(trade_log_file), exist_ok=True)
 
+        # Собираем данные в плоский словарь
         row_data = {
-            'entry_timestamp_utc': entry_timestamp.isoformat(),
-            'exit_timestamp_utc': exit_timestamp.isoformat(),
-            'strategy_name': strategy_name,
-            'exchange': exchange,
-            'instrument': instrument,
-            'direction': direction,
-            'entry_price': round(entry_price, 4),
-            'exit_price': round(exit_price, 4),
-            'pnl': round(pnl, 4),
-            'exit_reason': exit_reason,
-            'interval': interval,
-            'risk_manager': risk_manager
+            'entry_timestamp_utc': trade.entry_time.isoformat(),
+            'exit_timestamp_utc': trade.exit_time.isoformat() if trade.exit_time else None,
+
+            'strategy_name': config.strategy_name,
+            'exchange': config.exchange,
+            'instrument': trade.symbol,
+            'interval': config.interval,
+
+            'direction': trade.direction,
+            'entry_price': round(trade.entry_price, 4),
+            'exit_price': round(trade.exit_price, 4) if trade.exit_price else 0.0,
+            'quantity': trade.quantity,
+            'pnl': round(trade.pnl, 4),
+            'exit_reason': trade.exit_reason,
+
+            # Доп инфо
+            'risk_manager': config.risk_config.get('type', 'Unknown')
         }
 
-        # Открываем файл на дозапись ('a')
         with open(trade_log_file, 'a', encoding='utf-8') as f:
             f.write(json.dumps(row_data) + '\n')
 
-    except (IOError, TypeError) as e:
-        logging.error(f"IO Error: Не удалось записать сделку в файл {trade_log_file}: {e}")
     except Exception as e:
-        logging.error(f"Unexpected Error при записи лога сделки: {e}")
+        logger.error(f"Failed to save trade log: {e}")
 
 
 def load_instrument_info(

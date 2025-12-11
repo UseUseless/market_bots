@@ -13,6 +13,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import numpy as np
 
+import app.infrastructure.feeds.backtest.provider
 from app.shared.time_helper import interval_to_timedelta
 from app.infrastructure.storage.file_io import load_trades_from_file
 from app.core.analysis.metrics import PortfolioMetricsCalculator, BenchmarkMetricsCalculator
@@ -21,7 +22,7 @@ from app.shared.config import config
 
 PATH_CONFIG = config.PATH_CONFIG
 BACKTEST_CONFIG = config.BACKTEST_CONFIG
-EXCHANGE_SPECIFIC_CONFIG = config.EXCHANGE_SPECIFIC_CONFIG
+EXCHANGE_SPECIFIC_CONFIG = app.infrastructure.feeds.backtest.provider.EXCHANGE_SPECIFIC_CONFIG
 
 
 def plot_equity_and_drawdown(

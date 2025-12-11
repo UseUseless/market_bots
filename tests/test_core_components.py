@@ -3,7 +3,7 @@ import pytest
 from queue import Queue
 from datetime import datetime
 
-from app.infrastructure.feeds.backtest.local import BacktestDataLoader
+from app.infrastructure.feeds.backtest.provider import BacktestDataLoader
 
 
 @pytest.fixture

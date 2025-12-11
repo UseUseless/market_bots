@@ -26,6 +26,7 @@ from tinkoff.invest import (
 )
 from tinkoff.invest.utils import now, quotation_to_decimal
 
+import app.infrastructure.feeds.backtest.provider
 from app.infrastructure.exchanges.base import ExchangeExchangeHandler
 from app.shared.primitives import ExchangeType
 from app.shared.config import config
@@ -95,7 +96,7 @@ class TinkoffHandler(ExchangeExchangeHandler):
 
             instrument_upper = instrument.upper()
             # Берем класс инструмента по умолчанию из конфига (обычно TQBR для акций РФ)
-            class_code = config.EXCHANGE_SPECIFIC_CONFIG[ExchangeType.TINKOFF]['DEFAULT_CLASS_CODE']
+            class_code = app.infrastructure.feeds.backtest.provider.EXCHANGE_SPECIFIC_CONFIG[ExchangeType.TINKOFF]['DEFAULT_CLASS_CODE']
 
             # 1. Строгий поиск: совпадение тикера и класса
             match = next((i for i in found.instruments

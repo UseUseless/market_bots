@@ -20,6 +20,7 @@ import pandas as pd
 from tqdm import tqdm
 from pybit.unified_trading import HTTP
 
+import app.infrastructure.feeds.backtest.provider
 from app.infrastructure.exchanges.base import ExchangeExchangeHandler
 from app.shared.primitives import ExchangeType
 from app.shared.config import config
@@ -39,7 +40,7 @@ class BybitHandler(ExchangeExchangeHandler):
         """
         super().__init__()
 
-        self.default_category = config.EXCHANGE_SPECIFIC_CONFIG[ExchangeType.BYBIT]["DEFAULT_CATEGORY"]
+        self.default_category = app.infrastructure.feeds.backtest.provider.EXCHANGE_SPECIFIC_CONFIG[ExchangeType.BYBIT]["DEFAULT_CATEGORY"]
 
         self.client = HTTP(testnet=False, timeout=10)
 

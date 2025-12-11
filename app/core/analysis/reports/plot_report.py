@@ -18,11 +18,12 @@ import pandas as pd
 from matplotlib import pyplot as plt
 import matplotlib.ticker as ticker
 
+import app.infrastructure.feeds.backtest.provider
 from app.core.analysis.constants import METRIC_CONFIG
 from app.shared.primitives import ExchangeType
 from app.shared.config import config
 
-EXCHANGE_SPECIFIC_CONFIG = config.EXCHANGE_SPECIFIC_CONFIG
+EXCHANGE_SPECIFIC_CONFIG = app.infrastructure.feeds.backtest.provider.EXCHANGE_SPECIFIC_CONFIG
 
 logger = logging.getLogger(__name__)
 

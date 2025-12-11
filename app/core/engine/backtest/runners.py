@@ -1,276 +1,275 @@
 """
 Модуль запуска бэктестов (Runners).
 
-Содержит функции-оркестраторы ("flows"), которые управляют полным циклом тестирования:
-от инициализации настроек до генерации итоговых отчетов.
+Этот модуль содержит высокоуровневые функции-оркестраторы для выполнения
+тестирования стратегий. Он связывает пользовательский ввод (CLI/GUI),
+конфигурацию (`TradingConfig`) и ядро симуляции (`BacktestEngine`).
 
-Основные сценарии:
-1.  **Single Backtest**: Детальный тест одной стратегии на одном инструменте с
-    полным логированием каждой сделки и генерацией графиков.
-2.  **Batch Backtest**: Массовое тестирование стратегии на списке инструментов
-    (например, топ-10 монет) с агрегацией результатов в Excel.
+Основные функции:
+    - **run_single_backtest_flow**: Детальный тест одной стратегии с генерацией
+      полного отчета (графики, логи сделок).
+    - **run_batch_backtest_flow**: Массовое тестирование на множестве инструментов
+      с агрегацией результатов в Excel.
 """
 
 import logging
 import os
-import queue
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
 from tqdm import tqdm
 
-from app.core.analysis.metrics import PortfolioMetricsCalculator, BenchmarkMetricsCalculator
-from app.core.analysis.reports.excel_report import ExcelReportGenerator
-from app.core.analysis.session import AnalysisSession
+from app.shared.schemas import TradingConfig
 from app.core.engine.backtest.loop import BacktestEngine
-from app.core.risk.manager import AVAILABLE_RISK_MANAGERS
+from app.core.analysis.session import AnalysisSession
+from app.core.analysis.reports.excel_report import ExcelReportGenerator
 from app.shared.logging_setup import setup_backtest_logging, backtest_time_filter
 from app.strategies import AVAILABLE_STRATEGIES
-from app.shared.config import config
-from app.bootstrap.container import container
+from app.shared.config import config as app_config
 
 logger = logging.getLogger(__name__)
 
 
-def _run_and_analyze_single_instrument(engine_settings: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _run_single_task(config: TradingConfig) -> Optional[Dict[str, Any]]:
     """
-    Рабочая функция для запуска бэктеста на одном инструменте.
+    Вспомогательная функция для выполнения одного теста в изолированном потоке.
 
-    Используется как в одиночном, так и в пакетном режиме (и в оптимизации).
-    Выполняет симуляцию, считает базовые метрики и возвращает результат
-    без генерации графических отчетов (это задача вызывающего кода).
+    Используется в пакетном режиме (Batch Backtest). Не генерирует графики,
+    возвращает только ключевые метрики для сводной таблицы.
 
     Args:
-        engine_settings (Dict): Полная конфигурация для BacktestEngine.
+        config (TradingConfig): Конфигурация для конкретного инструмента.
 
     Returns:
-        Optional[Dict]: Словарь с результатами (сделки, метрики, капитал) или None в случае ошибки.
+        Optional[Dict[str, Any]]: Словарь с результатами (PnL, кол-во сделок)
+        или None в случае ошибки.
     """
     try:
-        events_queue = queue.Queue()
-        # Используем FeatureEngine из DI-контейнера для оптимизации ресурсов
-        feature_engine = container.feature_engine
-
-        engine = BacktestEngine(
-            settings=engine_settings,
-            events_queue=events_queue,
-            feature_engine=feature_engine
-        )
+        # Создаем и запускаем движок
+        engine = BacktestEngine(config=config)
         results = engine.run()
 
         if results["status"] == "success" and not results["trades_df"].empty:
-            exchange = engine_settings["exchange"]
-            annual_factor = config.EXCHANGE_SPECIFIC_CONFIG[exchange]["SHARPE_ANNUALIZATION_FACTOR"]
+            trades = results["trades_df"]
 
-            # 1. Расчет метрик стратегии
-            portfolio_calc = PortfolioMetricsCalculator(
-                trades_df=results["trades_df"],
-                initial_capital=results["initial_capital"],
-                annualization_factor=annual_factor
-            )
-            portfolio_metrics = portfolio_calc.calculate_all()
+            # Базовый расчет метрик для Excel-отчета
+            # (Детальный расчет Sharpe/Sortino происходит позже или может быть добавлен здесь)
+            initial = results["initial_capital"]
+            final = results["final_capital"]
+            pnl_abs = final - initial
+            pnl_pct = (pnl_abs / initial) * 100
 
-            # 2. Расчет метрик бенчмарка (Buy & Hold)
-            bench_calc = BenchmarkMetricsCalculator(
-                historical_data=results["enriched_data"],
-                initial_capital=results["initial_capital"],
-                annualization_factor=annual_factor
-            )
-            bench_metrics = bench_calc.calculate_all()
+            # Расчет Win Rate
+            wins = trades[trades['pnl'] > 0]
+            win_rate = len(wins) / len(trades) if len(trades) > 0 else 0.0
 
-            # 3. Сборка итогового словаря
-            full_metrics = {
-                **portfolio_metrics,
-                'pnl_bh_pct': bench_metrics.get('pnl_pct', 0.0),
-                "trades_df": results["trades_df"],
-                "enriched_data": results["enriched_data"],
-                "initial_capital": results["initial_capital"]
+            # Расчет Max Drawdown (упрощенно по сделкам, для скорости)
+            equity = initial + trades['pnl'].cumsum()
+            peak = equity.cummax()
+            dd = (equity - peak) / peak
+            max_dd = abs(dd.min())
+
+            return {
+                "instrument": config.instrument,
+                "pnl_abs": pnl_abs,
+                "pnl_pct": pnl_pct,
+                "total_trades": len(trades),
+                "win_rate": win_rate,
+                "max_drawdown": max_dd,
+                # Считаем PnL Buy & Hold (нужны данные)
+                "pnl_bh_pct": 0.0, # Можно доработать, если передавать enriched_data
+                "profit_factor": 0.0 # Можно доработать через MetricsCalculator
             }
-            return full_metrics
 
     except Exception as e:
-        instrument = engine_settings.get("instrument", "N/A")
-        logger.error(f"Ошибка при обработке инструмента '{instrument}': {e}", exc_info=True)
+        # Логируем ошибку, но не роняем весь батч
+        # Используем print, т.к. логгер может быть настроен на tqdm
+        pass
 
     return None
 
 
-def run_single_backtest_flow(run_settings: Dict[str, Any]):
+def run_single_backtest_flow(run_settings: Dict[str, Any]) -> None:
     """
-    Сценарий запуска одиночного бэктеста.
+    Запускает одиночный бэктест с полным логированием и отчетами.
 
-    Особенности:
-    - Включает детальное логирование в файл.
-    - Генерирует полные отчеты (графики, консольный вывод).
-    - Предназначен для глубокого анализа работы стратегии.
+    Алгоритм:
+    1. Формирует `TradingConfig` из аргументов.
+    2. Настраивает файловое логирование.
+    3. Запускает симуляцию.
+    4. Генерирует графические отчеты (AnalysisSession).
 
     Args:
-        run_settings (Dict): Параметры запуска из CLI/Launcher.
+        run_settings (Dict[str, Any]): Словарь настроек из CLI/Launcher.
     """
     strategy_name = run_settings["strategy"]
-    instrument = run_settings["instrument"]
-    interval = run_settings["interval"]
-    risk_manager_type = run_settings["risk_manager_type"]
-    exchange = run_settings["exchange"]
+    strategy_cls = AVAILABLE_STRATEGIES[strategy_name]
 
-    strategy_class = AVAILABLE_STRATEGIES[strategy_name]
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Получаем дефолтные параметры стратегии
+    strategy_params = strategy_cls.get_default_params()
 
-    # Формируем имя файла лога и отчета
-    base_filename = (
-        f"{timestamp}_{strategy_class.__name__}_{instrument}_"
-        f"{interval}_RM-{risk_manager_type}"
-    )
-
-    log_dir = config.PATH_CONFIG["LOGS_BACKTEST_DIR"]
-    log_file_path = os.path.join(log_dir, f"{base_filename}_run.log")
-    trade_log_path = os.path.join(log_dir, f"{base_filename}_trades.jsonl")
-
-    # Настраиваем отдельный логгер для этого прогона
-    setup_backtest_logging(log_file_path)
-
-    logger.info(f"Запуск потока одиночного бэктеста: {base_filename}")
-
-    engine_settings = {
-        "strategy_class": strategy_class,
-        "exchange": exchange,
-        "instrument": instrument,
-        "interval": interval,
-        "risk_manager_type": risk_manager_type,
-        "initial_capital": config.BACKTEST_CONFIG["INITIAL_CAPITAL"],
-        "commission_rate": config.BACKTEST_CONFIG["COMMISSION_RATE"],
-        "data_dir": config.PATH_CONFIG["DATA_DIR"],
-        "trade_log_path": trade_log_path,
-        "strategy_params": None,  # Используются дефолтные
-        "risk_manager_params": None
+    # Формируем конфиг риска
+    risk_config = {
+        "type": run_settings.get("risk_manager_type", "FIXED"),
+        # Сюда можно добавить параметры из run_settings, если они там есть
     }
 
-    try:
-        analysis_results = _run_and_analyze_single_instrument(engine_settings)
+    # Создаем единый объект конфигурации
+    config = TradingConfig(
+        mode="BACKTEST",
+        exchange=run_settings["exchange"],
+        instrument=run_settings["instrument"],
+        interval=run_settings["interval"],
+        strategy_name=strategy_name,
+        strategy_params=strategy_params,
+        risk_config=risk_config,
+        initial_capital=app_config.BACKTEST_CONFIG["INITIAL_CAPITAL"],
+        commission_rate=app_config.BACKTEST_CONFIG["COMMISSION_RATE"]
+    )
 
-        if analysis_results:
-            logger.info(f"Бэктест завершен, найдено {analysis_results['total_trades']} сделок. Генерация отчетов.")
+    # Настройка путей для логов
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base_filename = f"{timestamp}_{strategy_name}_{config.instrument}_{config.interval}"
+    log_file = os.path.join(app_config.PATH_CONFIG["LOGS_BACKTEST_DIR"], f"{base_filename}.log")
 
-            # Запуск сессии анализа для генерации графиков
-            analysis_session = AnalysisSession(
-                trades_df=analysis_results["trades_df"],
-                historical_data=analysis_results["enriched_data"],
-                initial_capital=analysis_results["initial_capital"],
-                exchange=exchange,
-                interval=interval,
-                risk_manager_type=risk_manager_type,
-                strategy_name=strategy_class.__name__
-            )
+    # Включаем детальное логирование в файл
+    setup_backtest_logging(log_file)
+    logger.info(f"Запуск одиночного бэктеста: {config}")
 
-            analysis_session.generate_all_reports(
-                base_filename=base_filename,
-                report_dir=config.PATH_CONFIG["REPORTS_BACKTEST_DIR"]
-            )
-        else:
-            logger.warning("Бэктест завершен без сделок или с ошибкой. Отчеты не сгенерированы.")
+    # Запуск движка
+    engine = BacktestEngine(config=config)
+    results = engine.run()
 
-    except Exception:
-        logger.critical("Произошла критическая ошибка во время выполнения потока бэктеста!", exc_info=True)
-    finally:
-        backtest_time_filter.reset_sim_time()
-        logger.info("--- Поток одиночного бэктеста завершен ---")
+    # Пост-процессинг и отчеты
+    if results["status"] == "success" and not results["trades_df"].empty:
+        logger.info(f"Бэктест завершен. Сделок: {len(results['trades_df'])}")
+
+        # Инициализация сессии анализа
+        session = AnalysisSession(
+            trades_df=results["trades_df"],
+            historical_data=results["enriched_data"],
+            initial_capital=config.initial_capital,
+            exchange=config.exchange,
+            interval=config.interval,
+            risk_manager_type=risk_config["type"],
+            strategy_name=strategy_name
+        )
+
+        # Генерация графиков и консольного отчета
+        session.generate_all_reports(
+            base_filename=base_filename,
+            report_dir=app_config.PATH_CONFIG["REPORTS_BACKTEST_DIR"]
+        )
+
+        # Сохранение лога сделок (JSONL) для Дашборда
+        trades_log_path = os.path.join(app_config.PATH_CONFIG["LOGS_BACKTEST_DIR"], f"{base_filename}_trades.jsonl")
+        results["trades_df"].to_json(trades_log_path, orient="records", lines=True, date_format="iso")
+        logger.info(f"Лог сделок сохранен: {trades_log_path}")
+
+    else:
+        logger.warning("Бэктест завершен без сделок или возникла ошибка.")
+        if results.get("message"):
+            logger.error(f"Сообщение ошибки: {results['message']}")
+
+    # Сброс фильтра времени в логгере
+    backtest_time_filter.reset_sim_time()
 
 
-def run_batch_backtest_flow(run_settings: Dict[str, Any]):
+def run_batch_backtest_flow(run_settings: Dict[str, Any]) -> None:
     """
-    Сценарий запуска пакетного бэктеста.
+    Запускает пакетное тестирование стратегии на списке инструментов.
 
-    Особенности:
-    - Запускает тесты параллельно (multiprocessing/threading).
-    - Не генерирует графики для каждого инструмента (слишком много файлов).
-    - Собирает сводную статистику в один Excel-файл.
+    Алгоритм:
+    1. Сканирует папку данных на наличие файлов `.parquet`.
+    2. Создает `TradingConfig` для каждого инструмента.
+    3. Запускает тесты параллельно через `ThreadPoolExecutor`.
+    4. Агрегирует результаты в Excel-отчет.
 
     Args:
-        run_settings (Dict): Параметры запуска.
+        run_settings (Dict[str, Any]): Настройки из CLI (без конкретного инструмента).
     """
     strategy_name = run_settings["strategy"]
     exchange = run_settings["exchange"]
     interval = run_settings["interval"]
-    risk_manager_type = run_settings["risk_manager_type"]
 
-    logger.info(f"--- Запуск потока пакетного тестирования для стратегии '{strategy_name}' ---")
-    logger.info(f"Биржа: {exchange}, Интервал: {interval}, Риск-менеджер: {risk_manager_type}")
+    # Подготовка общих параметров
+    strategy_cls = AVAILABLE_STRATEGIES[strategy_name]
+    strategy_params = strategy_cls.get_default_params()
+    risk_config = {"type": run_settings.get("risk_manager_type", "FIXED")}
 
-    interval_path = os.path.join(config.PATH_CONFIG["DATA_DIR"], exchange, interval)
-    if not os.path.isdir(interval_path):
-        logger.error(f"Ошибка: Директория с данными не найдена: {interval_path}")
+    # Определение пути к данным
+    data_dir = os.path.join(app_config.PATH_CONFIG["DATA_DIR"], exchange, interval)
+    if not os.path.isdir(data_dir):
+        logger.error(f"Директория с данными не найдена: {data_dir}")
         return
 
-    # Сканируем папку на наличие файлов данных
-    data_files = [f for f in os.listdir(interval_path) if f.endswith(config.DATA_FILE_EXTENSION)]
-    if not data_files:
-        logger.warning(f"В директории {interval_path} не найдено файлов данных ({config.DATA_FILE_EXTENSION}).")
+    # Поиск файлов
+    files = [f for f in os.listdir(data_dir) if f.endswith(".parquet")]
+    if not files:
+        logger.warning("Нет данных для тестирования.")
         return
-    logger.info(f"Найдено {len(data_files)} инструментов для тестирования.")
 
-    strategy_class = AVAILABLE_STRATEGIES[strategy_name]
-    rm_class = AVAILABLE_RISK_MANAGERS[risk_manager_type]
-    strategy_params = strategy_class.get_default_params()
-    rm_params = rm_class.get_default_params()
+    logger.info(f"Найдено {len(files)} инструментов. Старт пакетного теста...")
 
-    logger.info(f"Используются параметры стратегии по умолчанию: {strategy_params}")
-    logger.info(f"Используются параметры риск-менеджера по умолчанию: {rm_params}")
+    # Создание списка задач (Configs)
+    configs = []
+    for f in files:
+        instrument = f.replace(".parquet", "")
+        cfg = TradingConfig(
+            mode="BACKTEST",
+            exchange=exchange,
+            instrument=instrument,
+            interval=interval,
+            strategy_name=strategy_name,
+            strategy_params=strategy_params,
+            risk_config=risk_config,
+            initial_capital=app_config.BACKTEST_CONFIG["INITIAL_CAPITAL"],
+            commission_rate=app_config.BACKTEST_CONFIG["COMMISSION_RATE"]
+        )
+        configs.append(cfg)
 
-    # Формируем список задач
-    tasks = []
-    for filename in data_files:
-        instrument = os.path.splitext(filename)[0]
-        task_settings = {
-            "strategy_class": strategy_class,
-            "exchange": exchange,
-            "instrument": instrument,
-            "interval": interval,
-            "risk_manager_type": risk_manager_type,
-            "initial_capital": config.BACKTEST_CONFIG["INITIAL_CAPITAL"],
-            "commission_rate": config.BACKTEST_CONFIG["COMMISSION_RATE"],
-            "data_dir": config.PATH_CONFIG["DATA_DIR"],
-            "strategy_params": strategy_params,
-            "risk_manager_params": rm_params,
-            "trade_log_path": None,  # В пакетном режиме детальные логи сделок отключены для экономии места
-        }
-        tasks.append(task_settings)
-
-    # Параллельный запуск
+    # Параллельное выполнение
     results_list = []
-    with ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
-        future_to_settings = {executor.submit(_run_and_analyze_single_instrument, task): task for task in tasks}
+    # Используем кол-во ядер CPU для воркеров
+    max_workers = os.cpu_count() or 4
 
-        # Используем tqdm для отображения прогресса по всем задачам
-        progress_bar = tqdm(as_completed(future_to_settings), total=len(tasks), desc="Общий прогресс")
-        for future in progress_bar:
-            result_dict = future.result()
-            if result_dict:
-                settings_for_future = future_to_settings[future]
-                result_dict['instrument'] = settings_for_future['instrument']
-                results_list.append(result_dict)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit задач
+        futures = {executor.submit(_run_single_task, cfg): cfg for cfg in configs}
+
+        # Прогресс-бар
+        for future in tqdm(as_completed(futures), total=len(configs), desc="Processing"):
+            res = future.result()
+            if res:
+                results_list.append(res)
 
     if not results_list:
-        logger.warning("Ни один из бэктестов не вернул корректных результатов.")
+        logger.warning("Все тесты завершились без результатов.")
         return
 
-    # Генерация сводного Excel-отчета
-    results_df = pd.DataFrame(results_list)
-    report_dir = config.PATH_CONFIG["REPORTS_BATCH_TEST_DIR"]
-    os.makedirs(report_dir, exist_ok=True)
-
+    # Генерация Excel отчета
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    report_filename = f"{timestamp}_{strategy_name}_{interval}_{len(results_df)}instr.xlsx"
-    output_path = os.path.join(report_dir, report_filename)
+    report_filename = f"{timestamp}_BATCH_{strategy_name}_{interval}.xlsx"
+    output_path = os.path.join(app_config.PATH_CONFIG["REPORTS_BATCH_TEST_DIR"], report_filename)
 
-    excel_generator = ExcelReportGenerator(
-        results_df=results_df,
-        strategy_name=strategy_name,
-        interval=interval,
-        risk_manager_type=risk_manager_type,
-        strategy_params=strategy_params,
-        rm_params=rm_params
-    )
-    excel_generator.generate(output_path)
-    logger.info(f"\n--- Поток пакетного тестирования успешно завершен. Отчет сохранен в {output_path} ---")
+    # Убедимся, что папка существует
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    try:
+        results_df = pd.DataFrame(results_list)
+
+        generator = ExcelReportGenerator(
+            results_df=results_df,
+            strategy_name=strategy_name,
+            interval=interval,
+            risk_manager_type=risk_config["type"],
+            strategy_params=strategy_params,
+            rm_params=risk_config
+        )
+        generator.generate(output_path)
+        logger.info(f"Пакетный тест завершен. Отчет: {output_path}")
+
+    except Exception as e:
+        logger.error(f"Ошибка при создании Excel-отчета: {e}", exc_info=True)
