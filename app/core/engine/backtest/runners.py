@@ -32,13 +32,13 @@ from app.shared.config import config as app_config
 logger = logging.getLogger(__name__)
 
 
-def _assemble_config(run_settings: Dict[str, Any], mode: str) -> TradingConfig:
+def _create_config(run_settings: Dict[str, Any], mode: str) -> TradingConfig:
     """
-    Фабричный метод сборки единого конфигурационного объекта.
+    Сборка единого конфига.
 
-    Отвечает за слияние (Merge) параметров:
-    1. Дефолтные настройки из кода стратегии (Base).
-    2. Пользовательские настройки из CLI (Override).
+    Обеъдиняет в один объект параметры:
+    1. Параметры из стратегии.
+    2. Параметры из консоли (CLI).
 
     Args:
         run_settings: Словарь аргументов из командной строки.
@@ -55,9 +55,6 @@ def _assemble_config(run_settings: Dict[str, Any], mode: str) -> TradingConfig:
         raise ValueError(f"Стратегия '{strategy_name}' не найдена в реестре.")
 
     # 2. Сборка параметров стратегии (Defaults | CLI Overrides)
-    # В текущей реализации CLI не передает детальные params (только имя стратегии),
-    # но архитектурно мы готовим место под это (например, --params '{"sma": 50}').
-    # Пока берем чистые дефолты.
     final_strategy_params = strategy_cls.get_default_params()
 
     # Если в run_settings будут переданы специфичные параметры (например из оптимизатора),
@@ -65,9 +62,7 @@ def _assemble_config(run_settings: Dict[str, Any], mode: str) -> TradingConfig:
     if "strategy_params" in run_settings:
         final_strategy_params.update(run_settings["strategy_params"])
 
-    # 3. Сборка конфигурации риска
-    # CLI передает только тип (FIXED/ATR), параметры берутся дефолтные из RiskManager
-    # или могут быть расширены в будущем.
+    # 3. Получение параметров риска
     risk_config = {
         "type": run_settings.get("risk_manager_type", "FIXED")
     }
@@ -140,9 +135,10 @@ def run_single_backtest_flow(run_settings: Dict[str, Any]) -> None:
     3. Запуск Engine.
     4. Запуск AnalysisSession (генерация PDF/PNG отчетов).
     """
+
     # 1. Сборка конфигурации
     try:
-        config = _assemble_config(run_settings, mode="BACKTEST")
+        config = _create_config(run_settings, mode="BACKTEST")
     except ValueError as e:
         print(f"Ошибка конфигурации: {e}")
         return
@@ -226,7 +222,7 @@ def run_batch_backtest_flow(run_settings: Dict[str, Any]) -> None:
         # Подменяем инструмент в настройках для сборщика
         base_settings["instrument"] = instrument
         try:
-            cfg = _assemble_config(base_settings, mode="BACKTEST")
+            cfg = _create_config(base_settings, mode="BACKTEST")
             configs.append(cfg)
         except ValueError:
             continue

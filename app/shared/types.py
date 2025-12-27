@@ -55,6 +55,7 @@ class Trade:
     id: str  # UUID или уникальный хеш
     symbol: str
     direction: TradeDirection
+    strategy_name: str
 
     # --- ВХОД (Entry) ---
     entry_time: datetime

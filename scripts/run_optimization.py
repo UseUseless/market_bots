@@ -63,8 +63,8 @@ def main() -> None:
         help="Стратегия."
     )
     parser.add_argument(
-        "--rm", dest="risk_manager_type", type=str, default="FIXED",
-        choices=list(RISK_MANAGEMENT_TYPES.keys()),
+        "--rm", dest="rm", type=str, default="FIXED",
+        choices=list(RISK_MANAGEMENT_TYPES),
         help="Тип риск-менеджера."
     )
 
@@ -74,10 +74,11 @@ def main() -> None:
         choices=list(METRIC_CONFIG.keys()),
         help="Целевые метрики."
     )
-    parser.add_argument("--n_trials", type=int, default=100, help="Итераций Optuna на шаг.")
-    parser.add_argument("--total_periods", type=int, required=True, help="Всего частей истории.")
-    parser.add_argument("--train_periods", type=int, required=True, help="Частей для обучения (Train).")
-    parser.add_argument("--test_periods", type=int, default=1, help="Частей для теста (Test).")
+    # argparse автоматически сохранит их в переменные с подчеркиванием (args.n_trials)
+    parser.add_argument("--n-trials", dest="n_trials", type=int, default=100, help="Итераций Optuna на шаг.")
+    parser.add_argument("--total-periods", dest="total_periods", type=int, required=True, help="Всего частей истории.")
+    parser.add_argument("--train-periods", dest="train_periods", type=int, required=True, help="Частей для обучения (Train).")
+    parser.add_argument("--test-periods", dest="test_periods", type=int, default=1, help="Частей для теста (Test).")
 
     args = parser.parse_args()
     settings = vars(args)

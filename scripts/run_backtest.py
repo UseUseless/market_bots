@@ -2,9 +2,9 @@
 Запуск одиночного бэктеста.
 
 Это скрипт для тестирования одной конкретной стратегии на одном инструменте и интервале.
-Он парсит аргументы командной строки и передает управление в ядро симуляции (`app.core.engine.backtest`).
+Он парсит аргументы командной строки и передает управление в движок (`app.core.engine.backtest`).
 
-Результаты теста (сделки, метрики) будут сохранены в логи и могут быть позже проанализированы через Dashboard.
+Результаты теста (сделки, метрики) будут сохранены в логи и могут быть открыты через Dashboard.
 
 Пример запуска:
     python scripts/run_backtest.py --strategy SimpleSMACross --exchange bybit --instrument BTCUSDT --interval 1hour
@@ -69,7 +69,7 @@ def main() -> None:
         dest="risk_manager_type",
         type=str,
         default="FIXED",
-        choices=list(RISK_MANAGEMENT_TYPES.keys()),
+        choices=list(RISK_MANAGEMENT_TYPES),
         help="Тип риск-менеджера."
     )
 

@@ -19,6 +19,9 @@ from app.shared.config import config
 
 BASE_DIR = config.BASE_DIR
 
+# Ключи, которые используются только внутри UI диалогов и не должны попадать в CLI аргументы
+INTERNAL_KEYS = {"mode", "confirm"}
+
 
 def _build_cli_args(settings: Dict[str, Any], positional_key: str = None) -> List[str]:
     """
@@ -42,7 +45,7 @@ def _build_cli_args(settings: Dict[str, Any], positional_key: str = None) -> Lis
     # 2. Обработка остальных аргументов
     for key, value in settings.items():
         # Пропускаем служебные ключи или пустые значения
-        if value is None:
+        if value is None or key in INTERNAL_KEYS:
             continue
 
         # Преобразуем python-ключи в CLI-флаги (risk_manager_type -> --rm)
@@ -101,7 +104,7 @@ def _run_script(script_name: str, args: List[str] = None):
 SCRIPT_CONFIG = {
     "manage_data.py": {
         "name": "💾 Управление данными (Data Manager)",
-        "prompt_func": user_prompts.prompt_for_data_management,
+        "prompt_func": dialogs.prompt_for_data_management,
         "positional_arg": "action"  # 'action' из промпта станет командой (update/download)
     },
     "run_backtest.py": {
@@ -130,7 +133,7 @@ SCRIPT_CONFIG = {
     },
     "init_db.py": {
         "name": "🛠️ Инициализация БД",
-        "prompt_func": lambda: {"confirm": questionary.confirm("Создать таблицы?").ask()},
+        "prompt_func": lambda: {"confirm": dialogs.ask(questionary.confirm, "Создать таблицы?")},
     }
 }
 

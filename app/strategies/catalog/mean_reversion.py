@@ -90,7 +90,8 @@ class MeanReversionStrategy(BaseStrategy):
                 timestamp=timestamp,
                 instrument=self.instrument,
                 direction=TradeDirection.BUY,
-                price=last_candle['close']
+                price=last_candle['close'],
+                strategy_name=self.name
             ))
 
         # Сигнал на продажу (возврат к среднему сверху)
@@ -99,7 +100,8 @@ class MeanReversionStrategy(BaseStrategy):
                 timestamp=timestamp,
                 instrument=self.instrument,
                 direction=TradeDirection.SELL,
-                price=last_candle['close']
+                price=last_candle['close'],
+                strategy_name=self.name
             ))
 
         # Сигнал на закрытие лонга (пересечение нулевой линии)
@@ -108,7 +110,8 @@ class MeanReversionStrategy(BaseStrategy):
                 timestamp=timestamp,
                 instrument=self.instrument,
                 direction=TradeDirection.SELL,
-                price=last_candle['close']
+                price=last_candle['close'],
+                strategy_name=self.name
             ))
 
         # Сигнал на закрытие шорта (пересечение нулевой линии)
@@ -117,5 +120,6 @@ class MeanReversionStrategy(BaseStrategy):
                 timestamp=timestamp,
                 instrument=self.instrument,
                 direction=TradeDirection.BUY,
-                price=last_candle['close']
+                price=last_candle['close'],
+                strategy_name=self.name
             ))

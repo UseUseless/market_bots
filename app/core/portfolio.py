@@ -216,6 +216,7 @@ class Portfolio:
             id=str(uuid.uuid4()),
             symbol=event.instrument,
             direction=event.direction,
+            strategy_name=self.config.strategy_name,
             entry_time=event.timestamp,
             entry_price=event.price,
             quantity=event.quantity,

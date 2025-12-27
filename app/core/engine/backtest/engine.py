@@ -90,7 +90,9 @@ class BacktestEngine:
             self.config.exchange, self.config.instrument, self.config.interval
         )
 
-        # 2. Инициализация Стратегии (Factory Pattern через реестр)
+        # 2. Инициализация Стратегии (Factory Pattern)
+        # AVAILABLE_STRATEGIES - Dict[str, Type[BaseStrategy]]
+        # Поэтому в переменной лежит класс стратегии нашей
         StrategyClass = AVAILABLE_STRATEGIES[self.config.strategy_name]
         strategy = StrategyClass(
             events_queue=self.events_queue,
@@ -221,12 +223,12 @@ class BacktestEngine:
             while feed.next():
                 self.current_candle = feed.get_current_candle()
 
-                # Обновляем время в логгере для корректной отладки
                 market_event = MarketEvent(
                     timestamp=self.current_candle['time'],
                     instrument=self.config.instrument,
                     data=self.current_candle
                 )
+                # Обновляем время в логгере для корректной отладки
                 backtest_time_filter.set_sim_time(market_event.timestamp)
 
                 # === PHASE 1: EXECUTION (Open) ===
@@ -249,7 +251,7 @@ class BacktestEngine:
                 strategy.on_candle(feed)
                 self._process_queue()
 
-            # --- Teardown (Завершение) ---
+            # Конец бэктеста
             backtest_time_filter.reset_sim_time()
 
             # Сбор результатов: конвертация объектов Trade в DataFrame
@@ -257,8 +259,13 @@ class BacktestEngine:
             for t in portfolio.closed_trades:
                 d = t.__dict__.copy()
                 # Маппинг полей для совместимости с AnalysisSession
+                # TODO: ВПАДЛУ БЫЛО МЕНЯТЬ ПО ВСЕМ ФАЙЛАМ. ПОТОМ!
                 d['entry_timestamp_utc'] = d['entry_time']
                 d['exit_timestamp_utc'] = d['exit_time']
+                d['exchange'] = self.config.exchange
+                d['interval'] = self.config.interval
+                d['risk_manager'] = self.config.risk_config.get('type', 'FIXED')
+                d['instrument'] = self.config.instrument
                 trade_dicts.append(d)
 
             trades_df = pd.DataFrame(trade_dicts)
@@ -352,7 +359,7 @@ class BacktestExecutionHandler:
            - Для Market Order: используется цена Open текущей свечи (так как решение принято на Close предыдущей).
            - Для Limit/Stop: используется цена из ордера.
         2. Рассчитывает проскальзывание на основе объема свечи.
-        3. Рассчитывает комиссию в валюте котировки.
+        3. Рассчитывает комиссию.
         4. Генерирует событие исполнения (FillEvent).
 
         Args:

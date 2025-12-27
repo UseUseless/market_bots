@@ -112,12 +112,12 @@ class AnalysisSession:
                              wfo_results: Optional[Dict[str, float]] = None,
                              console_output: bool = True):
         """
-        Создает и сохраняет отчеты.
+        Создает отчеты.
 
         Args:
             base_filename (str): Имя файла (без расширения), которое будет использовано для отчетов.
             report_dir (str): Путь к директории для сохранения файлов.
-            wfo_results (Optional[Dict]): Результаты Walk-Forward Optimization (если применимо),
+            wfo_results (Optional[Dict]): Результаты Walk-Forward Optimization,
                                           чтобы добавить их текстом на график.
             console_output (bool): Если True, выводит краткую сводку в терминал.
         """

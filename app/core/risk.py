@@ -41,11 +41,11 @@ class RiskManager:
         # --- Параметры для FIXED режима ---
         "stop_loss_pct": {
             "type": "float", "default": 2.0, "optimizable": True,
-            "low": 0.5, "high": 5.0, "step": 0.1,
+            "low": 1.0, "high": 5.0, "step": 0.1,
             "description": "Stop Loss в % от цены входа (для Fixed mode)."
         },
         "take_profit_ratio": {
-            "type": "float", "default": 2.0, "optimizable": True,
+            "type": "float", "default": 1.5, "optimizable": True,
             "low": 1.0, "high": 5.0, "step": 0.5,
             "description": "Отношение TP к SL (Risk/Reward Ratio)."
         },

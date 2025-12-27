@@ -40,6 +40,7 @@ class LiveDebugStrategy(BaseStrategy):
             timestamp=timestamp,
             instrument=self.instrument,
             direction=direction,
-            price=last_candle['close']
+            price=last_candle['close'],
+            strategy_name=self.name
         )
         self.events_queue.put(signal)

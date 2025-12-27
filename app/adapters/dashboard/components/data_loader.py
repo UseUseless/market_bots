@@ -1,13 +1,8 @@
 """
 Загрузчик данных для Дашборда.
 
-Этот модуль отвечает за сканирование директории логов, чтение файлов результатов
-бэктестов (`.jsonl`) и сопоставление их с историческими рыночными данными (`.parquet`).
-
-Ключевые функции:
-1. **Агрегация:** Сбор разрозненных файлов логов в единый DataFrame.
-2. **Аналитика:** Запуск `AnalysisSession` для расчета метрик (PnL, Sharpe, Drawdown) на лету.
-3. **Кэширование:** Использование механизмов Streamlit для ускорения работы интерфейса.
+Отвечает за чтение логов сделок и сопоставление их с историческими данными.
+Рассчитан на актуальный формат логов, где все метаданные записаны внутри JSON.
 """
 
 import os
@@ -27,39 +22,27 @@ BACKTEST_CONFIG = config.BACKTEST_CONFIG
 def _process_single_backtest_file(file_path: str) -> Optional[Dict[str, Any]]:
     """
     Обрабатывает один файл лога сделок.
-
-    Алгоритм:
-    1. Читает лог сделок.
-    2. Извлекает параметры стратегии (тикер, интервал) из первой записи.
-    3. Находит соответствующий файл исторических данных (Parquet).
-    4. Запускает `AnalysisSession` для расчета метрик портфеля и бенчмарка.
-
-    Args:
-        file_path (str): Полный путь к файлу `_trades.jsonl`.
-
-    Returns:
-        Optional[Dict[str, Any]]: Словарь с метриками для сводной таблицы
-        или словарь с ключом "error", если обработка не удалась.
-        Возвращает None, если файл пуст.
+    Ожидает, что файл содержит полные метаданные (exchange, strategy_name, etc.).
     """
     try:
-        # --- 1. Загрузка сделок ---
+        # 1. Загрузка сделок
         filename = os.path.basename(file_path)
         trades_df = load_trades_from_file(file_path)
 
         if trades_df.empty:
-            return None  # Игнорируем пустые логи (бэктест без сделок)
+            return None
 
-        # --- 2. Извлечение метаданных ---
-        # Предполагаем, что метаданные одинаковы для всех сделок в файле
-        first_trade = trades_df.iloc[0]
-        strategy_name = first_trade['strategy_name']
-        exchange = first_trade['exchange']
-        instrument = first_trade['instrument']
-        interval = first_trade['interval']
-        risk_manager = first_trade['risk_manager']
+        # 2. Извлечение метаданных из первой сделки
+        # Мы полагаемся на то, что BacktestEngine.run() записал эти поля.
+        first_row = trades_df.iloc[0]
 
-        # --- 3. Поиск исторических данных (для бенчмарка и графиков) ---
+        strategy_name = first_row['strategy_name']
+        exchange = first_row['exchange']
+        instrument = first_row['instrument']
+        interval = first_row['interval']
+        risk_manager = first_row['risk_manager']
+
+        # 3. Поиск исторических данных (для бенчмарка и графиков)
         data_path = os.path.join(
             PATH_CONFIG["DATA_DIR"],
             exchange,
@@ -67,13 +50,14 @@ def _process_single_backtest_file(file_path: str) -> Optional[Dict[str, Any]]:
             f"{instrument.upper()}.parquet"
         )
 
-        if not os.path.exists(data_path):
-            # Если данные удалены, мы не сможем построить Equity Curve и сравнить с Bench
-            raise FileNotFoundError(f"Файл исторических данных не найден: {data_path}")
+        historical_data = pd.DataFrame()
+        if os.path.exists(data_path):
+            historical_data = pd.read_parquet(data_path)
+        else:
+            # Если данных нет (например, удалены), AnalysisSession обработает это штатно (пустой бенчмарк)
+            pass
 
-        historical_data = pd.read_parquet(data_path)
-
-        # --- 4. Запуск аналитического ядра ---
+        # 4. Запуск аналитического ядра
         analysis = AnalysisSession(
             trades_df=trades_df,
             historical_data=historical_data,
@@ -87,7 +71,7 @@ def _process_single_backtest_file(file_path: str) -> Optional[Dict[str, Any]]:
         portfolio_metrics = analysis.portfolio_metrics
         benchmark_metrics = analysis.benchmark_metrics
 
-        # --- 5. Формирование строки результата ---
+        # 5. Формирование результата для таблицы
         profit_factor = portfolio_metrics.get("profit_factor", 0)
 
         return {
@@ -102,14 +86,15 @@ def _process_single_backtest_file(file_path: str) -> Optional[Dict[str, Any]]:
             "PnL (B&H %)": benchmark_metrics.get("pnl_pct", 0),
             "Win Rate (%)": portfolio_metrics.get("win_rate", 0) * 100,
             "Max Drawdown (%)": portfolio_metrics.get("max_drawdown", 0) * 100,
-            # Защита от бесконечности для JSON/Display
             "Profit Factor": float(profit_factor) if np.isfinite(profit_factor) else 999.0,
             "Sharpe Ratio": portfolio_metrics.get("sharpe_ratio", 0),
             "Total Trades": int(portfolio_metrics.get("total_trades", 0)),
         }
 
+    except KeyError as e:
+        # Если в файле нет нужного ключа — значит это старый или битый файл
+        return {"error": f"Файл {os.path.basename(file_path)} имеет устаревший формат (нет поля {e})."}
     except Exception as e:
-        # Возвращаем ошибку как данные, чтобы отобразить её в UI, а не крашить приложение
         return {"error": f"Ошибка обработки {os.path.basename(file_path)}: {e}"}
 
 
@@ -117,18 +102,6 @@ def _process_single_backtest_file(file_path: str) -> Optional[Dict[str, Any]]:
 def load_all_backtests(logs_dir: str) -> Tuple[pd.DataFrame, List[str]]:
     """
     Сканирует папку логов и собирает сводную таблицу результатов.
-
-    Использует кэширование Streamlit (`@st.cache_data`). Это означает, что
-    функция не будет перезапускаться при каждом клике пользователя в интерфейсе,
-    если аргумент `logs_dir` не изменился (или если кэш не был сброшен вручную).
-
-    Args:
-        logs_dir (str): Путь к директории с логами бэктестов.
-
-    Returns:
-        Tuple[pd.DataFrame, List[str]]:
-            - DataFrame со сводной статистикой по всем успешным загрузкам.
-            - Список сообщений об ошибках для файлов, которые не удалось прочитать.
     """
     all_results = []
     failed_files = []
@@ -136,7 +109,7 @@ def load_all_backtests(logs_dir: str) -> Tuple[pd.DataFrame, List[str]]:
     if not os.path.isdir(logs_dir):
         return pd.DataFrame(), [f"Директория логов не найдена: {logs_dir}"]
 
-    # Рекурсивный поиск всех файлов _trades.jsonl
+    # Рекурсивный поиск
     log_files = []
     for root, _, files in os.walk(logs_dir):
         for filename in files:
@@ -146,7 +119,6 @@ def load_all_backtests(logs_dir: str) -> Tuple[pd.DataFrame, List[str]]:
     if not log_files:
         return pd.DataFrame(), []
 
-    # Визуализация прогресса загрузки
     progress_bar = st.progress(0, text="Анализ файлов бэктестов...")
 
     for i, file_path in enumerate(log_files):
@@ -158,11 +130,10 @@ def load_all_backtests(logs_dir: str) -> Tuple[pd.DataFrame, List[str]]:
             else:
                 all_results.append(result_row)
 
-        # Обновляем прогресс-бар
         progress = (i + 1) / len(log_files)
         progress_bar.progress(progress, text=f"Обработка: {os.path.basename(file_path)}")
 
-    progress_bar.empty()  # Скрываем бар после завершения
+    progress_bar.empty()
 
     if not all_results:
         return pd.DataFrame(), failed_files
