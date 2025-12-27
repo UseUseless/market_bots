@@ -36,102 +36,97 @@ logger = logging.getLogger(__name__)
 
 class TinkoffHandler(ExchangeExchangeHandler):
     """
-    Адаптер для биржи Tinkoff Invest.
-    Работает в режиме Read-Only.
+    Адаптер для взаимодействия с API Тинькофф Инвестиций.
     """
-
     def __init__(self):
-        """
-        Инициализирует клиента.
+        """Инициализирует клиент, проверяет наличие токена и устанавливает настройки по умолчанию.
+
+        Raises:
+            ConnectionError: Если токен не найден в конфигурации.
         """
         super().__init__()
-
         self.token = config.TINKOFF_TOKEN_READONLY
-
         if not self.token or "Your" in self.token:
-            raise ConnectionError(
-                "TINKOFF_TOKEN_READONLY не задан в .env. Для работы необходим токен (можно только для чтения).")
-
-        logging.info(f"Tinkoff Client инициализирован (Token: READONLY).")
+            raise ConnectionError("TINKOFF_TOKEN_READONLY не задан.")
+        
+        # Кэш для настроек (класс по умолчанию)
+        self.default_class = config.EXCHANGE_SPECIFIC_CONFIG[ExchangeType.TINKOFF].get('DEFAULT_CLASS_CODE', 'TQBR')
+        
+        logging.info(f"Tinkoff Client инициализирован.")
         self._check_token()
 
     def _check_token(self) -> bool:
         """
-        Проверяет валидность токена ReadOnly простым запросом к API.
+        Проверяет валидность токена путем выполнения тестового запроса.
 
         Returns:
             bool: True, если токен валиден.
 
         Raises:
-            ConnectionAbortedError: Если токен недействителен.
+            ConnectionAbortedError: Если токен невалиден или запрос завершился ошибкой.
         """
         try:
             with Client(self.token) as client:
-                # Простейший запрос - получение статуса сервисов или счетов
                 client.instruments.shares(instrument_status=InstrumentStatus.INSTRUMENT_STATUS_BASE)
             return True
         except RequestError as e:
             logging.critical(f"Ошибка проверки токена Tinkoff: {e}")
             raise ConnectionAbortedError(f"Токен невалиден: {e.details}")
 
-    def _resolve_figi(self, instrument: str) -> str:
-        """
-        Конвертирует человекочитаемый тикер (SBER) в системный ID (FIGI).
+    def _find_instrument_obj(self, client: Client, ticker: str):
+        """Ищет объект инструмента по тикеру, отдавая приоритет классу TQBR.
 
         Args:
-            instrument (str): Тикер или FIGI.
+            client (Client): Активный клиент API Tinkoff.
+            ticker (str): Тикер инструмента (например, 'SBER').
 
         Returns:
-            str: Валидный FIGI.
+            Optional[Instrument]: Объект инструмента с данными (figi, lot, min_step) или None, если не найден.
         """
-        # Если это уже FIGI (начинается с BBG...), возвращаем как есть
-        if instrument.startswith("BBG"):
-            return instrument
-
-        logger.info(f"Поиск FIGI для инструмента '{instrument}'...")
-        with Client(self.token) as c:
-            found = c.instruments.find_instrument(query=instrument)
+        try:
+            found = client.instruments.find_instrument(query=ticker)
             if not found.instruments:
-                raise ValueError(f"Инструмент '{instrument}' не найден в API Тинькофф.")
+                return None
 
-            instrument_upper = instrument.upper()
-            # Берем класс инструмента по умолчанию из конфига (обычно TQBR для акций РФ)
-            class_code = app.infrastructure.feeds.backtest.provider.EXCHANGE_SPECIFIC_CONFIG[ExchangeType.TINKOFF]['DEFAULT_CLASS_CODE']
-
-            # 1. Строгий поиск: совпадение тикера и класса
-            match = next((i for i in found.instruments
-                          if i.ticker == instrument_upper and i.class_code == class_code), None)
-
-            # 2. Мягкий поиск (fallback): берем первый попавшийся с таким тикером
-            target = match if match else found.instruments[0]
-
-            return target.figi
+            ticker_upper = ticker.upper()
+            
+            # 1. Строгий поиск (Тикер + Класс TQBR)
+            match = next((i for i in found.instruments 
+                          if i.ticker == ticker_upper and i.class_code == self.default_class), None)
+            
+            # 2. Мягкий поиск (первый попавшийся)
+            return match if match else found.instruments[0]
+            
+        except Exception as e:
+            logger.error(f"Ошибка поиска инструмента {ticker}: {e}")
+            return None
 
     @staticmethod
     def _cast_money(money_value) -> float:
-        """
-        Конвертирует структуру Quotation (units, nano) в float.
+        """Конвертирует структуру MoneyValue или Quotation в float.
+
+        Args:
+            money_value: Объект цены из API Tinkoff.
+
+        Returns:
+            float: Числовое представление цены.
         """
         return money_value.units + money_value.nano / 1e9
 
     def get_historical_data(self, instrument: str, interval: str, days: int, **kwargs) -> pd.DataFrame:
         """
-        Скачивает исторические свечи.
+        Скачивает исторические свечи за указанный период с нормализацией объемов.
+
+        Автоматически учитывает размер лота инструмента (конвертирует лоты в штуки).
 
         Args:
-            instrument (str): Тикер.
-            interval (str): Интервал (например, '1min').
-            days (int): Глубина истории.
+            instrument (str): Тикер инструмента.
+            interval (str): Интервал свечей (например, '1min', '1hour').
+            days (int): Количество дней для загрузки истории.
 
         Returns:
-            pd.DataFrame: DataFrame с колонками OHLCV.
+            pd.DataFrame: DataFrame с колонками OHLCV, где volume в единицах актива.
         """
-        try:
-            figi = self._resolve_figi(instrument)
-        except Exception as e:
-            logging.error(f"Ошибка получения FIGI: {e}")
-            return pd.DataFrame()
-
         interval_name = config.EXCHANGE_INTERVAL_MAPS[ExchangeType.TINKOFF].get(interval)
         if not interval_name:
             logging.error(f"Интервал '{interval}' не поддерживается Тинькофф.")
@@ -142,62 +137,78 @@ class TinkoffHandler(ExchangeExchangeHandler):
         start_date = now() - timedelta(days=days)
 
         try:
-            with Client(self.token) as c, tqdm(total=days, desc=f"Tinkoff {instrument}", unit="d") as pbar:
-                # get_all_candles автоматически обрабатывает пагинацию
-                for candle in c.get_all_candles(figi=figi, from_=start_date, interval=api_interval):
+            with Client(self.token) as c:
+                # Ищем инструмент через общий метод
+                instr_obj = self._find_instrument_obj(c, instrument)
+                
+                if not instr_obj:
+                    logging.error(f"Инструмент {instrument} не найден.")
+                    return pd.DataFrame()
 
-                    all_candles.append({
-                        "time": candle.time, # datetime object (aware)
-                        "open": self._cast_money(candle.open),
-                        "high": self._cast_money(candle.high),
-                        "low": self._cast_money(candle.low),
-                        "close": self._cast_money(candle.close),
-                        "volume": candle.volume
-                    })
+                figi = instr_obj.figi
+                lot_size = instr_obj.lot
+                
+                logging.info(f"Загрузка {instrument} (FIGI: {figi}, Lot: {lot_size})...")
 
-                    # Упрощенное обновление прогресса (неточное, но визуально достаточное)
-                    if len(all_candles) % 100 == 0:
-                        pbar.update(0)
+                with tqdm(total=days, desc=f"Tinkoff {instrument}", unit="d") as pbar:
+                    for candle in c.get_all_candles(figi=figi, from_=start_date, interval=api_interval):
+                        all_candles.append({
+                            "time": candle.time,
+                            "open": self._cast_money(candle.open),
+                            "high": self._cast_money(candle.high),
+                            "low": self._cast_money(candle.low),
+                            "close": self._cast_money(candle.close),
+                            
+                            # !!! ВАЖНО: Умножаем на лотность !!!
+                            "volume": candle.volume * lot_size
+                        })
 
-                pbar.update(days - pbar.n) # Завершаем прогресс-бар
+                        if len(all_candles) % 100 == 0:
+                            pbar.update(0)
+                    pbar.update(days - pbar.n)
 
-        except RequestError as e:
-            logging.error(f"Ошибка API при скачивании данных: {e}")
+        except Exception as e:
+            logging.error(f"Ошибка загрузки данных: {e}", exc_info=True)
             return pd.DataFrame()
 
-        # Используем метод базового класса для создания DF
         return self._process_candles_to_df(all_candles)
 
     def get_instrument_info(self, instrument: str, **kwargs) -> Dict[str, Any]:
-        """
-        Получает параметры инструмента (шаг цены, лотность).
+        """Получает спецификацию инструмента (размер лота, шаг цены).
+
+        Args:
+            instrument (str): Тикер инструмента.
+
+        Returns:
+            Dict[str, Any]: Словарь с ключами 'lot_size', 'min_price_increment', 'qty_step'.
         """
         try:
-            figi = self._resolve_figi(instrument)
-            with Client(self.token) as client:
-                instr = client.instruments.get_instrument_by(id_type=1, id=figi).instrument
+            with Client(self.token) as c:
+                # Используем тот же метод поиска!
+                instr_obj = self._find_instrument_obj(c, instrument)
+                
+                if not instr_obj:
+                    return {}
+
                 return {
-                    "lot_size": instr.lot,
-                    "min_price_increment": float(quotation_to_decimal(instr.min_price_increment)),
-                    "qty_step": float(instr.lot)
+                    "lot_size": instr_obj.lot,
+                    "min_price_increment": float(quotation_to_decimal(instr_obj.min_price_increment)),
+                    "qty_step": float(instr_obj.lot)
                 }
-        except Exception:
+        except Exception as e:
+            logging.error(f"Ошибка получения инфо: {e}")
             return {}
 
     def _calculate_single_turnover(self, share: Any, start: Any, end: Any) -> Optional[Dict[str, Any]]:
-        """
-        Вспомогательный метод для расчета оборота одной акции в отдельном потоке.
-
-        Создает собственный экземпляр Client, так как gRPC-каналы не всегда
-        корректно работают при конкурентном доступе из разных потоков.
+        """Рассчитывает оборот по одной акции за указанный период (воркер для потока).
 
         Args:
-            share: Объект инструмента из SDK.
-            start: Начало периода.
-            end: Конец периода.
+            share (Any): Объект инструмента из SDK.
+            start (datetime): Начало периода.
+            end (datetime): Конец периода.
 
         Returns:
-            Dict или None: Словарь {'ticker', 'turnover'} или None.
+            Optional[Dict[str, Any]]: Словарь {'ticker', 'turnover'} или None, если данных нет.
         """
         try:
             # Искусственная задержка для "размазывания" нагрузки при старте потоков
@@ -222,17 +233,15 @@ class TinkoffHandler(ExchangeExchangeHandler):
             return None
 
     def get_top_liquid_by_turnover(self, count: int) -> List[str]:
-        """
-        Возвращает список самых ликвидных акций (TQBR) по обороту.
+        """Возвращает список самых ликвидных акций (TQBR) по обороту за последние 2 дня.
 
-        Использует ThreadPoolExecutor для параллельного опроса сотен инструментов.
-        Это ускоряет процесс в разы по сравнению с последовательным перебором.
+        Использует многопоточность для ускорения опроса API.
 
         Args:
-            count (int): Кол-во инструментов в топе.
+            count (int): Количество инструментов в топе.
 
         Returns:
-            List[str]: Список тикеров.
+            List[str]: Список тикеров, отсортированных по убыванию оборота.
         """
         logger.info(f"Tinkoff: Сканирование топ-{count} ликвидных акций (TQBR)...")
         try:

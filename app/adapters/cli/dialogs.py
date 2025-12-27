@@ -425,14 +425,23 @@ def prompt_for_optimization_settings() -> Optional[Dict[str, Any]]:
             validate=lambda text: text.isdigit() and 0 < int(text) < int(total_periods)
         )
 
+        preload = ask(
+            questionary.confirm,
+            "🚀 Загрузить все данные в RAM? (Ускорение, но жрет память)",
+            default=False
+        )
+
         settings.update({
             "metrics": selected_metrics,
             "n_trials": int(n_trials),
             "total_periods": int(total_periods),
             "train_periods": int(train_periods),
-            "test_periods": 1 # По умолчанию OOS тест всегда на 1 следующий период
+            "test_periods": 1,
+            "preload": preload  # <--- И добавить этот ключ в словарь
         })
+
         return settings
+    
     except UserCancelledError:
         return None
 

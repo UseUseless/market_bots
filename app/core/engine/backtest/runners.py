@@ -1,7 +1,6 @@
 """
-Модуль запуска бэктестов (Test Runners).
+Модуль запуска бэктестов.
 
-Этот модуль выполняет роль "Application Service" для сценариев тестирования.
 Он оркестрирует процесс выполнения:
 1. Подготовка конфигурации (Merge параметров).
 2. Инициализация и запуск движка (`BacktestEngine`).
@@ -21,7 +20,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 from tqdm import tqdm
 
-from app.shared.schemas import TradingConfig
+from app.shared.schemas import TradingConfig, RunModeType
 from app.core.engine.backtest.engine import BacktestEngine
 from app.core.analysis.session import AnalysisSession
 from app.core.analysis.reports.excel import ExcelReportGenerator
@@ -32,7 +31,7 @@ from app.shared.config import config as app_config
 logger = logging.getLogger(__name__)
 
 
-def _create_config(run_settings: Dict[str, Any], mode: str) -> TradingConfig:
+def _create_config(run_settings: Dict[str, Any], mode: RunModeType) -> TradingConfig:
     """
     Сборка единого конфига.
 
@@ -67,7 +66,7 @@ def _create_config(run_settings: Dict[str, Any], mode: str) -> TradingConfig:
         "type": run_settings.get("risk_manager_type", "FIXED")
     }
 
-    # 4. Создание DTO (Data Transfer Object)
+    # 4. Создание DTO
     return TradingConfig(
         mode=mode,
         exchange=run_settings["exchange"],
@@ -77,11 +76,12 @@ def _create_config(run_settings: Dict[str, Any], mode: str) -> TradingConfig:
         strategy_params=final_strategy_params,
         risk_config=risk_config,
         initial_capital=app_config.BACKTEST_CONFIG["INITIAL_CAPITAL"],
-        commission_rate=app_config.BACKTEST_CONFIG["COMMISSION_RATE"]
+        commission_rate=app_config.BACKTEST_CONFIG["COMMISSION_RATE"],
+        slippage_config=app_config.BACKTEST_CONFIG.get("SLIPPAGE_CONFIG", {})
     )
 
 
-def _run_single_task(config: TradingConfig) -> Optional[Dict[str, Any]]:
+def _run_single_batch_task(config: TradingConfig) -> Optional[Dict[str, Any]]:
     """
     Воркер для выполнения одного теста в изолированном потоке (для Batch режима).
 
@@ -97,7 +97,8 @@ def _run_single_task(config: TradingConfig) -> Optional[Dict[str, Any]]:
             initial = results["initial_capital"]
             final = results["final_capital"]
 
-            # Быстрый расчет метрик для сводки (без тяжелого AnalysisSession)
+            # Быстрый расчет метрик для сводки (без AnalysisSession)
+            # Можно и его добавить для более объемной аналитики
             pnl_abs = final - initial
             pnl_pct = (pnl_abs / initial) * 100
 
@@ -133,7 +134,7 @@ def run_single_backtest_flow(run_settings: Dict[str, Any]) -> None:
     1. Сборка Config (CLI -> TradingConfig).
     2. Настройка логирования в файл.
     3. Запуск Engine.
-    4. Запуск AnalysisSession (генерация PDF/PNG отчетов).
+    4. Запуск AnalysisSession (генерация отчетов).
     """
 
     # 1. Сборка конфигурации
@@ -143,7 +144,7 @@ def run_single_backtest_flow(run_settings: Dict[str, Any]) -> None:
         print(f"Ошибка конфигурации: {e}")
         return
 
-    # 2. Настройка окружения (Логи)
+    # 2. Настройка логов
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     base_filename = f"{timestamp}_{config.strategy_name}_{config.instrument}_{config.interval}"
     log_file = os.path.join(app_config.PATH_CONFIG["LOGS_BACKTEST_DIR"], f"{base_filename}.log")
@@ -232,7 +233,7 @@ def run_batch_backtest_flow(run_settings: Dict[str, Any]) -> None:
     max_workers = os.cpu_count() or 4
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(_run_single_task, cfg): cfg for cfg in configs}
+        futures = {executor.submit(_run_single_batch_task, cfg): cfg for cfg in configs}
 
         for future in tqdm(as_completed(futures), total=len(configs), desc="Processing"):
             res = future.result()

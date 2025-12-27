@@ -17,7 +17,7 @@ class AnotherLiveDebugStrategy(BaseStrategy):
         "candle_interval": {"type": "str", "default": "1min", "optimizable": False}
     }
     # Добавим SMA для проверки работы DataFeed
-    required_indicators = [{"name": "sma", "params": {"period": 5}}]
+    required_indicators = [{"name": "sma", "params": {"length": 5}}]
     min_history_needed = 10
 
     def __init__(self,

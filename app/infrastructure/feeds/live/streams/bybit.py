@@ -88,7 +88,7 @@ class BybitStreamDataHandler(BaseStreamDataHandler):
                     event = MarketEvent(
                         timestamp=candle_data['time'],
                         instrument=self.instrument,
-                        data=candle_data
+                        candle=candle_data
                     )
 
                     # Thread-safe передача события в главный цикл

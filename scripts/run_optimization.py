@@ -74,6 +74,9 @@ def main() -> None:
         choices=list(METRIC_CONFIG.keys()),
         help="Целевые метрики."
     )
+
+    parser.add_argument("--preload", action="store_true", help="Загрузить все данные в RAM (быстрее, но требует памяти).")
+    
     # argparse автоматически сохранит их в переменные с подчеркиванием (args.n_trials)
     parser.add_argument("--n-trials", dest="n_trials", type=int, default=100, help="Итераций Optuna на шаг.")
     parser.add_argument("--total-periods", dest="total_periods", type=int, required=True, help="Всего частей истории.")

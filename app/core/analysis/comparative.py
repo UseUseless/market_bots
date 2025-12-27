@@ -195,8 +195,8 @@ class ComparativeAnalyzer:
         # Объединяем сделки и сортируем по времени выхода, чтобы симулировать
         # последовательность событий в портфеле.
         all_trades_df = pd.concat(all_trades_list, ignore_index=True)
-        all_trades_df['exit_timestamp_utc'] = pd.to_datetime(all_trades_df['exit_timestamp_utc'])
-        all_trades_df.sort_values(by='exit_timestamp_utc', inplace=True)
+        all_trades_df['exit_time'] = pd.to_datetime(all_trades_df['exit_time'])
+        all_trades_df.sort_values(by='exit_time', inplace=True)
         all_trades_df.reset_index(drop=True, inplace=True)
 
         # Капитал портфеля = сумма капиталов отдельных стратегий

@@ -14,7 +14,7 @@ import logging
 import queue
 import signal
 import sys
-from typing import Tuple, Any, List, Dict
+from typing import Tuple, Any, List
 
 # Импорты схем и БД
 from app.shared.schemas import TradingConfig
@@ -43,17 +43,17 @@ def _assemble_config(db_config: StrategyConfig) -> TradingConfig:
     """
     Фабричный метод сборки конфигурации из данных БД.
 
-    Реализует логику слияния параметров:
-    1. Получает класс стратегии по имени.
-    2. Извлекает дефолтные параметры из кода (Hardcoded defaults).
-    3. Накладывает параметры из БД (User overrides).
-    4. Упаковывает всё в чистый DTO `TradingConfig`.
+    Реализует логику слияния параметров: получает дефолтные настройки из класса стратегии
+    и накладывает на них пользовательские параметры из базы данных.
 
     Args:
-        db_config: ORM-объект конфигурации из базы данных.
+        db_config (StrategyConfig): ORM-объект конфигурации из базы данных.
 
     Returns:
-        TradingConfig: Готовый к использованию объект конфигурации.
+        TradingConfig: Готовый к использованию валидированный объект конфигурации.
+
+    Raises:
+        ValueError: Если указанная в БД стратегия не найдена в реестре.
     """
     # 1. Поиск класса стратегии
     StrategyClass = AVAILABLE_STRATEGIES.get(db_config.strategy_name)
@@ -90,11 +90,11 @@ async def _config_loader() -> List[StrategyConfig]:
     """
     Callback-функция для загрузки активных стратегий.
 
-    Передается в движок, чтобы он мог периодически опрашивать БД
-    на предмет появления новых или остановки старых стратегий.
+    Передается в движок для периодического опроса БД на предмет изменений
+    в списке запущенных стратегий (Hot Reload).
 
     Returns:
-        List[StrategyConfig]: Список активных конфигураций.
+        List[StrategyConfig]: Список активных конфигураций с подгруженными связями.
     """
     async with async_session_factory() as session:
         repo = ConfigRepository(session)
@@ -106,14 +106,15 @@ async def _pair_builder(db_config: StrategyConfig) -> Tuple[LiveDataProvider, An
     """
     Callback-фабрика для создания рабочих объектов.
 
-    Вызывается движком, когда он обнаруживает новую активную стратегию в БД.
-    Здесь происходит Dependency Injection.
+    Вызывается движком при обнаружении новой активной стратегии.
+    Отвечает за внедрение зависимостей (Dependency Injection) и инициализацию
+    пары Провайдер-Стратегия.
 
     Args:
-        db_config: ORM-объект конфигурации.
+        db_config (StrategyConfig): ORM-объект конфигурации.
 
     Returns:
-        Tuple[LiveDataProvider, BaseStrategy]: Пара (Поток данных, Стратегия).
+        Tuple[LiveDataProvider, BaseStrategy]: Инициализированные объекты потока данных и стратегии.
     """
     # 1. Получение клиента биржи (Singleton из контейнера)
     client = container.get_exchange_client(db_config.exchange)
@@ -131,14 +132,13 @@ async def _pair_builder(db_config: StrategyConfig) -> Tuple[LiveDataProvider, An
     )
 
     # 4. Инициализация провайдера данных
-    # Провайдеру нужны требования к индикаторам, которые стратегия сформировала при инициализации
+    # Провайдер инициализируется как "легкий" буфер (без движка индикаторов),
+    # так как расчеты перенесены внутрь стратегии.
     feed = LiveDataProvider(
         client=client,
         exchange=pydantic_config.exchange,
         instrument=pydantic_config.instrument,
-        interval=pydantic_config.interval,
-        feature_engine=container.feature_engine, # Singleton
-        required_indicators=strategy.required_indicators
+        interval=pydantic_config.interval
     )
 
     return feed, strategy
@@ -149,9 +149,9 @@ async def _async_main() -> None:
     Главная асинхронная точка входа (Bootstrapper).
 
     1. Инициализирует глобальные сервисы (BotManager).
-    2. Настраивает обработчики сигналов (Pipeline: Strategy -> Telegram/DB/Console).
+    2. Настраивает конвейер обработки сигналов (Strategy -> Telegram/DB/Console).
     3. Запускает оркестратор движка.
-    4. Обеспечивает Graceful Shutdown при получении SIGINT/SIGTERM.
+    4. Обеспечивает корректное завершение (Graceful Shutdown) при получении сигналов ОС.
     """
     logger.info("Запуск Live Signal Monitor...")
 
@@ -236,9 +236,12 @@ def run_live_monitor_flow(settings: dict = None) -> None:
     """
     Синхронная точка входа для CLI/Launcher.
 
-    Настраивает логирование и запускает AsyncIO Loop.
-    Аргумент settings здесь не используется, так как конфигурация Live берется из БД,
-    но он оставлен для унификации интерфейса раннеров.
+    Настраивает глобальное логирование, применяет фиксы для Event Loop на Windows
+    и запускает основной асинхронный цикл.
+
+    Args:
+        settings (dict, optional): Настройки запуска (в Live-режиме конфигурация
+            загружается из БД, аргумент оставлен для совместимости интерфейсов).
     """
     setup_global_logging()
 

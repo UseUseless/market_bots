@@ -1,7 +1,7 @@
 """
-Модуль интерфейсов и абстракций (Ports).
+Интерфейсы и абстракции (Ports).
 
-Определяет контракты, которые должны реализовать компоненты инфраструктуры.
+Определяет контракты, которые нужно реализовать для унифицированной работы.
 Это позволяет ядру системы (Core) не зависеть от конкретных библиотек или API.
 """
 
@@ -21,7 +21,7 @@ class ExchangeDataGetter(ABC):
     @abstractmethod
     def get_historical_data(self, instrument: str, interval: str, days: int, **kwargs) -> pd.DataFrame:
         """
-        Загружает исторические свечи (K-Lines).
+        Загружает исторические свечи.
 
         Args:
             instrument (str): Тикер инструмента.
@@ -66,7 +66,7 @@ class MarketDataProvider(ABC):
     Подача данных в стратегию
 
     Доступ к историческим данным и текущей свече,
-    скрывая источник данных (CSV-файл, память или WebSocket).
+    скрывая источник данных (parquet-файл, память или WebSocket).
     """
 
     @abstractmethod
@@ -105,7 +105,7 @@ class MarketDataProvider(ABC):
 
 
 class SignalHandler(ABC):
-    """Интерфейс для обработки сигналов (Telegram, DB, Email, etc.)"""
+    """Интерфейс для обработки сигналов (Telegram, DB, Discord, Email, etc.)"""
 
     @abstractmethod
     async def handle_signal(self, event: SignalEvent) -> None:

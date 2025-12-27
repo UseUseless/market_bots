@@ -168,7 +168,7 @@ def test_dashboard_smoke(tmp_path):
     os.makedirs(logs_dir)
     os.makedirs(data_dir / "tinkoff" / "5min")
 
-    fake_log_content = '{"entry_timestamp_utc": "2023-01-02T10:05:00+00:00", "exit_timestamp_utc": "2023-01-02T10:10:00+00:00", "strategy_name": "Test", "exchange": "tinkoff", "instrument": "FAKE", "direction": "BUY", "entry_price": 100, "exit_price": 101, "pnl": 100, "exit_reason": "Signal", "interval": "5min", "risk_manager": "FIXED"}\n'
+    fake_log_content = '{"entry_time": "2023-01-02T10:05:00+00:00", "exit_time": "2023-01-02T10:10:00+00:00", "strategy_name": "Test", "exchange": "tinkoff", "instrument": "FAKE", "direction": "BUY", "entry_price": 100, "exit_price": 101, "pnl": 100, "exit_reason": "Signal", "interval": "5min", "risk_manager": "FIXED"}\n'
     (logs_dir / "fake_log_trades.jsonl").write_text(fake_log_content, encoding='utf-8')
 
     fake_data_df = pd.DataFrame(

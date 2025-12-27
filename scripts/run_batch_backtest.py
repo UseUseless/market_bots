@@ -1,1 +1,84 @@
-"""Запуск пакетного бэктеста.Этот скрипт позволяет протестировать одну стратегию сразу на множестве инструментов.Он сканирует директорию с историческими данными (`data/{exchange}/{interval}`)и запускает отдельный процесс симуляции для каждого найденного `.parquet` файла.Результаты всех тестов агрегируются в единый Excel-отчет.Пример запуска:    python scripts/run_batch_backtest.py --strategy TripleFilter --exchange bybit --interval 1hour"""import argparseimport loggingimport sysimport ossys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))from app.core.engine.backtest.runners import run_batch_backtest_flowfrom app.strategies import AVAILABLE_STRATEGIESfrom app.core.risk import RISK_MANAGEMENT_TYPESfrom app.shared.logging_setup import setup_global_loggingfrom app.shared.decorators import safe_entry@safe_entrydef main() -> None:    """    Основная функция запуска.    Алгоритм работы:    1. Настраивает логирование в режиме 'tqdm' (чтобы прогресс-бар не ломался логами).    2. Парсит аргументы CLI.    3. Передает управление функции `run_batch_backtest_flow`, которая:       - Сканирует папку с данными.       - Создает пул задач (multiprocessing/threading).       - Собирает результаты и генерирует сводный Excel-отчет.    """    setup_global_logging(mode='tqdm', log_level=logging.INFO)    parser = argparse.ArgumentParser(        description="Запуск пакетного тестирования стратегии на всех доступных инструментах.",        formatter_class=argparse.ArgumentDefaultsHelpFormatter    )    parser.add_argument(        "--strategy",        type=str,        required=True,        choices=list(AVAILABLE_STRATEGIES.keys()),        help="Имя стратегии для тестирования."    )    parser.add_argument(        "--exchange",        type=str,        required=True,        choices=['tinkoff', 'bybit'],        help="Биржа (определяет папку с данными)."    )    parser.add_argument(        "--interval",        type=str,        required=True,        help="Интервал данных (папка должна существовать, например '1hour')."    )    parser.add_argument(        "--rm",        dest="risk_manager_type",        type=str,        default="FIXED",        choices=list(RISK_MANAGEMENT_TYPES),        help="Тип риск-менеджера."    )    args = parser.parse_args()    settings = vars(args)    run_batch_backtest_flow(settings)if __name__ == "__main__":     main()
+"""
+Запуск пакетного бэктеста.
+
+Этот скрипт позволяет протестировать одну стратегию сразу на множестве инструментов.
+Он сканирует директорию с историческими данными (`data/{exchange}/{interval}`)
+и запускает отдельный процесс симуляции для каждого найденного `.parquet` файла.
+
+Результаты всех тестов агрегируются в единый Excel-отчет.
+
+Пример запуска:
+    python scripts/run_batch_backtest.py --strategy TripleFilter --exchange bybit --interval 1hour
+"""
+
+import argparse
+import logging
+import sys
+import os
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from app.core.engine.backtest.runners import run_batch_backtest_flow
+from app.strategies import AVAILABLE_STRATEGIES
+from app.core.risk import RISK_MANAGEMENT_TYPES
+from app.shared.logging_setup import setup_global_logging
+from app.shared.decorators import safe_entry
+
+
+@safe_entry
+def main() -> None:
+    """
+    Основная функция запуска.
+
+    Алгоритм работы:
+    1. Настраивает логирование в режиме 'tqdm' (чтобы прогресс-бар не ломался логами).
+    2. Парсит аргументы CLI.
+    3. Передает управление функции `run_batch_backtest_flow`, которая:
+       - Сканирует папку с данными.
+       - Создает пул задач (multiprocessing/threading).
+       - Собирает результаты и генерирует сводный Excel-отчет.
+    """
+    setup_global_logging(mode='tqdm', log_level=logging.INFO)
+
+    parser = argparse.ArgumentParser(
+        description="Запуск пакетного тестирования стратегии на всех доступных инструментах.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+
+    parser.add_argument(
+        "--strategy",
+        type=str,
+        required=True,
+        choices=list(AVAILABLE_STRATEGIES.keys()),
+        help="Имя стратегии для тестирования."
+    )
+    parser.add_argument(
+        "--exchange",
+        type=str,
+        required=True,
+        choices=['tinkoff', 'bybit'],
+        help="Биржа (определяет папку с данными)."
+    )
+    parser.add_argument(
+        "--interval",
+        type=str,
+        required=True,
+        help="Интервал данных (папка должна существовать, например '1hour')."
+    )
+    parser.add_argument(
+        "--rm",
+        dest="risk_manager_type",
+        type=str,
+        default="FIXED",
+        choices=list(RISK_MANAGEMENT_TYPES),
+        help="Тип риск-менеджера."
+    )
+
+    args = parser.parse_args()
+    settings = vars(args)
+
+    run_batch_backtest_flow(settings)
+
+
+if __name__ == "__main__":
+     main()

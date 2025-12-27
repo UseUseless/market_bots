@@ -4,17 +4,21 @@
 Этот модуль предоставляет реализацию интерфейса `MarketDataProvider` для работы в режиме
 реального времени (Live Trading). Он объединяет загрузку исторических данных (REST)
 и получение обновлений через WebSocket, обеспечивая непрерывность истории.
+
+Оптимизация (v2):
+    Этот класс теперь выступает только как "тупой" буфер данных.
+    Он НЕ рассчитывает индикаторы. Расчет перенесен на сторону потребителя (Стратегии),
+    чтобы избежать Race Conditions и блокировки Event Loop'а тяжелыми вычислениями.
 """
 
 import asyncio
 import logging
 import threading
-from typing import Optional, List, Dict, Any
+from typing import Optional
 
 import pandas as pd
 
 from app.shared.interfaces import MarketDataProvider, ExchangeDataGetter
-from app.core.calculations.indicators import FeatureEngine
 from app.infrastructure.feeds.live.streams.bybit import BybitStreamDataHandler
 from app.infrastructure.feeds.live.streams.tinkoff import TinkoffStreamDataHandler
 from app.infrastructure.feeds.live.streams.base import BaseStreamDataHandler
@@ -28,8 +32,7 @@ class LiveDataProvider(MarketDataProvider):
     Провайдер данных реального времени.
 
     Управляет буфером свечей (DataFrame), поддерживает его актуальность
-    через WebSocket и предоставляет потокобезопасный доступ к истории для стратегий.
-    Автоматически пересчитывает технические индикаторы при поступлении новых данных.
+    через WebSocket и предоставляет потокобезопасный доступ к истории.
 
     Attributes:
         client (ExchangeDataGetter): Клиент для загрузки исторической части данных.
@@ -37,6 +40,8 @@ class LiveDataProvider(MarketDataProvider):
         instrument (str): Тикер инструмента.
         max_buffer_size (int): Лимит размера DataFrame в памяти (скользящее окно).
         _lock (threading.RLock): Блокировка для защиты DataFrame от гонки потоков.
+        _df (pd.DataFrame): Внутренний буфер свечей.
+        stream_handler (Optional[BaseStreamDataHandler]): Активный обработчик вебсокет-соединения.
     """
 
     def __init__(self,
@@ -44,28 +49,21 @@ class LiveDataProvider(MarketDataProvider):
                  exchange: str,
                  instrument: str,
                  interval: str,
-                 feature_engine: FeatureEngine,
-                 required_indicators: List[Dict[str, Any]],
                  max_buffer_size: int = 1000):
         """
         Инициализирует провайдер данных.
 
         Args:
-            client: API клиент биржи.
-            exchange: Имя биржи.
-            instrument: Тикер.
-            interval: Интервал свечей.
-            feature_engine: Сервис расчета индикаторов.
-            required_indicators: Список индикаторов, требуемых стратегией.
-            max_buffer_size: Максимальное количество свечей в памяти.
+            client (ExchangeDataGetter): API клиент биржи.
+            exchange (str): Имя биржи.
+            instrument (str): Тикер.
+            interval (str): Интервал свечей.
+            max_buffer_size (int, optional): Максимальное количество свечей в памяти. Defaults to 1000.
         """
         self.client = client
         self.exchange = exchange
         self.instrument = instrument
         self._interval = interval
-
-        self.feature_engine = feature_engine
-        self.required_indicators = required_indicators
         self.max_buffer_size = max_buffer_size
 
         # RLock обязателен: запись идет из AsyncIO Loop, чтение - из ThreadPool стратегии
@@ -81,8 +79,8 @@ class LiveDataProvider(MarketDataProvider):
         Выполняется в Executor'е, чтобы не блокировать Event Loop тяжелым I/O запросом.
 
         Args:
-            days: Глубина истории в днях.
-            category: Категория рынка (для Bybit).
+            days (int, optional): Глубина истории в днях. Defaults to 3.
+            category (str, optional): Категория рынка (для Bybit). Defaults to "linear".
         """
         logger.info(f"DataFeed: Загрузка истории за {days} дней для {self.instrument}...")
 
@@ -96,7 +94,7 @@ class LiveDataProvider(MarketDataProvider):
 
         with self._lock:
             if history_df.empty:
-                logger.warning("DataFeed: История пуста! Индикаторы будут считаться с нуля по мере поступления данных.")
+                logger.warning("DataFeed: История пуста! Буфер начнется с нуля.")
                 self._df = pd.DataFrame()
                 return
 
@@ -108,9 +106,6 @@ class LiveDataProvider(MarketDataProvider):
 
             self._ensure_numeric_types()
 
-            # Первичный расчет индикаторов
-            self._recalc_indicators()
-
             logger.info(f"DataFeed: Разогрев завершен. В памяти {len(self._df)} свечей.")
 
     def start_stream(self, event_queue: asyncio.Queue, loop: asyncio.AbstractEventLoop, **kwargs):
@@ -118,16 +113,35 @@ class LiveDataProvider(MarketDataProvider):
         Инициализирует и запускает WebSocket/gRPC поток данных.
 
         Args:
-            event_queue: Очередь для отправки событий MarketEvent.
-            loop: Ссылка на Event Loop.
+            event_queue (asyncio.Queue): Очередь для отправки событий MarketEvent.
+            loop (asyncio.AbstractEventLoop): Ссылка на Event Loop.
             **kwargs: Дополнительные параметры (например, category).
 
         Returns:
             Coroutine: Асинхронная задача запуска стрима.
+
+        Raises:
+            ValueError: Если указана неизвестная биржа.
         """
         if self.exchange == ExchangeType.TINKOFF:
             token = self.client.token
-            self.stream_handler = TinkoffStreamDataHandler(event_queue, self.instrument, self._interval, token)
+            
+            # Запрашиваем размер лота ---
+            # Метод get_instrument_info уже есть в TinkoffHandler, используем его.
+            # Он возвращает dict: {'lot_size': 10, ...}
+            lot_size = 1
+            try:
+                # Это синхронный вызов HTTP API. 
+                # Так как это происходит 1 раз при старте стратегии, блокировка Loop на 0.1с допустима.
+                info = self.client.get_instrument_info(self.instrument)
+                lot_size = info.get("lot_size", 1)
+            except Exception as e:
+                logger.error(f"Не удалось получить лотность для {self.instrument}, используем 1: {e}")
+
+            # Передаем lot_size в конструктор
+            self.stream_handler = TinkoffStreamDataHandler(
+                event_queue, self.instrument, self._interval, token, lot_size=lot_size
+            )
 
         elif self.exchange == ExchangeType.BYBIT:
             self.stream_handler = BybitStreamDataHandler(
@@ -145,10 +159,11 @@ class LiveDataProvider(MarketDataProvider):
         """
         Обрабатывает новую свечу из стрима.
 
-        Добавляет свечу в буфер, обрезает его при переполнении и пересчитывает индикаторы.
+        Добавляет свечу в буфер, обрезает его при переполнении.
+        Больше никаких тяжелых расчетов здесь нет.
 
         Args:
-            candle_data: Данные свечи (Series).
+            candle_data (pd.Series): Данные свечи (OHLCV).
 
         Returns:
             bool: True, если свеча новая и успешно добавлена; False, если дубликат.
@@ -175,9 +190,6 @@ class LiveDataProvider(MarketDataProvider):
                 # Эффективная обрезка через slicing
                 self._df = self._df.iloc[rows_to_drop:].reset_index(drop=True)
 
-            # Пересчет индикаторов на обновленном буфере
-            self._recalc_indicators()
-
             return True
 
     def _ensure_numeric_types(self):
@@ -190,28 +202,21 @@ class LiveDataProvider(MarketDataProvider):
             if col in self._df.columns:
                 self._df[col] = self._df[col].astype(float)
 
-    def _recalc_indicators(self):
-        """
-        Запускает FeatureEngine для расчета индикаторов.
-        Внимание: pandas-ta пересчитывает весь DataFrame, что создает нагрузку на CPU.
-        """
-        if len(self._df) < 2:
-            return
-
-        # FeatureEngine модифицирует DF in-place
-        self.feature_engine.add_required_features(self._df, self.required_indicators)
-
     # --- Implementation of MarketDataProvider Interface ---
 
     def get_history(self, length: int = 0) -> pd.DataFrame:
         """
         Предоставляет срез исторических данных.
 
+        ВАЖНО: Возвращает глубокую копию (.copy()), чтобы потребитель (стратегия)
+        мог безопасно модифицировать данные (например, добавлять индикаторы),
+        не ломая основной буфер провайдера.
+
         Args:
-            length: Количество последних свечей. Если 0 — возвращает весь буфер.
+            length (int, optional): Количество последних свечей. Если 0 — возвращает весь буфер. Defaults to 0.
 
         Returns:
-            pd.DataFrame: Копия данных (для безопасности потоков).
+            pd.DataFrame: Копия данных.
         """
         with self._lock:
             if self._df.empty:
@@ -225,6 +230,9 @@ class LiveDataProvider(MarketDataProvider):
     def get_current_candle(self) -> pd.Series:
         """
         Возвращает последнюю закрытую свечу из буфера.
+
+        Returns:
+            pd.Series: Последняя доступная свеча.
         """
         with self._lock:
             if self._df.empty:
@@ -233,4 +241,5 @@ class LiveDataProvider(MarketDataProvider):
 
     @property
     def interval(self) -> str:
+        """Возвращает текущий интервал данных."""
         return self._interval

@@ -1,8 +1,8 @@
 """
-Модуль управления портфелем (Unified Portfolio).
+Модуль управления портфелем.
 
-Этот модуль содержит класс `Portfolio`, который выступает центральным узлом
-исполнения торговых операций в симуляции. Он объединяет данные (баланс, позиции)
+Этот модуль содержит класс `Portfolio`.
+Отвечает за исполнение торговых операций в симуляции. Он объединяет данные (баланс, позиции)
 и поведение (расчет рисков, генерация ордеров, учет сделок).
 """
 
@@ -18,21 +18,23 @@ from app.core.risk import RiskManager
 
 class Portfolio:
     """
-    Единый менеджер портфеля.
+    Менеджер портфеля.
 
     Управляет жизненным циклом сделки от получения сигнала до фиксации прибыли.
-    Отвечает за:
-    1. Мониторинг открытых позиций (проверка SL/TP).
-    2. Валидацию сигналов и расчет объема позиции (Risk Management).
-    3. Финансовый учет (Accounting) и обновление баланса.
+    Отвечает за мониторинг позиций, валидацию сигналов через Риск-Менеджер
+    и финансовый учет.
 
     Attributes:
-        config (TradingConfig): Конфигурация торговой сессии.
-        queue (Queue): Шина событий для отправки ордеров.
-        balance (float): Текущий доступный капитал (Free Cash).
+        config (TradingConfig): Конфигу торговой сессии.
+        queue (Queue): Очередь событий для отправки ордеров.
+        balance (float): Текущий доступный капитал.
         active_trades (List[Trade]): Список текущих открытых позиций.
         closed_trades (List[Trade]): Архив закрытых сделок.
+        pending_instruments (set): Множество тикеров с активными, но не исполненными ордерами.
         risk_manager (RiskManager): Компонент расчета рисков.
+        lot_size (float): Размер лота инструмента.
+        qty_step (float): Шаг изменения количества.
+        min_qty (float): Минимальный допустимый объем ордера.
     """
 
     def __init__(self, config: TradingConfig, events_queue: Queue, instrument_info: Dict[str, Any]):
@@ -40,7 +42,7 @@ class Portfolio:
         Инициализирует портфель.
 
         Args:
-            config: Единый объект конфигурации.
+            config: Конфиг.
             events_queue: Очередь для отправки событий (ордеров).
             instrument_info: Метаданные инструмента (lot_size, qty_step, min_qty).
         """
@@ -63,11 +65,9 @@ class Portfolio:
 
         self.risk_manager = RiskManager(config)
 
-    # --- Market Monitoring Section ---
-
     def on_market_data(self, event: MarketEvent):
         """
-        Обрабатывает обновление рыночных данных (новую свечу).
+        Обрабатывает новую свечу.
 
         Проверяет все активные позиции на предмет срабатывания условий выхода
         (Stop Loss или Take Profit) внутри диапазона High-Low текущей свечи.
@@ -75,9 +75,9 @@ class Portfolio:
         Args:
             event (MarketEvent): Событие, содержащее данные свечи.
         """
-        candle = event.data
-        high = candle['high']
-        low = candle['low']
+        current_candle = event.candle
+        high = current_candle['high']
+        low = current_candle['low']
         ts = event.timestamp
 
         # Итерируемся по копии списка, чтобы безопасно изменять его (если потребуется)
@@ -99,9 +99,7 @@ class Portfolio:
                 elif low <= trade.take_profit:
                     self._send_exit_order(trade, ts, TriggerReason.TAKE_PROFIT, trade.take_profit)
 
-    # --- Signal Processing Section ---
-
-    def on_signal(self, event: SignalEvent, last_candle: Any):
+    def on_signal(self, event: SignalEvent, current_candle: Any):
         """
         Обрабатывает торговый сигнал от стратегии.
 
@@ -110,7 +108,7 @@ class Portfolio:
 
         Args:
             event (SignalEvent): Входящий сигнал.
-            last_candle (pd.Series): Данные последней свечи (нужны для расчета ATR рисков).
+            current_candle (pd.Series): Данные текущей свечи (нужны для расчета ATR рисков).
         """
         # Блокировка: если ордер в пути, игнорируем новые сигналы
         if event.instrument in self.pending_instruments:
@@ -132,22 +130,44 @@ class Portfolio:
                 self._send_exit_order(active_trade, event.timestamp, TriggerReason.SIGNAL, price=None)
         else:
             # Если позиции нет -> Рассчитываем вход
-            self._process_entry_signal(event, last_candle)
+            self._process_entry_signal(event, current_candle)
 
-    def _process_entry_signal(self, event: SignalEvent, last_candle: Any):
+    def _process_entry_signal(self, event: SignalEvent, current_candle: Any):
         """
         Рассчитывает параметры входа (Risk Sizing) и генерирует ордер.
+
+        Также выполняет проверку покупательной способности (Margin Check):
+        если свободных средств не хватает, объем позиции уменьшается.
+
+        Args:
+            event (SignalEvent): Входящий сигнал.
+            current_candle (Any): Текущая свеча для расчетов риска.
         """
         # 1. Расчет профиля риска (SL/TP, Qty) через RiskManager
         risk_profile = self.risk_manager.calculate(
             entry_price=event.price,
             direction=event.direction,
             capital=self.balance,
-            last_candle=last_candle
+            current_candle=current_candle
         )
 
         # 2. Нормализация объема под спецификацию инструмента
         final_qty = self._adjust_quantity(risk_profile.quantity)
+
+        # Проверяем, хватит ли денег на открытие позиции + комиссию
+        estimated_cost = final_qty * event.price
+        estimated_commission = estimated_cost * self.config.commission_rate
+        total_required = estimated_cost + estimated_commission
+
+        if total_required > self.balance:
+            # Денег не хватает. Пытаемся уменьшить позу под остаток (re-calculate).
+            # Формула: Qty = (Balance / (Price * (1 + CommRate)))
+            max_qty_by_cash = self.balance / (event.price * (1 + self.config.commission_rate))
+            final_qty = self._adjust_quantity(max_qty_by_cash)
+            
+            # Если даже минимальный лот не лезет — отмена
+            if final_qty < self.min_qty:
+                return 
 
         # 3. Генерация ордера, если объем валиден
         if final_qty > 0:
@@ -167,6 +187,12 @@ class Portfolio:
     def _send_exit_order(self, trade: Trade, ts, reason: TriggerReason, price: Optional[float] = None):
         """
         Вспомогательный метод для генерации закрывающего ордера.
+
+        Args:
+            trade (Trade): Инструмент активной сделки, которую нужно закрыть.
+            ts (datetime): Время события.
+            reason (TriggerReason): Причина выхода (SL, TP, Signal).
+            price (Optional[float]): Цена выхода (для Limit/Stop) или None (для Market).
         """
         # Направление выхода всегда противоположно направлению входа
         exit_dir = TradeDirection.SELL if trade.direction == TradeDirection.BUY else TradeDirection.BUY
@@ -205,7 +231,13 @@ class Portfolio:
             self._handle_exit_fill(event, trade)
 
     def _handle_entry_fill(self, event: FillEvent):
-        """Регистрация новой позиции (Entry)."""
+        """
+        Регистрация новой позиции (Entry).
+        Списывает стоимость позиции и комиссию с баланса.
+
+        Args:
+            event (FillEvent): Событие исполнения ордера на вход.
+        """
         # Списание стоимости позиции (Margin) и комиссии из свободного баланса.
         # Упрощенная модель: 100% покрытие (плечо 1x).
         cost = (event.price * event.quantity) + event.commission
@@ -228,8 +260,25 @@ class Portfolio:
         self.active_trades.append(new_trade)
 
     def _handle_exit_fill(self, event: FillEvent, trade: Trade):
-        """Закрытие позиции и фиксация результата (Exit)."""
-        # 1. Расчет PnL внутри объекта Trade
+        """
+        Закрытие позиции и фиксация результата (Exit).
+        Возвращает средства на баланс и переносит сделку в архив.
+
+        Логика возврата средств (Cash Flow):
+        Мы возвращаем себе "Тело позиции" (которое списали при входе)
+        плюс "Грязный PnL" (разницу цен) минус "Комиссию за выход".
+
+        Args:
+            event (FillEvent): Событие исполнения ордера на выход.
+            trade (Trade): Объект сделки, которая закрывается.
+        """
+        # 1. Считаем Грязный PnL (Gross PnL) - чисто разница курсов без комиссий
+        if trade.direction == TradeDirection.BUY:
+            gross_pnl = (event.price - trade.entry_price) * trade.quantity
+        else:
+            gross_pnl = (trade.entry_price - event.price) * trade.quantity
+
+        # 2. Закрываем сделку в статистике (тут считается чистый PnL для отчетов)
         trade.close(
             exit_time=event.timestamp,
             exit_price=event.price,
@@ -237,27 +286,31 @@ class Portfolio:
             commission=event.commission
         )
 
-        # 2. Возврат средств на баланс
-        # Возвращаем: Тело позиции (EntryPrice * Qty) + Чистый PnL + Комиссия входа (была вычтена ранее)
-        # Формула вывода: Balance += Revenue
-        body_return = trade.entry_price * trade.quantity
-        # PnL уже очищен от обеих комиссий, поэтому добавляем их обратно для корректного баланса
-        # (т.к. комиссия выхода списывается из профита, а комиссия входа была списана при входе)
-        # Упрощенно: Balance += (Body + PnL + EntryComm) - фактически мы возвращаем остаток.
+        # 3. Движение денег (Возврат на баланс)
+        # Нам возвращается:
+        # + Деньги, которые мы вложили (Locked Margin / Body)
+        # + То, что мы наторговали (Gross PnL)
+        # - То, что забрала биржа за выход (Exit Commission)
+        
+        initial_margin = trade.entry_price * trade.quantity
+        returned_cash = initial_margin + gross_pnl - event.commission
+        
+        self.balance += returned_cash
 
-        revenue = body_return + trade.pnl + trade.entry_commission
-        self.balance += revenue
-
-        # 3. Архивация
+        # 4. Архивация
         self.closed_trades.append(trade)
         self.active_trades.remove(trade)
-
-    # --- Utilities ---
 
     def _adjust_quantity(self, qty: float) -> float:
         """
         Корректирует объем позиции в соответствии с правилами биржи.
-        Округляет вниз до шага лота.
+        Округляет вниз до шага лота и проверяет минимальный размер.
+
+        Args:
+            qty (float): Расчетный объем.
+
+        Returns:
+            float: Скорректированный объем или 0.0, если он меньше минимума.
         """
         if self.qty_step > 0:
             qty = (qty // self.qty_step) * self.qty_step

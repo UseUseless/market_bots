@@ -1,5 +1,5 @@
 """
-Модуль-декоратор для безопасного запуска скриптов.
+Декораторы проекта
 """
 
 import sys
@@ -13,20 +13,20 @@ from app.shared.logging_setup import setup_global_logging
 
 def safe_entry(func: Callable) -> Callable:
     """
-    Декоратор для main-функций CLI скриптов и лаунчера.
+    Декоратор для запуска скриптов и лаунчера.
 
     Автоматически выполняет:
     1. Устанавливает `WindowsSelectorEventLoopPolicy` для Windows,
         чтобы избежать ошибок `RuntimeError: Event loop is closed` при работе с БД.
     2. Инициализирует глобальное логирование.
-    3. Определение типа функции (async/sync) и корректный запуск.
+    3. Определение типа функции (async/sync) и соответствующий запуск.
     4. Глобальный перехват ошибок (Try/Except).
 
     Args:
-        func (Callable): Целевая функция `main` (может быть как `def`, так и `async def`).
+        func (Callable): Целевая функция (может быть как `def`, так и `async def`).
 
     Returns:
-        Callable: Обернутая функция, готовая к запуску в блоке `if __name__ == "__main__":`.
+        Callable: Обернутая функция, готовая к запуску, например в блоке `if __name__ == "__main__":`.
     """
 
     @functools.wraps(func)

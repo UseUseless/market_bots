@@ -101,12 +101,12 @@ def plot_monthly_pnl(trades_df: pd.DataFrame):
     Строит столбчатую диаграмму доходности по месяцам.
     """
     df = trades_df.copy()
-    df['exit_timestamp_utc'] = pd.to_datetime(df['exit_timestamp_utc'])
-    df.set_index('exit_timestamp_utc', inplace=True)
+    df['exit_time'] = pd.to_datetime(df['exit_time'])
+    df.set_index('exit_time', inplace=True)
 
     # Агрегация PnL по месяцам (ME = Month End)
     monthly_pnl = df['pnl'].resample('ME').sum().reset_index()
-    monthly_pnl['month'] = monthly_pnl['exit_timestamp_utc'].dt.strftime('%Y-%m')
+    monthly_pnl['month'] = monthly_pnl['exit_time'].dt.strftime('%Y-%m')
 
     fig = px.bar(
         monthly_pnl, x='month', y='pnl',
@@ -139,12 +139,12 @@ def plot_trades_on_chart(historical_data: pd.DataFrame, trades_df: pd.DataFrame,
     # маркеры лучше сдвигать к моменту Open соответствующей свечи.
     delta = interval_to_timedelta(interval_str)
 
-    trades_df['entry_timestamp_utc'] = pd.to_datetime(trades_df['entry_timestamp_utc'])
-    trades_df['exit_timestamp_utc'] = pd.to_datetime(trades_df['exit_timestamp_utc'])
+    trades_df['entry_time'] = pd.to_datetime(trades_df['entry_time'])
+    trades_df['exit_time'] = pd.to_datetime(trades_df['exit_time'])
 
     # Визуальный сдвиг назад
-    trades_df['plot_entry_time'] = trades_df['entry_timestamp_utc'] - delta
-    trades_df['plot_exit_time'] = trades_df['exit_timestamp_utc'] - delta
+    trades_df['plot_entry_time'] = trades_df['entry_time'] - delta
+    trades_df['plot_exit_time'] = trades_df['exit_time'] - delta
 
     # 1. Маркеры входа (Треугольники)
     long_entries = trades_df[trades_df['direction'] == TradeDirection.BUY]

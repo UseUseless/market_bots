@@ -69,8 +69,8 @@ class PortfolioMetricsCalculator:
         self.gross_loss = abs(self.trades[self.trades['pnl'] < 0]['pnl'].sum())
 
         # 5. Длительность теста (в днях)
-        start_date = pd.to_datetime(self.trades['entry_timestamp_utc'].iloc[0])
-        end_date = pd.to_datetime(self.trades['exit_timestamp_utc'].iloc[-1])
+        start_date = pd.to_datetime(self.trades['entry_time'].iloc[0])
+        end_date = pd.to_datetime(self.trades['exit_time'].iloc[-1])
         delta = end_date - start_date
         self.num_days = delta.days if delta.days > 1 else 1
 

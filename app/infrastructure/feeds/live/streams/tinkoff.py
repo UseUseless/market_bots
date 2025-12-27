@@ -31,9 +31,10 @@ class TinkoffStreamDataHandler(BaseStreamDataHandler):
     Обеспечивает автоматическое переподключение при разрывах связи.
     """
 
-    def __init__(self, events_queue, instrument, interval_str, token):
+    def __init__(self, events_queue, instrument, interval_str, token, lot_size: int = 1):
         super().__init__(events_queue, instrument, interval_str)
         self.token = token
+        self.lot_size = lot_size
 
     async def stream_data(self):
         """
@@ -104,6 +105,8 @@ class TinkoffStreamDataHandler(BaseStreamDataHandler):
                         if marketdata.candle:
                             candle = marketdata.candle
 
+                            adjusted_volume = candle.volume * self.lot_size
+
                             # Преобразование во внутренний формат
                             candle_data = pd.Series({
                                 "time": candle.time.replace(tzinfo=timezone.utc),
@@ -111,13 +114,13 @@ class TinkoffStreamDataHandler(BaseStreamDataHandler):
                                 "high": self._cast_money(candle.high),
                                 "low": self._cast_money(candle.low),
                                 "close": self._cast_money(candle.close),
-                                "volume": candle.volume,
+                                "volume": adjusted_volume,
                             })
 
                             event = MarketEvent(
                                 timestamp=candle_data['time'],
                                 instrument=self.instrument,
-                                data=candle_data
+                                candle=candle_data
                             )
                             # Отправка в очередь для обработки стратегией
                             await self.events_queue.put(event)

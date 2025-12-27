@@ -1,111 +1,69 @@
 ```mermaid
 flowchart TB
-    %% --- STYLES ---
-    classDef file fill:#e1f5fe,stroke:#01579b,stroke-width:2px;
+    %% --- 1. СТИЛИ ---
     classDef folder fill:#fff3e0,stroke:#e65100,stroke-width:2px,stroke-dasharray: 5 5;
+    classDef file fill:#e1f5fe,stroke:#01579b,stroke-width:2px;
     classDef func fill:#fff9c4,stroke:#fbc02d,stroke-width:1px;
+    classDef ext fill:#e1bee7,stroke:#4a148c,stroke-width:2px,stroke-dasharray: 5 5;
     classDef logic fill:#fce4ec,stroke:#880e4f,stroke-width:1px,stroke-dasharray: 5 5;
     classDef loop fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px;
-    classDef thread fill:#d1c4e9,stroke:#512da8,stroke-width:2px;
-    classDef io fill:#cfd8dc,stroke:#455a64,stroke-width:2px;
 
-    %% --- 1. ENTRY POINT ---
-    subgraph F_SCRIPTS ["📂 scripts"]
-        direction TB
-        subgraph S_RUN ["📄 run_batch_backtest.py"]
-            direction TB
-            Entry([CLI Entry]):::file
+    %% --- 2. СТРУКТУРА ---
+    Entry([CLI Entry]):::file
+    %% Папка scripts
+    subgraph SCRIPTS ["📂 scripts"]
+        subgraph RUN ["📄 run_batch_backtest.py"]
             ParseArgs[Parse CLI Arguments]:::logic
-            CallRunner[runners.run_batch_backtest_flow]:::func
-            
-            Entry --> ParseArgs
-            ParseArgs -->|Settings Dict| CallRunner
+            RunBatchBackExt["Запуск массового бэктеста
+            📄.../backtest/runners.py
+            ⚡run_batch_backtest_flow"]:::ext
         end
     end
-
-    %% --- 2. CORE BACKTEST ENGINE ---
-    subgraph F_CORE ["📂 app/core/engine/backtest"]
-        direction TB
-        
+    
+    %% Папка app/core/engine/backtest
+    subgraph CoreEngine ["📂 app/core/engine/backtest"]
         subgraph S_RUNNERS ["📄 runners.py"]
-            direction TB
-            
-            %% PREPARATION PHASE
-            subgraph PREP ["1. Config Assembly"]
-                direction TB
-                ScanDir[Scan Data Directory]:::io
-                IterFiles{Loop: Files}:::loop
-                Assemble[_assemble_config]:::func
-                ConfigList[List of TradingConfig]:::logic
-                
-                CallRunner --> ScanDir
-                ScanDir -->|"File List"| IterFiles
-                IterFiles --> Assemble
-                Assemble -->|TradingConfig| ConfigList
-                ConfigList --> IterFiles
-            end
+            subgraph RunBatchBacktest [run_batch_backtest_flow]
+                ScanData[Сканирование папки по аргументам из CLI]:::func
+                Config[_create_config для каждого файла инструмента]:::func
 
-            %% EXECUTION PHASE
-            subgraph EXEC ["2. Parallel Execution"]
-                direction TB
-                Executor[ThreadPoolExecutor]:::thread
-                SubmitTask[executor.submit _run_single_task]:::func
-                CollectResults[Collect Futures]:::logic
-                
-                ConfigList -- "All Configs Ready" --> Executor
-                Executor --> SubmitTask
-                SubmitTask --> CollectResults
-            end
-            
-            %% WORKER LOGIC (Running in Thread)
-            subgraph WORKER ["👷 Worker: _run_single_task"]
-                direction TB
-                InitEngine[BacktestEngine.__init__]:::func
-                
-                %% Lightweight Calc
-                CalcMetrics[Quick PnL/DD/WR Calc]:::logic
-                ReturnDict[Return Result Dict]:::logic
-                
-                SubmitTask -.->|Config| InitEngine
-                CalcMetrics -->|Metrics Dict| ReturnDict
+                subgraph RunThreadPool[Запускаем по одному бэктесту через одиночный запускатор бэктеста _run_single_batch_task]
+                    RunBackEngine[Запуск движка бэктеста BacktestEngine.run]:::ext
+                    CalcResults[По полученной пачке результатов считаем базовые метрики]:::func
+                end
+
+                GenerateReports["Собираем результаты в excel
+                📄...core\analysis\reports\excel.py
+                ⚡ExcelReportGenerator.generate"]:::ext
             end
         end
 
-        subgraph S_ENGINE ["📄 engine.py"]
-            direction TB
-            RunSim[BacktestEngine.run]:::func
-            
-            InitEngine --> RunSim
-            RunSim -->|Trades DF + Capital| CalcMetrics
+        subgraph ENGINE ["📄 engine.py"]
+            subgraph BacktestRun [⚡BacktestEngine.run]
+                ResultBuild[Аналогично обычному run_backtest]:::func
+            end
         end
     end
 
-    %% --- 3. REPORTING ---
-    subgraph F_REP ["📂 app/core/analysis/reports"]
-        direction TB
-        subgraph S_EXCEL ["📄 excel.py"]
-            direction TB
-            InitGen[ExcelReportGenerator.__init__]:::func
-            GenRep[generate]:::func
-            
-            subgraph EXCEL_LOGIC ["Excel Logic"]
-                direction TB
-                CalcSummary[_calculate_summary_metrics]:::func
-                WriteXLSX[Write .xlsx File]:::io
-            end
-            
-            InitGen --> GenRep
-            GenRep --> CalcSummary
-            CalcSummary -->|"Summary DF"| WriteXLSX
-        end
-    end
+    %% --- 3. СВЯЗИ ---
+    %% run_backtest.py
+    Entry ==> ParseArgs
+    ParseArgs ==>|Settings from CLI Dict| RunBatchBackExt
+    RunBatchBackExt ==>|Settings from CLI Dict| ScanData
 
-    %% --- GLOBAL DATA FLOW ---
-    
-    %% Aggregation
-    ReturnDict -.->|Future Result| CollectResults
-    CollectResults -->|"List[Result Dict]"| ToDF[pd.DataFrame]:::logic
-    
-    %% Reporting connection
-    ToDF -->|"Results DataFrame"| InitGen
+    %% runners.py
+    ScanData ==> Config
+    Config ==>|TradingConfig| RunThreadPool
+
+    %% Engine Flow
+    RunBackEngine ==>|TradingConfig| BacktestRun
+    ResultBuild ==>|Результаты бэктеста Dict + Все сделки DF| CalcResults
+
+    CalcResults ==> GenerateReports
+
+    %% --- 4. ПРИМЕНЕНИЕ СТИЛЕЙ ---
+    class SCRIPTS,CoreEngine folder;
+
+    class RUN,S_RUNNERS,ENGINE file;
+    class BacktestRun,RunBatchBacktest func;
 ```

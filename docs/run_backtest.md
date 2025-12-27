@@ -17,7 +17,7 @@ flowchart TB
             direction LR
             ParseArgs[Parse CLI Arguments]:::logic
             RunSingleBackExt["Запуск бэктеста
-            📄.../backtest/runner.py
+            📄.../backtest/runners.py
             ⚡run_single_backtest_flow"]:::ext
         end
     end
@@ -135,8 +135,8 @@ flowchart TB
     %% --- 3. СВЯЗИ ---
     %% run_backtest.py
     Entry ==> ParseArgs
-    ParseArgs ==>|Settings Dict| RunSingleBackExt
-    RunSingleBackExt ==>|Settings Dict| Config
+    ParseArgs ==>|Settings from CLI Dict| RunSingleBackExt
+    RunSingleBackExt ==>|Settings from CLI Dict| Config
 
     %% runners.py
     Config ==>|TradingConfig| RunBackEngine

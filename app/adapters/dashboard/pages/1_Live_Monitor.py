@@ -20,6 +20,7 @@ from sqlalchemy import create_engine, select, func, desc
 from sqlalchemy.orm import sessionmaker
 
 from app.shared.config import config
+from app.adapters.dashboard.db import get_session_factory
 from app.infrastructure.database.models import (
     BotInstance,
     StrategyConfig,
@@ -37,12 +38,8 @@ st.set_page_config(
 )
 st.title("🚀 Live Signal Monitor")
 
-# --- Настройка подключения к БД ---
-# Streamlit работает в синхронном режиме, поэтому заменяем драйвер asyncpg на psycopg2
-SYNC_DB_URL = config.DATABASE_URL.replace("+asyncpg", "+psycopg2")
-engine = create_engine(SYNC_DB_URL)
-SessionLocal = sessionmaker(bind=engine)
-
+# Инициализация БД
+SessionLocal = get_session_factory()
 
 def load_operational_data() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """

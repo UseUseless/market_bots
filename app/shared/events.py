@@ -12,21 +12,22 @@ from app.shared.types import TradeDirection, TriggerReason
 
 @dataclass
 class Event:
+    """Базовый класс любых событий"""
     pass
 
 
 @dataclass
 class MarketEvent(Event):
-    """Пришла новая свеча."""
+    """Новая свеча."""
     timestamp: datetime
     instrument: str
-    data: pd.Series
+    candle: pd.Series
 
 
 @dataclass
 class SignalEvent(Event):
     """
-    Стратегия хочет войти или выйти.
+    Сигнал от стратегии на вход или выход.
     """
     timestamp: datetime
     instrument: str
@@ -37,7 +38,7 @@ class SignalEvent(Event):
 
 @dataclass
 class OrderEvent(Event):
-    """Приказ на исполнение."""
+    """Запрос исполнения заявки"""
     timestamp: datetime
     instrument: str
     direction: TradeDirection

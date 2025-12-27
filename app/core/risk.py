@@ -1,11 +1,11 @@
 """
 Модуль управления рисками (Risk Management).
 
-Этот модуль объединяет в себе логику определения уровней защиты (Stop Loss, Take Profit)
-и расчет объема позиции (Position Sizing) на основе допустимого денежного риска.
+Объединяет в себе логику определения Stop Loss, Take Profit
+и расчет объема позиции на основе допустимого денежного риска.
 
 Классы:
-    - RiskManager: Единый калькулятор параметров сделки.
+    - RiskManager: Калькулятор параметров сделки.
 """
 
 from typing import Optional, Tuple, Dict, Any
@@ -101,9 +101,9 @@ class RiskManager:
                   entry_price: float,
                   direction: TradeDirection,
                   capital: float,
-                  last_candle: Optional[pd.Series] = None) -> TradeRiskProfile:
+                  current_candle: Optional[pd.Series] = None) -> TradeRiskProfile:
         """
-        Рассчитывает полный профиль риска для планируемой сделки.
+        Рассчитывает профиль риска для планируемой сделки.
 
         Выполняет ключевую задачу риск-менеджмента: определение объема позиции (Size)
         таким образом, чтобы при срабатывании стоп-лосса потеря составила ровно
@@ -118,13 +118,13 @@ class RiskManager:
             entry_price (float): Планируемая цена входа.
             direction (TradeDirection): Направление сделки (BUY/SELL).
             capital (float): Текущий доступный капитал (Equity/Free Margin).
-            last_candle (Optional[pd.Series]): Данные последней свечи (требуется для ATR).
+            current_candle (Optional[pd.Series]): Данные текущей свечи (требуется для ATR).
 
         Returns:
             TradeRiskProfile: Датакласс с рассчитанными ценами (SL, TP) и объемом.
         """
         # 1. Расчет цен Stop Loss и Take Profit
-        sl_price, tp_price = self._calculate_stops(entry_price, direction, last_candle)
+        sl_price, tp_price = self._calculate_stops(entry_price, direction, current_candle)
 
         # 2. Расчет риска на 1 единицу актива (Risk Per Share)
         # Это дистанция цены, которую мы готовы "потерять" на одной монете/акции.
@@ -157,55 +157,77 @@ class RiskManager:
     def _calculate_stops(self,
                          entry: float,
                          direction: TradeDirection,
-                         candle: pd.Series) -> Tuple[float, float]:
+                         current_candle: Optional[pd.Series]) -> Tuple[float, float]:
         """
-        Внутренняя логика определения ценовых уровней SL и TP.
+        Маршрутизатор расчета уровней SL/TP.
 
-        Выбирает алгоритм в зависимости от `self.risk_type`.
-        Для ATR режима проверяет наличие данных, при их отсутствии откатывается на FIXED.
+        Определяет, какой алгоритм использовать.
+        Реализует механизм Fallback: если ATR недоступен, откатывается на Fixed.
+
+        Args:
+            entry (float): Цена входа.
+            direction (TradeDirection): Направление.
+            current_candle (Optional[pd.Series]): Данные свечи.
 
         Returns:
-            Tuple[float, float]: (Stop_Loss_Price, Take_Profit_Price)
+            Tuple[float, float]: (Stop_Loss_Price, Take_Profit_Price).
         """
-        # --- Режим ATR (Волатильность) ---
         if self.risk_type == "ATR":
-            # Валидация данных свечи (в Live-режиме может быть None при старте)
-            if candle is None:
-                return self._calculate_fixed_stops(entry, direction)
+            atr_stops = self._calculate_atr_stops(entry, direction, current_candle)
+            if atr_stops:
+                return atr_stops
+            # Если ATR вернул None (нет данных), идем дальше к Fixed (Fallback)
 
-            atr_col = f"ATR_{self.atr_period}"
-            atr_value = candle.get(atr_col)
+        return self._calculate_fixed_stops(entry, direction)
 
-            # Проверка, что ATR рассчитан (не NaN и существует)
-            if atr_value is None or pd.isna(atr_value):
-                return self._calculate_fixed_stops(entry, direction)
+    def _calculate_atr_stops(self,
+                             entry: float,
+                             direction: TradeDirection,
+                             current_candle: Optional[pd.Series]) -> Optional[Tuple[float, float]]:
+        """
+        Рассчитывает уровни на основе волатильности (ATR).
 
-            # Расчет дистанций
-            sl_dist = atr_value * self.atr_mult_sl
-            tp_dist = atr_value * self.atr_mult_tp
+        Args:
+            entry (float): Цена входа.
+            direction (TradeDirection): Направление.
+            current_candle (Optional[pd.Series]): Свеча с индикаторами.
 
-            if direction == TradeDirection.BUY:
-                sl = entry - sl_dist
-                tp = entry + tp_dist
-            else:  # SELL
-                sl = entry + sl_dist
-                tp = entry - tp_dist
+        Returns:
+            Optional[Tuple[float, float]]: Кортеж (SL, TP) или None, если ATR не рассчитан.
+        """
+        # 1. Валидация наличия данных
+        if current_candle is None:
+            return None
 
-            return sl, tp
+        atr_col = f"ATR_{self.atr_period}"
+        atr_value = current_candle.get(atr_col)
 
-        # --- Режим FIXED (Проценты) ---
-        else:
-            return self._calculate_fixed_stops(entry, direction)
+        # 2. Проверка значения индикатора
+        if atr_value is None or pd.isna(atr_value):
+            return None
+
+        # 3. Расчет дистанций
+        sl_dist = atr_value * self.atr_mult_sl
+        tp_dist = atr_value * self.atr_mult_tp
+
+        if direction == TradeDirection.BUY:
+            return entry - sl_dist, entry + tp_dist
+        else:  # SELL
+            return entry + sl_dist, entry - tp_dist
 
     def _calculate_fixed_stops(self, entry: float, direction: TradeDirection) -> Tuple[float, float]:
         """
-        Базовый расчет уровней на основе фиксированного процента от цены входа.
+        Рассчитывает уровни на основе фиксированного процента.
 
-        Используется как основной метод для режима FIXED и как запасной (fallback)
-        для режима ATR.
+        Args:
+            entry (float): Цена входа.
+            direction (TradeDirection): Направление.
+
+        Returns:
+            Tuple[float, float]: Кортеж (SL, TP).
         """
         sl_dist = entry * (self.sl_percent / 100.0)
-        tp_dist = sl_dist * self.tp_ratio  # TP обычно считается как Ratio к SL (Risk/Reward)
+        tp_dist = sl_dist * self.tp_ratio
 
         if direction == TradeDirection.BUY:
             return entry - sl_dist, entry + tp_dist

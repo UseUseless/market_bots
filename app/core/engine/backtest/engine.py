@@ -1,7 +1,7 @@
 """
 Модуль основного цикла бэктеста (Backtest Engine).
 
-Этот модуль отвечает за оркестрацию симуляции торговли на исторических данных.
+Этот модуль отвечает за симуляцию торговли на исторических данных.
 Он связывает поток данных, торговую стратегию, управление портфелем и
 симуляцию исполнения ордеров в единый событийный цикл.
 
@@ -14,7 +14,6 @@
 Этот модуль эмулирует работу биржевого движка (Matching Engine) в режиме бэктеста.
 Его задача — превратить ордер (намерение) в сделку (факт) с учетом рыночных условий,
 ликвидности и транзакционных издержек.
-
 """
 
 import queue
@@ -77,7 +76,7 @@ class BacktestEngine:
 
     def _initialize_components(self) -> None:
         """
-        Инициализирует и связывает основные компоненты системы (Composition Root).
+        Инициализирует основные компоненты системы.
 
         Создает экземпляры Стратегии, Портфеля и Исполнителя, внедряя в них
         общую очередь событий и конфигурацию.
@@ -108,12 +107,11 @@ class BacktestEngine:
         )
         self.components['portfolio'] = portfolio
 
-        # 4. Инициализация Симулятора исполнения (Slippage & Commission)
-        slippage_conf = app_config.BACKTEST_CONFIG.get("SLIPPAGE_CONFIG", {})
+        # 4. Инициализация Симулятора исполнения (Проскальзывание и комиссии)
         execution_handler = BacktestExecutionHandler(
             events_queue=self.events_queue,
             commission_rate=self.config.commission_rate,
-            slippage_config=slippage_conf
+            slippage_config=self.config.slippage_config
         )
         self.components['execution_handler'] = execution_handler
 
@@ -122,11 +120,11 @@ class BacktestEngine:
         Подготавливает данные для симуляции.
 
         1. Загружает сырые данные (с диска или из памяти).
-        2. Запускает векторный расчет индикаторов через стратегию.
+        2. Запускает расчет индикаторов через стратегию.
         3. Проверяет достаточность истории для разогрева (Warm-up).
 
         Returns:
-            pd.DataFrame: Обогащенные данные с индикаторами, или None при ошибке.
+            pd.DataFrame: Обогащенные данные с индикаторами, None при ошибке.
         """
         strategy = self.components['strategy']
 
@@ -162,7 +160,7 @@ class BacktestEngine:
         Маршрутизатор событий (Event Dispatcher).
 
         Разбирает очередь событий и направляет их соответствующим компонентам.
-        Работает синхронно, опустошая очередь на каждом шаге цикла.
+        Работает синхронно, разбирает очередь на каждом шаге цикла.
         """
         portfolio = self.components['portfolio']
         execution = self.components['execution_handler']
@@ -197,7 +195,7 @@ class BacktestEngine:
 
     def run(self) -> Dict[str, Any]:
         """
-        Запускает основной цикл симуляции (Main Loop).
+        Запускает основной цикл симуляции.
 
         Итерируется по историческим свечам, последовательно вызывая компоненты
         в строгом порядке для имитации рыночной механики.
@@ -226,7 +224,7 @@ class BacktestEngine:
                 market_event = MarketEvent(
                     timestamp=self.current_candle['time'],
                     instrument=self.config.instrument,
-                    data=self.current_candle
+                    candle=self.current_candle
                 )
                 # Обновляем время в логгере для корректной отладки
                 backtest_time_filter.set_sim_time(market_event.timestamp)
@@ -259,9 +257,6 @@ class BacktestEngine:
             for t in portfolio.closed_trades:
                 d = t.__dict__.copy()
                 # Маппинг полей для совместимости с AnalysisSession
-                # TODO: ВПАДЛУ БЫЛО МЕНЯТЬ ПО ВСЕМ ФАЙЛАМ. ПОТОМ!
-                d['entry_timestamp_utc'] = d['entry_time']
-                d['exit_timestamp_utc'] = d['exit_time']
                 d['exchange'] = self.config.exchange
                 d['interval'] = self.config.interval
                 d['risk_manager'] = self.config.risk_config.get('type', 'FIXED')
@@ -294,7 +289,7 @@ class BacktestExecutionHandler:
         events_queue (Queue): Очередь для отправки событий исполнения (FillEvent).
         commission_rate (float): Ставка комиссии (в долях, например 0.001 = 0.1%).
         slippage_enabled (bool): Флаг включения симуляции проскальзывания.
-        impact_coefficient (float): Коэффициент влияния на рынок (Market Impact).
+        impact_coefficient (float): Коэффициент влияния на рынок (проскальзывание).
     """
 
     def __init__(self, events_queue: Queue, commission_rate: float, slippage_config: Dict[str, Any]):
@@ -311,10 +306,10 @@ class BacktestExecutionHandler:
         self.slippage_enabled = slippage_config.get("ENABLED", False)
         self.impact_coefficient = slippage_config.get("IMPACT_COEFFICIENT", 0.1)
 
-    def _simulate_slippage(self, ideal_price: float, quantity: float,
+    def _simulate_slippage(self, base_price: float, quantity: float,
                            direction: TradeDirection, candle_volume: float) -> float:
         """
-        Рассчитывает цену исполнения с учетом влияния объема ордера на рынок (Market Impact).
+        Рассчитывает цену исполнения с учетом влияния объема ордера на рынок.
 
         Использует упрощенную модель "Square Root Law":
         Slippage % ~ ImpactCoef * sqrt(OrderSize / CandleVolume).
@@ -323,7 +318,7 @@ class BacktestExecutionHandler:
         почти по рынку, а крупные могут существенно сдвинуть цену.
 
         Args:
-            ideal_price: Базовая цена (Open свечи или Limit цена).
+            base_price: Базовая цена (Open свечи или Limit цена).
             quantity: Объем ордера.
             direction: Направление (BUY/SELL).
             candle_volume: Объем торгов в текущей свече (ликвидность).
@@ -332,7 +327,7 @@ class BacktestExecutionHandler:
             float: Скорректированная цена исполнения.
         """
         if not self.slippage_enabled or candle_volume <= 0:
-            return ideal_price
+            return base_price
 
         # Доля ордера в объеме свечи (ограничена 100%, чтобы не ломать математику)
         volume_ratio = min(quantity / candle_volume, 1.0)
@@ -344,20 +339,21 @@ class BacktestExecutionHandler:
         # Это защищает от аномалий в исторических данных (например, ошибочный нулевой объем)
         slippage_percent = min(slippage_percent, 0.20)
 
-        # Применение сдвига: Покупка дороже, Продажа дешевле
+        # Итоговая цена
         if direction == TradeDirection.BUY:
-            return ideal_price * (1 + slippage_percent)
+            return base_price * (1 + slippage_percent)
         else:
-            return ideal_price * (1 - slippage_percent)
+            return base_price * (1 - slippage_percent)
 
-    def execute_order(self, order: OrderEvent, last_candle: pd.Series):
+    def execute_order(self, order: OrderEvent, current_candle: pd.Series):
         """
         Исполняет ордер по рыночным данным переданной свечи.
 
         Алгоритм:
         1. Определяет базовую цену.
-           - Для Market Order: используется цена Open текущей свечи (так как решение принято на Close предыдущей).
-           - Для Limit/Stop: используется цена из ордера.
+           - Для Market Order: используется цена Open текущей свечи
+           (так как решение принято на Close предыдущей).
+           - Для SL/TP используется цена из ордера.
         2. Рассчитывает проскальзывание на основе объема свечи.
         3. Рассчитывает комиссию.
         4. Генерирует событие исполнения (FillEvent).
@@ -366,25 +362,25 @@ class BacktestExecutionHandler:
             order: Событие ордера.
             last_candle: Данные свечи, на которой происходит исполнение.
         """
-        if last_candle is None:
+        if current_candle is None:
             return
 
         # 1. Определение базовой цены
         if order.price is not None:
-            # Лимитный/Стоп ордер: исполняем строго по цене триггера (или хуже, если гэп)
+            # SLTP: исполняем строго по цене триггера
             # Упрощение: считаем, что исполнили по заявленной цене
             base_price = order.price
         else:
             # Рыночный ордер: исполняем по цене открытия свечи
-            base_price = float(last_candle['open'])
+            base_price = float(current_candle['open'])
 
         # 2. Симуляция проскальзывания
         # Используем объем свечи как прокси ликвидности
         exec_price = self._simulate_slippage(
-            ideal_price=base_price,
+            base_price=base_price,
             quantity=order.quantity,
             direction=order.direction,
-            candle_volume=float(last_candle.get('volume', 1000000))
+            candle_volume=float(current_candle.get('volume', 1000000))
         )
 
         # 3. Расчет комиссии (Cost = Price * Qty * Rate)

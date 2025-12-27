@@ -1,8 +1,8 @@
 """
-Модуль конфигурации приложения.
+Конфиги проекта.
 
-Этот модуль определяет класс `AppConfig` - все настройки проекта.
-Он использует библиотеку `pydantic-settings` для:
+Определяет класс `AppConfig` - все настройки проекта.
+Использует библиотеку `pydantic-settings` для:
 1. Валидации типов данных (например, чтобы капитал был числом).
 2. Автоматического чтения переменных окружения из файла `.env`.
 3. Предоставления дефолтных значений, если переменные не заданы.
@@ -66,18 +66,19 @@ class AppConfig(BaseSettings):
     @property
     def PATH_CONFIG(self) -> Dict[str, str]:
         """
-        Возвращает словарь всех путей в строковом формате.
-        Удобно для передачи в функции, которые не ожидают объекты Path.
+        Словарь всех путей в строковом формате.
         """
         return {
             "DATA_DIR": str(self.DATA_DIR),
             "DATALISTS_DIR": str(self.DATALISTS_DIR),
+
             "LOGS_DIR": str(self.LOGS_DIR),
             # Подпапки логов
             "LOGS_BACKTEST_DIR": str(self.LOGS_DIR / "backtests"),
             "LOGS_BATCH_TEST_DIR": str(self.LOGS_DIR / "batch_tests"),
             "LOGS_OPTIMIZATION_DIR": str(self.LOGS_DIR / "optimizations"),
             "LOGS_LIVE_DIR": str(self.LOGS_DIR / "live"),
+
             "REPORTS_DIR": str(self.REPORTS_DIR),
             # Подпапки отчетов
             "REPORTS_BACKTEST_DIR": str(self.REPORTS_DIR / "backtests"),
@@ -97,7 +98,7 @@ class AppConfig(BaseSettings):
     @property
     def DATABASE_URL(self) -> str:
         """
-        Собирает строку подключения для SQLAlchemy (драйвер asyncpg).
+        Строка подключения для SQLAlchemy (драйвер asyncpg).
         """
         return (
             f"postgresql+asyncpg://"
@@ -113,7 +114,7 @@ class AppConfig(BaseSettings):
 
     # 4. Настройки Загрузчика Данных (Data Loader Config)
 
-    DL_DAYS_TO_LOAD: int = 120  # Сколько дней истории качать по умолчанию
+    DL_DAYS_TO_LOAD: int = 60  # Сколько дней истории качать по умолчанию
     DL_LIQUID_COUNT: int = 10  # Сколько топ-инструментов брать в список
     DATA_FILE_EXTENSION: str = ".parquet"  # Формат хранения данных
 
@@ -132,7 +133,9 @@ class AppConfig(BaseSettings):
 
     @property
     def LIVE_TRADING_CONFIG(self) -> Dict[str, int]:
-        """Агрегированные настройки для Live Engine."""
+        """
+        Агрегированные настройки для Live Engine.
+        """
         return {
             "LIVE_RECONNECT_DELAY_SECONDS": self.LIVE_RECONNECT_DELAY,
             "LIVE_HISTORY_BUFFER_MULTIPLIER": self.LIVE_HISTORY_BUFFER_MULT
@@ -142,17 +145,17 @@ class AppConfig(BaseSettings):
 
     bt_initial_capital: float = 500000.0
     bt_commission_rate: float = 0.0005  # 0.05%
-    bt_max_exposure: float = 0.2  # Макс. доля капитала на 1 позицию (без учета плеч)
     bt_slippage_enabled: bool = True  # Включить симуляцию проскальзывания
     bt_slippage_impact: float = 0.1  # Коэффициент влияния объема на цену
 
     @property
     def BACKTEST_CONFIG(self) -> Dict[str, Any]:
-        """Агрегированные настройки для движка бэктеста."""
+        """
+        Агрегированные настройки для движка бэктеста.
+        """
         return {
             "INITIAL_CAPITAL": self.bt_initial_capital,
             "COMMISSION_RATE": self.bt_commission_rate,
-            "MAX_POSITION_EXPOSURE": self.bt_max_exposure,
             "SLIPPAGE_CONFIG": {
                 "ENABLED": self.bt_slippage_enabled,
                 "IMPACT_COEFFICIENT": self.bt_slippage_impact
@@ -160,7 +163,6 @@ class AppConfig(BaseSettings):
         }
 
     # 7. Спецификации Бирж (Exchange Specs)
-    # Обработка интервалов и специфические настройки (сессии, аннуализация).
 
     @property
     def EXCHANGE_INTERVAL_MAPS(self) -> Dict[str, Dict[str, str]]:

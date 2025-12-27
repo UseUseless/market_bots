@@ -4,10 +4,9 @@
 Определяет каркас для всех торговых алгоритмов в системе.
 Обеспечивает унифицированный интерфейс для работы как в режиме бэктеста, так и в реальном времени.
 
-Основные механизмы:
-1.  **Auto-Discovery:** Параметры (`params_config`) собираются автоматически.
-2.  **Feature Calculations:** Индикаторы рассчитываются централизованно через `FeatureEngine`.
-3.  **Risk-indicators:** Автоматически подгружает индикаторы, необходимые Риск-Менеджеру (например, ATR).
+Реализована гибридная схема работы с данными.
+В Backtest-режиме стратегия использует предрасчитанные данные (быстро).
+В Live-режиме стратегия сама рассчитывает индикаторы "на лету" (безопасно, без Race Condition).
 """
 
 from abc import ABC, abstractmethod
@@ -33,10 +32,10 @@ class BaseStrategy(ABC):
 
     Attributes:
         params_config (Dict[str, Dict]): Конфигурация параметров для оптимизации (Optuna).
-            Формат: `{"param_name": {"type": "int", "low": 10, "high": 50, "default": 20}}`.
-        required_indicators (List[Dict]): Список индикаторов, необходимых стратегии.
-            Формат: `[{"name": "sma", "params": {"period": 20}}]`.
-        min_history_needed (int): Минимальное количество свечей для корректного расчета индикаторов.
+        required_indicators (List[Dict]): Список необходимых индикаторов (SMA, RSI и т.д.).
+        min_history_needed (int): Минимальное кол-во свечей для корректного расчета индикаторов.
+        events_queue (Queue): Очередь для отправки сигналов.
+        config (TradingConfig): Конфигурация сессии.
     """
 
     # Дефолтные значения (переопределяются в наследниках)
@@ -69,12 +68,10 @@ class BaseStrategy(ABC):
     @classmethod
     def get_default_params(cls) -> Dict[str, Any]:
         """
-        Собирает тсандартные параметры из конфигурации всех родительских классов (MRO).
-
-        Это позволяет наследовать параметры стратегий.
+        Собирает стандартные параметры из конфигурации всех родительских классов.
 
         Returns:
-            Dict[str, Any]: Словарь {имя_параметра: дефолтное_значение}.
+            Dict[str, Any]: Словарь дефолтных параметров стратегии.
         """
         config = {}
         for base_class in reversed(cls.__mro__):
@@ -84,24 +81,18 @@ class BaseStrategy(ABC):
 
     def _add_risk_manager_requirements(self):
         """
-        Анализирует конфигурацию риск-менеджера и добавляет необходимые индикаторы.
-
-        Пример: Если выбран риск-менеджер 'ATR', стратегия автоматически добавляет
-        расчет ATR в список `required_indicators`, даже если сама стратегия его не использует.
+        Проверяет настройки Риск-Менеджера и добавляет необходимые индикаторы (например, ATR).
         """
         risk_cfg = self.config.risk_config
         risk_type = risk_cfg.get("type", "FIXED")
 
         if risk_type == "ATR":
             atr_period = risk_cfg.get("atr_period", 14)
-            atr_req = {"name": "atr", "params": {"period": atr_period}}
+            atr_req = {"name": "atr", "params": {"length": atr_period}}
 
-            # Копируем список, чтобы не мутировать атрибут класса (shared state hazard)
             current_requirements = list(self.required_indicators)
-
-            # Проверка на дубликаты: добавляем только если такого индикатора еще нет
             is_present = any(
-                req.get('name') == 'atr' and req.get('params', {}).get('period') == atr_period
+                req.get('name') == 'atr' and req.get('params', {}).get('length') == atr_period
                 for req in current_requirements
             )
 
@@ -111,44 +102,35 @@ class BaseStrategy(ABC):
 
     def process_data(self, data: pd.DataFrame) -> pd.DataFrame:
         """
-        Выполняет подготовку данных для бэктеста.
+        Выполняет полный цикл подготовки данных: расчет индикаторов и очистка.
 
-        Рассчитывает все индикаторы и очищает результирующий DataFrame от NaN значений, 
-        которые возникают в начале истории из-за периодов индикаторов ("разогрев").
+        Используется для начальной подготовки в бэктесте или для локального
+        расчета в Live-режиме.
 
         Args:
             data (pd.DataFrame): Сырые исторические данные (OHLCV).
 
         Returns:
-            pd.DataFrame: Обогащенные данные, готовые к симуляции.
+            pd.DataFrame: Обогащенный DataFrame без пропусков (NaN), готовый к работе.
         """
+        if data.empty:
+            return data
+
         original_columns = set(data.columns)
 
-        # 1. Расчет стандартных индикаторов (через FeatureEngine)
+        # 1. Расчет стандартных индикаторов
         enriched_data = self.feature_engine.add_required_features(
             data, self.required_indicators
         )
 
-        # 2. Хук для кастомных фичей (переопределяется в наследниках)
+        # 2. Для кастомных фичей
         final_data = self._prepare_custom_features(enriched_data)
 
         # 3. Умная очистка (Smart Dropna)
-        # Удаляем строки с NaN только в *новых* колонках (индикаторах).
-        # Это предотвращает удаление данных, если в сырых данных были пропуски (хотя их быть не должно).
         new_columns = list(set(final_data.columns) - original_columns)
-
         if new_columns:
-            # Проверяем, есть ли колонки, полностью состоящие из NaN (ошибка расчета)
             valid_indicators = [col for col in new_columns if not final_data[col].isna().all()]
-            broken_indicators = [col for col in new_columns if col not in valid_indicators]
-
-            if broken_indicators:
-                logger.warning(
-                    f"⚠️ Strategy '{self.name}': Индикаторы {broken_indicators} не рассчитались (полностью NaN). "
-                    "Проверьте параметры или входные данные."
-                )
-
-            # Удаляем строки "разогрева"
+            
             if valid_indicators:
                 final_data.dropna(subset=valid_indicators, inplace=True)
 
@@ -157,16 +139,13 @@ class BaseStrategy(ABC):
 
     def _prepare_custom_features(self, data: pd.DataFrame) -> pd.DataFrame:
         """
-        Расчет специфических признаков, которые сложно описать через конфиг.
-
-        Например: Z-Score, синтетические спреды, паттерны свечей.
-        Может быть переопределен в дочернем классе.
+        Метод для расчета специфических признаков, не входящих в стандартный набор.
 
         Args:
-            data (pd.DataFrame): Данные с уже рассчитанными стандартными индикаторами.
+            data (pd.DataFrame): DataFrame с базовыми индикаторами.
 
         Returns:
-            pd.DataFrame: Данные с добавленными кастомными колонками.
+            pd.DataFrame: DataFrame с добавленными кастомными колонками.
         """
         return data
 
@@ -174,25 +153,44 @@ class BaseStrategy(ABC):
         """
         Основной обработчик события "Новая свеча".
 
-        Вызывается движком (Live или Backtest) при закрытии очередной свечи.
-        Запрашивает у провайдера необходимую историю и передает её в логику стратегии.
+        Реализует адаптивную логику работы с данными:
+        1. В Backtest: использует уже готовые индикаторы из фида.
+        2. В Live: если индикаторов нет, рассчитывает их локально на копии данных.
 
         Args:
-            feed (MarketDataProvider): Интерфейс доступа к рыночным данным.
+            feed (MarketDataProvider): Провайдер рыночных данных.
         """
-        # Запрашиваем историю с запасом (нужно минимум 2 свечи для сравнения prev/curr)
-        history_needed = max(self.min_history_needed, 2)
+        # Запрашиваем историю с запасом
+        # +5 нужно, чтобы после dropna (из-за индикаторов) у нас осталось хотя бы 2 свечи
+        history_needed = self.min_history_needed + 5
+        
+        # Получаем КОПИЮ данных (гарантируется обновленным провайдером)
         history_df = feed.get_history(length=history_needed)
 
-        # Защита от холодного старта
         if len(history_df) < 2:
             return
 
-        # Извлекаем две последние свечи для анализа пересечений/изменений
+        # --- Проверка: нужно ли считать индикаторы? ---
+        # Если в данных только OHLCV, значит мы в Live режиме и нужно считать локально.
+        needs_calculation = False
+        if self.required_indicators:
+            # Упрощенная эвристика: если колонок мало (<= 6), значит это "сырой" DF.
+            if len(history_df.columns) <= 6: # OHLCV + Time
+                needs_calculation = True
+
+        if needs_calculation:
+            # [Live Mode] Локальный расчет на копии данных
+            history_df = self.process_data(history_df)
+
+        # После расчета (и возможного dropna) данных может стать меньше
+        if len(history_df) < 2:
+            return
+
+        # Извлекаем две последние свечи для анализа
         last_candle = history_df.iloc[-1]
         prev_candle = history_df.iloc[-2]
 
-        # Получаем timestamp из индекса или колонки
+        # Получаем timestamp
         timestamp = last_candle.get('time', last_candle.name)
 
         self._calculate_signals(prev_candle, last_candle, timestamp)
@@ -200,16 +198,11 @@ class BaseStrategy(ABC):
     @abstractmethod
     def _calculate_signals(self, prev_candle: pd.Series, last_candle: pd.Series, timestamp: pd.Timestamp):
         """
-        Ядро торговой логики.
-
-        Здесь реализуются правила входа и выхода. Метод должен анализировать
-        переданные свечи и помещать `SignalEvent` в `self.events_queue` при выполнении условий.
+        Ядро торговой логики. Определяет условия входа и выхода.
 
         Args:
             prev_candle (pd.Series): Данные предыдущей закрытой свечи.
             last_candle (pd.Series): Данные текущей закрытой свечи.
             timestamp (pd.Timestamp): Время закрытия текущей свечи.
-        Returns:
-            SignalEvent: Сигнал для входа/выхода.
         """
         raise NotImplementedError("Метод _calculate_signals должен быть реализован в стратегии.")

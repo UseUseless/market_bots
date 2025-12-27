@@ -89,10 +89,10 @@ class AnalysisSession:
         if portfolio_calc.is_valid:
             temp_trades = portfolio_calc.trades.copy()
             # Конвертируем время выхода в datetime (если оно еще не конвертировано)
-            temp_trades['exit_timestamp_utc'] = pd.to_datetime(temp_trades['exit_timestamp_utc'])
+            temp_trades['exit_time'] = pd.to_datetime(temp_trades['exit_time'])
 
             # Устанавливаем время как индекс и берем последнее значение капитала на эту дату
-            self.portfolio_equity_curve = temp_trades.set_index('exit_timestamp_utc')['equity_curve']
+            self.portfolio_equity_curve = temp_trades.set_index('exit_time')['equity_curve']
             self.portfolio_equity_curve = self.portfolio_equity_curve.groupby(level=0).last()
         else:
             self.portfolio_equity_curve = pd.Series()

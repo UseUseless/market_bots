@@ -58,7 +58,7 @@ class MeanReversionStrategy(BaseStrategy):
         # 2. Динамически формируем зависимости
         self.min_history_needed = self.sma_period + 1
         self.required_indicators = [
-            {"name": "sma", "params": {"period": self.sma_period}},
+            {"name": "sma", "params": {"length": self.sma_period}},
         ]
 
         # 3. Вызываем родительский __init__

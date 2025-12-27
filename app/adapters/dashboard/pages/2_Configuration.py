@@ -37,12 +37,8 @@ st.set_page_config(
 )
 st.title("⚙️ Управление Конфигурацией")
 
-# --- Инициализация БД ---
-# Streamlit работает синхронно, поэтому меняем драйвер asyncpg на psycopg2
-SYNC_DB_URL = config.DATABASE_URL.replace("+asyncpg", "+psycopg2")
-engine = create_engine(SYNC_DB_URL)
-SessionLocal = sessionmaker(bind=engine)
-
+# Инициализация БД
+SessionLocal = get_session_factory()
 
 def get_all_bots() -> pd.DataFrame:
     """
