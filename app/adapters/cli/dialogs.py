@@ -1,13 +1,11 @@
 """
-Интерактивные диалоги с пользователем (CLI Prompts).
+Модуль диалогов с пользователем.
 
-Этот модуль отвечает за сбор и валидацию пользовательского ввода через
-библиотеку `questionary`. Он формирует конфигурационные словари (settings),
-которые затем передаются в скрипты запуска.
+Отвечает за сбор и валидацию пользовательского ввода через библиотеку `questionary`. 
+Он формирует конфигурационные словари (settings), которые затем передаются в скрипты запуска.
 
 Роль в архитектуре:
-    Адаптер ввода (Input Adapter). Преобразует ответы пользователя в терминале
-    в структуры данных, понятные ядру приложения.
+    Преобразует ответы пользователя в терминале в структуры данных, понятные ядру приложения.
 """
 
 import os
@@ -15,11 +13,11 @@ import logging
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog
-from typing import Dict, Optional, List, Type, Any
+from typing import Dict, Optional, List, Any
 
 import questionary
 
-from app.strategies.base_strategy import BaseStrategy
+from app.strategies import AVAILABLE_STRATEGIES
 from app.core.analysis.constants import METRIC_CONFIG
 from app.core.risk import RISK_MANAGEMENT_TYPES
 from app.shared.types import ExchangeType
@@ -50,9 +48,6 @@ def _initialize_tk() -> tk.Tk:
     """
     Инициализирует скрытое корневое окно Tkinter.
 
-    Необходимо для корректного отображения системных диалоговых окон
-    без запуска полноценного графического интерфейса приложения.
-
     Returns:
         tk.Tk: Объект корневого окна.
     """
@@ -74,13 +69,13 @@ def select_single_instrument() -> Optional[Dict[str, str]]:
     2. Пытается определить биржу, интервал и тикер из структуры папок.
 
     Returns:
-        Optional[Dict[str, str]]: Словарь с параметрами инструмента:
-            {
-                "exchange": "tinkoff",
-                "interval": "5min",
-                "instrument": "SBER"
-            }
-            Возвращает None, если пользователь отменил выбор или файл некорректен.
+        Optional[Dict[str, str]]: Словарь с параметрами инструмента или None при отмене.
+        Пример возвращаемого значения:
+        {
+            "exchange": "tinkoff",
+            "interval": "5min",
+            "instrument": "SBER"
+        }
     """
     root = _initialize_tk()
 
@@ -137,8 +132,8 @@ def select_instrument_folder() -> Optional[Dict[str, str]]:
     внутри выбранной директории.
 
     Returns:
-        Optional[Dict[str, str]]: Словарь с параметрами группы:
-            { "exchange": "...", "interval": "..." }
+        Optional[Dict[str, str]]: Словарь с параметрами группы или None.
+        Пример: {"exchange": "tinkoff", "interval": "5min"}
     """
     root = _initialize_tk()
 
@@ -175,7 +170,21 @@ def select_instrument_folder() -> Optional[Dict[str, str]]:
 
 def ask(question_func, *args, **kwargs):
     """
-    Обертка для вызова функций questionary с обработкой отмены (Ctrl+C).
+    Обертка для вызова функций questionary с обработкой отмены.
+
+    Перехватывает `KeyboardInterrupt` (Ctrl+C) и возвращаемое значение "Назад",
+    выбрасывая исключение `UserCancelledError` для выхода в главное меню.
+
+    Args:
+        question_func: Функция из библиотеки questionary (select, text, confirm).
+        *args: Позиционные аргументы для функции вопроса.
+        **kwargs: Именованные аргументы для функции вопроса.
+
+    Returns:
+        Any: Ответ пользователя.
+
+    Raises:
+        UserCancelledError: Если пользователь выбрал "Назад" или нажал Ctrl+C.
     """
     try:
         answer = question_func(*args, **kwargs).ask()
@@ -186,18 +195,14 @@ def ask(question_func, *args, **kwargs):
         raise UserCancelledError()
 
 
-def get_available_strategies() -> Dict[str, Type[BaseStrategy]]:
-    """
-    Динамически находит все доступные стратегии через механизм реестра.
-    """
-    from app.strategies import AVAILABLE_STRATEGIES
-    return AVAILABLE_STRATEGIES
-
-
 def _select_metrics_for_optimization() -> List[str]:
     """
     Вспомогательный диалог выбора целевых метрик для WFO.
+
     Поддерживает выбор одной или двух метрик (для Парето-оптимизации).
+
+    Returns:
+        List[str]: Список ключей метрик (например, ['calmar_ratio', 'max_drawdown']).
     """
     mode = ask(
         questionary.select,
@@ -244,7 +249,14 @@ def _select_metrics_for_optimization() -> List[str]:
 
 def prompt_for_data_management() -> Optional[Dict[str, Any]]:
     """
-    Диалог настройки менеджера данных (скачивание, обновление списков).
+    Диалог настройки менеджера данных.
+
+    Позволяет выбрать действие (обновление списков или скачивание данных)
+    и собрать необходимые параметры.
+
+    Returns:
+        Optional[Dict[str, Any]]: Словарь настроек или None.
+        Ключи: 'action', 'exchange', 'interval', 'days', 'instrument' (list) или 'list' (filename).
     """
     UPDATE_LISTS = "Обновить списки ликвидных инструментов"
     DOWNLOAD_DATA = "Скачать исторические данные"
@@ -325,10 +337,15 @@ def prompt_for_backtest_settings(force_mode: str = None) -> Optional[Dict[str, A
     Диалог настройки параметров бэктеста.
 
     Args:
-        force_mode (str): Если задан ('single' или 'batch'), пропускает выбор режима.
+        force_mode (str, optional): Если задан ('single' или 'batch'), пропускает выбор режима.
+
+    Returns:
+        Optional[Dict[str, Any]]: Словарь настроек или None.
+        Содержит ключи: 'strategy', 'risk_manager_type', 'exchange', 'interval',
+        'instrument' (для single) или параметры папки (для batch).
     """
     try:
-        strategies = get_available_strategies()
+        strategies = AVAILABLE_STRATEGIES
         if not strategies:
             print("Ошибка: не найдено ни одной доступной стратегии.")
             return None
@@ -373,9 +390,13 @@ def prompt_for_backtest_settings(force_mode: str = None) -> Optional[Dict[str, A
 def prompt_for_optimization_settings() -> Optional[Dict[str, Any]]:
     """
     Диалог настройки параметров оптимизации (WFO).
+
+    Returns:
+        Optional[Dict[str, Any]]: Словарь настроек WFO или None.
+        Включает параметры: 'strategy', 'rm', 'metrics', 'n_trials', 'total_periods' и др.
     """
     try:
-        strategies = get_available_strategies()
+        strategies = AVAILABLE_STRATEGIES
         if not strategies:
             print("Ошибка: нет доступных стратегий.")
             return None
@@ -437,7 +458,7 @@ def prompt_for_optimization_settings() -> Optional[Dict[str, Any]]:
             "total_periods": int(total_periods),
             "train_periods": int(train_periods),
             "test_periods": 1,
-            "preload": preload  # <--- И добавить этот ключ в словарь
+            "preload": preload
         })
 
         return settings
@@ -448,8 +469,10 @@ def prompt_for_optimization_settings() -> Optional[Dict[str, Any]]:
 
 def prompt_for_live_settings() -> Optional[Dict[str, Any]]:
     """
-    Простой диалог подтверждения запуска Live-режима.
-    Основные настройки берутся из базы данных.
+    Диалог подтверждения запуска Live-режима. Настройки берутся из базы данных.
+
+    Returns:
+        Optional[Dict[str, Any]]: Пустой словарь при подтверждении или None при отмене.
     """
     try:
         confirmation = ask(

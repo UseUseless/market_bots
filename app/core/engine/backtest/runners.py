@@ -25,6 +25,7 @@ from app.core.engine.backtest.engine import BacktestEngine
 from app.core.analysis.session import AnalysisSession
 from app.core.analysis.reports.excel import ExcelReportGenerator
 from app.shared.logging_setup import setup_backtest_logging, backtest_time_filter
+from app.shared.factories import ConfigFactory
 from app.strategies import AVAILABLE_STRATEGIES
 from app.shared.config import config as app_config
 
@@ -33,51 +34,36 @@ logger = logging.getLogger(__name__)
 
 def _create_config(run_settings: Dict[str, Any], mode: RunModeType) -> TradingConfig:
     """
-    Сборка единого конфига.
+    Сборка единого конфига через Фабрику.
 
-    Обеъдиняет в один объект параметры:
-    1. Параметры из стратегии.
-    2. Параметры из консоли (CLI).
+    Объединяет параметры из CLI, настройки стратегии и глобальные константы
+    в единый объект конфигурации.
 
     Args:
-        run_settings: Словарь аргументов из командной строки.
-        mode: Режим запуска ('BACKTEST').
+        run_settings (Dict[str, Any]): Словарь настроек запуска (обычно из CLI аргументов).
+            Должен содержать ключи: 'exchange', 'instrument', 'interval', 'strategy'.
+        mode (RunModeType): Режим запуска (например, 'BACKTEST').
 
     Returns:
-        TradingConfig: Готовый валидированный объект конфигурации.
+        TradingConfig: Готовый объект конфигурации.
     """
-    strategy_name = run_settings["strategy"]
-
-    # 1. Получение класса стратегии для доступа к дефолтным параметрам
-    strategy_cls = AVAILABLE_STRATEGIES.get(strategy_name)
-    if not strategy_cls:
-        raise ValueError(f"Стратегия '{strategy_name}' не найдена в реестре.")
-
-    # 2. Сборка параметров стратегии (Defaults | CLI Overrides)
-    final_strategy_params = strategy_cls.get_default_params()
-
-    # Если в run_settings будут переданы специфичные параметры (например из оптимизатора),
-    # обновляем их здесь:
-    if "strategy_params" in run_settings:
-        final_strategy_params.update(run_settings["strategy_params"])
-
-    # 3. Получение параметров риска
+    # Подготовка параметров для переопределения (если есть)
+    strategy_params = run_settings.get("strategy_params")
+    
+    # Подготовка риск-конфига
     risk_config = {
         "type": run_settings.get("risk_manager_type", "FIXED")
     }
 
-    # 4. Создание DTO
-    return TradingConfig(
+    # Делегируем создание конфига фабрике
+    return ConfigFactory.create_trading_config(
         mode=mode,
         exchange=run_settings["exchange"],
         instrument=run_settings["instrument"],
         interval=run_settings["interval"],
-        strategy_name=strategy_name,
-        strategy_params=final_strategy_params,
-        risk_config=risk_config,
-        initial_capital=app_config.BACKTEST_CONFIG["INITIAL_CAPITAL"],
-        commission_rate=app_config.BACKTEST_CONFIG["COMMISSION_RATE"],
-        slippage_config=app_config.BACKTEST_CONFIG.get("SLIPPAGE_CONFIG", {})
+        strategy_name=run_settings["strategy"],
+        strategy_params_override=strategy_params,
+        risk_config_override=risk_config
     )
 
 

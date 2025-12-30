@@ -1,5 +1,5 @@
 """
-Модуль генерации отчетов оптимизации (WFO Reporting).
+Модуль генерации отчетов оптимизации.
 
 Отвечает за сохранение результатов Walk-Forward Optimization:
 1. Таблица параметров по шагам (CSV).
@@ -142,6 +142,7 @@ class WFOReportGenerator:
 
         # Для бенчмарка (Buy & Hold) берем полную историю первого инструмента
         # (или единственного, если тест одного актива)
+        # Потому что такая архитектура и в AnalysisSession посчитаются коэффициенты
         benchmark_instrument = self.settings["instrument_list"][0]
 
         loader = BacktestDataLoader(

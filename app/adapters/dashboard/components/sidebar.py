@@ -1,8 +1,8 @@
 """
-Компонент боковой панели (Sidebar Filters).
+Боковая панель.
 
-Этот модуль отвечает за отрисовку элементов управления в левой панели дашборда Streamlit.
-Он позволяет пользователю интерактивно фильтровать массив результатов бэктестов
+Орисовка элементов управления в левой панели дашборда Streamlit.
+Позволяет фильтровать массив результатов бэктестов
 по ключевым измерениям: Биржа, Стратегия, Инструмент, Риск-менеджмент.
 """
 
@@ -27,7 +27,7 @@ def render_sidebar(summary_df: pd.DataFrame) -> pd.DataFrame:
     """
     st.sidebar.header("Фильтры")
 
-    # --- 1. Фильтр по Биржам ---
+    # 1. Фильтр по Биржам
     # Сортировка опций нужна для детерминированного порядка в UI
     exchange_options = sorted(summary_df["Exchange"].unique())
     selected_exchanges = st.sidebar.multiselect(
@@ -36,7 +36,7 @@ def render_sidebar(summary_df: pd.DataFrame) -> pd.DataFrame:
         default=exchange_options  # По умолчанию выбрано всё
     )
 
-    # --- 2. Фильтр по Стратегиям ---
+    # 2. Фильтр по Стратегиям
     strategy_options = sorted(summary_df["Strategy"].unique())
     selected_strategies = st.sidebar.multiselect(
         "Стратегии",
@@ -44,7 +44,7 @@ def render_sidebar(summary_df: pd.DataFrame) -> pd.DataFrame:
         default=strategy_options
     )
 
-    # --- 3. Фильтр по Инструментам ---
+    # 3. Фильтр по Инструментам
     instrument_options = sorted(summary_df["Instrument"].unique())
     selected_instruments = st.sidebar.multiselect(
         "Инструменты",
@@ -52,7 +52,7 @@ def render_sidebar(summary_df: pd.DataFrame) -> pd.DataFrame:
         default=instrument_options
     )
 
-    # --- 4. Фильтр по Риск-менеджерам ---
+    # 4. Фильтр по Риск-менеджерам
     rm_options = sorted(summary_df["Risk Manager"].unique())
     selected_rms = st.sidebar.multiselect(
         "Риск-менеджеры",
@@ -60,7 +60,7 @@ def render_sidebar(summary_df: pd.DataFrame) -> pd.DataFrame:
         default=rm_options
     )
 
-    # --- Применение фильтров ---
+    # Применение фильтров
     # Логическое И (&) между условиями: строка должна удовлетворять всем фильтрам
     filtered_df = summary_df[
         (summary_df["Exchange"].isin(selected_exchanges)) &

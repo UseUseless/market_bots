@@ -1,12 +1,13 @@
 """
-Модуль генерации графических отчетов (Plotting).
+Модуль генерации графических отчетов.
 
 Отвечает за визуализацию кривой капитала (Equity Curve) стратегии в сравнении
-с эталонной стратегией Buy & Hold. Генерирует файл `.png` с графиком и ключевыми метриками.
+с эталонной стратегией Buy & Hold - далее бэнчмарком. 
+Генерирует файл `.png` с графиком и ключевыми метриками.
 
 Особенности визуализации:
 Используется отрисовка по целочисленным индексам вместо дат, чтобы скрыть "дырки"
-в данных (выходные дни, ночи), делая график непрерывным и удобным для анализа.
+в данных (выходные дни, ночи), делая график непрерывным.
 """
 
 import logging
@@ -18,12 +19,11 @@ import pandas as pd
 from matplotlib import pyplot as plt
 import matplotlib.ticker as ticker
 
-import app.infrastructure.feeds.backtest.provider
 from app.core.analysis.constants import METRIC_CONFIG
 from app.shared.types import ExchangeType
 from app.shared.config import config
 
-EXCHANGE_SPECIFIC_CONFIG = app.infrastructure.feeds.backtest.provider.EXCHANGE_SPECIFIC_CONFIG
+EXCHANGE_SPECIFIC_CONFIG = config.EXCHANGE_SPECIFIC_CONFIG
 
 logger = logging.getLogger(__name__)
 
@@ -112,8 +112,8 @@ class PlotReportGenerator:
         """
         Строит и сохраняет график.
 
-        Использует технику "Index-based plotting" для устранения разрывов во времени
-        (выходные дни, неторговые часы). Вместо оси времени используется ось индексов (0..N),
+        Устраняет разрывы во времени (выходные дни, неторговые часы). 
+        Вместо оси времени используется ось индексов (0..N),
         а даты подставляются через `FuncFormatter`.
 
         Args:

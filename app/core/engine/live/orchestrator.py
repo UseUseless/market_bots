@@ -35,6 +35,7 @@ from app.adapters.telegram.publisher import TelegramSignalSender
 # Стратегии и утилиты
 from app.strategies import AVAILABLE_STRATEGIES
 from app.shared.logging_setup import setup_global_logging
+from app.shared.factories import ConfigFactory
 
 logger = logging.getLogger(__name__)
 
@@ -42,47 +43,20 @@ logger = logging.getLogger(__name__)
 def _assemble_config(db_config: StrategyConfig) -> TradingConfig:
     """
     Фабричный метод сборки конфигурации из данных БД.
-
-    Реализует логику слияния параметров: получает дефолтные настройки из класса стратегии
-    и накладывает на них пользовательские параметры из базы данных.
-
-    Args:
-        db_config (StrategyConfig): ORM-объект конфигурации из базы данных.
-
-    Returns:
-        TradingConfig: Готовый к использованию валидированный объект конфигурации.
-
-    Raises:
-        ValueError: Если указанная в БД стратегия не найдена в реестре.
+    Делегирует сборку ConfigFactory.
     """
-    # 1. Поиск класса стратегии
-    StrategyClass = AVAILABLE_STRATEGIES.get(db_config.strategy_name)
-    if not StrategyClass:
-        # Критическая ошибка конфигурации, стратегия не может быть запущена
-        raise ValueError(f"Strategy class '{db_config.strategy_name}' not found in registry")
-
-    # 2. Слияние параметров (Merge Strategy)
-    # Дефолты из кода + JSON из базы данных
-    final_params = StrategyClass.get_default_params()
-    if db_config.parameters:
-        final_params.update(db_config.parameters)
-
-    # 3. Подготовка конфига риска
     # В БД хранится строка типа 'FIXED', преобразуем в словарь для схемы
     risk_config = {"type": db_config.risk_manager_type or "FIXED"}
 
-    # 4. Создание DTO
-    # initial_capital ставим заглушкой, так как в режиме сигналов мы не торгуем реальным депозитом,
-    # но схема требует это поле.
-    return TradingConfig(
+    return ConfigFactory.create_trading_config(
         mode="LIVE",
         exchange=db_config.exchange,
         instrument=db_config.instrument,
         interval=db_config.interval,
         strategy_name=db_config.strategy_name,
-        strategy_params=final_params,
-        risk_config=risk_config,
-        initial_capital=10000.0
+        # Параметры из БД переопределят дефолтные параметры стратегии
+        strategy_params_override=db_config.parameters,
+        risk_config_override=risk_config
     )
 
 

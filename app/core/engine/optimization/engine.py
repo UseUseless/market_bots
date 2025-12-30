@@ -1,9 +1,9 @@
 """
 Единый движок Walk-Forward Optimization (WFO).
 
-Этот модуль объединяет в себе логику оптимизации стратегий методом скользящего окна.
+Оптимизация стратегий методом скользящего окна.
 Он управляет полным циклом: от загрузки и нарезки данных до запуска Optuna
-и агрегации Out-of-Sample результатов.
+и агрегации Out-of-Sample (тестовых) результатов.
 
 Архитектура процесса:
 1. Подготовка данных: Загрузка истории и разбиение на N частей.
@@ -30,6 +30,7 @@ from app.core.risk import RiskManager
 from app.strategies import AVAILABLE_STRATEGIES
 from app.shared.schemas import TradingConfig
 from app.shared.config import config as app_config
+from app.shared.factories import ConfigFactory
 
 # Импорты инфраструктуры
 from app.infrastructure.feeds.backtest.provider import BacktestDataLoader
@@ -43,8 +44,7 @@ class WFOEngine:
     """
     Оркестратор процесса Walk-Forward Optimization.
 
-    Управляет жизненным циклом исследования, взаимодействием с Optuna
-    и генерацией итоговых отчетов.
+    Взаимодействием с Optuna и генерация итоговых отчетов.
 
     Attributes:
         settings (Dict): Конфигурация запуска (биржа, стратегия, периоды и т.д.).
@@ -69,14 +69,24 @@ class WFOEngine:
         self.annual_factor = exchange_conf.get("SHARPE_ANNUALIZATION_FACTOR", 252)
 
         # Флаг: Грузить всё в RAM или читать с диска по шагам?
-        # Можно передать через settings, по умолчанию False (безопасно)
         self.preload_data = self.settings.get("preload", False)
         
         # Кэш для режима Preload: {instrument: [df_period_1, df_period_2...]}
         self.preload_cache: Dict[str, List[pd.DataFrame]] = {}
 
     def _prepare_settings(self, settings: Dict[str, Any]) -> Dict[str, Any]:
-        """Валидация и донастройка параметров."""
+        """
+        Валидация и донастройка параметров.
+
+        Если передан путь к портфелю, сканирует папку на наличие файлов.
+        Иначе использует одиночный инструмент.
+
+        Args:
+            settings (Dict[str, Any]): Исходные настройки.
+
+        Returns:
+            Dict[str, Any]: Обновленные настройки со списком инструментов.
+        """
         if settings.get("portfolio_path"):
             path = settings["portfolio_path"]
             if os.path.exists(path):
@@ -90,8 +100,17 @@ class WFOEngine:
             settings["instrument_list"] = [settings["instrument"]]
         return settings
 
-    def _calculate_steps_count(self):
-        """Считает количество шагов WFO (легкая проверка одного файла)."""
+    def _validate_and_calc_wfo_steps(self):
+        """
+        Считает количество шагов WFO (легкая проверка одного файла).
+
+        Загружает данные одного инструмента, чтобы определить, на сколько частей
+        можно разбить историю и сколько шагов (num_steps) получится при
+        заданных размерах окон Train/Test.
+
+        Raises:
+            ValueError: Если список инструментов пуст или данных недостаточно.
+        """
         logger.info("Валидация данных и расчет шагов WFO...")
         
         if not self.settings["instrument_list"]:
@@ -123,10 +142,17 @@ class WFOEngine:
         mode_str = "RAM (High Performance)" if self.preload_data else "Disk (Low Memory)"
         logger.info(f"Режим: {mode_str}. Инструментов: {len(self.settings['instrument_list'])}. Шагов WFO: {self.num_steps}.")
 
-    def _load_instrument_periods(self, instr: str) -> Optional[List[pd.DataFrame]]:
+    def _load_instrument_data_chunks(self, instr: str) -> Optional[List[pd.DataFrame]]:
         """
-        Воркер для загрузки данных одного инструмента.
-        Используется внутри ThreadPoolExecutor.
+        Загрузка данных одного инструмента, разбитых на готовые части.
+        
+        Используется внутри ThreadPoolExecutor для параллельного чтения с диска.
+
+        Args:
+            instr (str): Тикер инструмента.
+
+        Returns:
+            Optional[List[pd.DataFrame]]: Список DataFrame (частей истории) или None при ошибке.
         """
         loader = BacktestDataLoader(
             exchange=self.settings["exchange"],
@@ -138,15 +164,20 @@ class WFOEngine:
     
     def _preload_all_data(self):
         """
-        Загружает ВСЕ данные в память параллельно.
-        Используется только если self.preload_data = True.
+        Загружает ВСЕ данные в память (кэш) параллельно.
+        
+        Используется только если включен режим `preload`.
+        Заполняет `self.preload_cache`.
+
+        Raises:
+            RuntimeError: Если не удалось загрузить данные ни для одного инструмента.
         """
         instruments = self.settings["instrument_list"]
         logger.info(f"Загрузка всех данных в RAM ({len(instruments)} инструментов)...")
         
         # Параллельная загрузка
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            future_to_instr = {executor.submit(self._load_instrument_periods, instr): instr for instr in instruments}
+            future_to_instr = {executor.submit(self._load_instrument_data_chunks, instr): instr for instr in instruments}
             
             for future in tqdm(concurrent.futures.as_completed(future_to_instr), total=len(instruments), desc="Preloading"):
                 instr = future_to_instr[future]
@@ -160,23 +191,27 @@ class WFOEngine:
         if not self.preload_cache:
             raise RuntimeError("Не удалось загрузить данные ни для одного инструмента.")
 
-    # --- LOGIC: OBJECTIVE FUNCTION (OPTIMIZATION CORE) ---
 
-    def _suggest_params(self, trial: optuna.Trial) -> Tuple[Dict, Dict]:
+    def _generate_trial_params(self, trial: optuna.Trial) -> Tuple[Dict, Dict]:
         """
-        Генерирует значения параметров для одной итерации Optuna.
+        Генерирует значения параметров для одной итерации обучения Optuna.
 
         Читает `params_config` из класса стратегии и риск-менеджера,
         создавая соответствующие `trial.suggest_int` или `trial.suggest_float`.
 
+        Args:
+            trial (optuna.Trial): Объект текущего испытания Optuna.
+
         Returns:
-            Tuple[Dict, Dict]: (strategy_params, risk_config)
+            Tuple[Dict, Dict]: Кортеж из двух словарей:
+                - params стратегии
+                - config риск-менеджера
         """
         # 1. Параметры Стратегии
         strat_params = {}
         strat_conf_map = {}
 
-        # Собираем конфиги со всех родительских классов (наследование параметров)
+        # Собираем конфиги со всех родительских классов
         for base in reversed(self.strategy_cls.__mro__):
             if hasattr(base, 'params_config'):
                 strat_conf_map.update(base.params_config)
@@ -217,25 +252,49 @@ class WFOEngine:
 
     @staticmethod
     def _run_single_backtest_memory(config: TradingConfig, data: pd.DataFrame) -> pd.DataFrame:
+        """
+        Запуск одного бэктеста в памяти.
+        
+        Используется в ThreadPoolExecutor внутри `_optuna_calc_objective_param`.
+
+        Args:
+            config (TradingConfig): Конфигурация сессии.
+            data (pd.DataFrame): Срез исторических данных.
+
+        Returns:
+            pd.DataFrame: DataFrame сделок (пустой, если сделок не было или произошла ошибка).
+        """
         engine = BacktestEngine(config=config, data_slice=data)
         res = engine.run()
         if res["status"] == "success":
             return res["trades_df"]
         return pd.DataFrame()
 
-    def _objective(self, trial: optuna.Trial, train_slices: Dict[str, pd.DataFrame]) -> Union[float, Tuple[float, ...]]:
+    def _optuna_calc_objective_param(self, trial: optuna.Trial, train_slices: Dict[str, pd.DataFrame]) -> Union[float, Tuple[float, ...]]:
+        """
+        Целевая функция оптимизации (In-Sample).
+
+        1. Генерирует параметры через Optuna.
+        2. Запускает параллельные бэктесты для всех инструментов в `train_slices`.
+        3. Агрегирует результаты и считает метрику (например, Sharpe Ratio).
+
+        Args:
+            trial (optuna.Trial): Текущее испытание.
+            train_slices (Dict[str, pd.DataFrame]): Данные для обучения.
+
+        Returns:
+            Union[float, Tuple[float, ...]]: Значение метрики (или кортеж для мульти-целевой оптимизации).
+        """
         try:
-            strat_params, risk_config = self._suggest_params(trial)
-            base_config = TradingConfig(
+            strat_params, risk_config = self._generate_trial_params(trial)
+            base_config = ConfigFactory.create_trading_config(
                 mode="OPTIMIZATION",
                 exchange=self.settings["exchange"],
-                instrument="TEMP",
+                instrument="TEMP",  # Будет подменяться в цикле
                 interval=self.settings["interval"],
                 strategy_name=self.settings["strategy"],
-                strategy_params=strat_params,
-                risk_config=risk_config,
-                initial_capital=app_config.BACKTEST_CONFIG["INITIAL_CAPITAL"],
-                commission_rate=app_config.BACKTEST_CONFIG["COMMISSION_RATE"]
+                strategy_params_override=strat_params,
+                risk_config_override=risk_config
             )
             
             tasks = []
@@ -280,19 +339,33 @@ class WFOEngine:
         except Exception:
             return tuple([-1e9] * len(self.settings["metrics"])) if len(self.settings["metrics"]) > 1 else -1e9
 
-    # --- LOGIC: STEP RUNNER ---
-
     def _optimize_step(self, step_num: int,
                        train_slices: Dict[str, pd.DataFrame],
                        test_slices: Dict[str, pd.DataFrame]) -> Tuple[pd.DataFrame, Dict, optuna.Study]:
-        
+        """
+        Выполняет один шаг WFO (Train + Test).
+
+        1. In-Sample: Запускает Optuna для поиска лучших параметров на `train_slices`.
+        2. Out-of-Sample (OOS): Прогоняет лучшие параметры на `test_slices`.
+
+        Args:
+            step_num (int): Номер текущего шага (для логов).
+            train_slices (Dict): Данные для обучения.
+            test_slices (Dict): Данные для теста (будущее).
+
+        Returns:
+            Tuple:
+                - real_execution_trades (pd.DataFrame): Сделки за OOS период.
+                - step_summary (Dict): Информация о шаге и параметрах.
+                - study (optuna.Study): Объект исследования Optuna.
+        """
         tqdm.write(f"\n>>> WFO Шаг {step_num}/{self.num_steps}")
 
         directions = [METRIC_CONFIG[m]["direction"] for m in self.settings["metrics"]]
         study = optuna.create_study(directions=directions)
 
         study.optimize(
-            lambda t: self._objective(t, train_slices),
+            lambda t: self._optuna_calc_objective_param(t, train_slices),
             n_trials=self.settings["n_trials"],
             n_jobs=1,
             show_progress_bar=True
@@ -306,23 +379,26 @@ class WFOEngine:
         if len(study.directions) > 1:
             best_trial = max(study.best_trials, key=lambda t: t.values[0])
 
+        # 3. Подготовка параметров для OOS теста
         best_params = best_trial.params
-        strat_params = {k: v for k, v in best_params.items() if not k.startswith("rm_")}
-        risk_params = {k[3:]: v for k, v in best_params.items() if k.startswith("rm_")}
+        
+        # Разделяем параметры
+        strat_params_override = {k: v for k, v in best_params.items() if not k.startswith("rm_")}
+        risk_params_override = {k[3:]: v for k, v in best_params.items() if k.startswith("rm_")}
 
-        final_strat = {**self.strategy_cls.get_default_params(), **strat_params}
-        final_risk = {**{"type": self.settings["rm"]}, **risk_params}
+        # Собираем риск конфиг
+        final_risk_config = {**{"type": self.settings["rm"]}, **risk_params_override}
 
-        base_config = TradingConfig(
+        # 4. Запуск Out-of-Sample (Test) через Фабрику
+        # Фабрика сама возьмет дефолты стратегии и наложит сверху strat_params_override.
+        base_config = ConfigFactory.create_trading_config(
             mode="OPTIMIZATION",
             exchange=self.settings["exchange"],
             instrument="TEMP",
             interval=self.settings["interval"],
             strategy_name=self.settings["strategy"],
-            strategy_params=final_strat,
-            risk_config=final_risk,
-            initial_capital=app_config.BACKTEST_CONFIG["INITIAL_CAPITAL"],
-            commission_rate=app_config.BACKTEST_CONFIG["COMMISSION_RATE"]
+            strategy_params_override=strat_params_override,
+            risk_config_override=final_risk_config
         )
 
         all_oos_trades = []
@@ -336,7 +412,7 @@ class WFOEngine:
                 if res["status"] == "success" and not res["trades_df"].empty:
                     all_oos_trades.append(res["trades_df"])
 
-        oos_df = pd.concat(all_oos_trades, ignore_index=True) if all_oos_trades else pd.DataFrame()
+        real_execution_trades = pd.concat(all_oos_trades, ignore_index=True) if all_oos_trades else pd.DataFrame()
 
         step_summary = {
             "step": step_num,
@@ -346,27 +422,27 @@ class WFOEngine:
             **best_trial.user_attrs
         }
 
-        tqdm.write(f"Шаг {step_num} завершен. Сделок на OOS: {len(oos_df)}")
-        return oos_df, step_summary, study
-
-    # --- MAIN RUN ---
+        tqdm.write(f"Шаг {step_num} завершен. Сделок на OOS: {len(real_execution_trades)}")
+        return real_execution_trades, step_summary, study
 
     def run(self):
         """
         Запускает полный процесс оптимизации.
-        В зависимости от флага preload выбирает стратегию загрузки данных.
-        """
-        self._calculate_steps_count()
 
-        # Если включен режим Preload - грузим всё сразу
-        if self.preload_data:
-            self._preload_all_data()
+        1. Рассчитывает количество шагов.
+        2. (Опционально) Загружает все данные в RAM.
+        3. Запускает цикл по шагам (сдвиг окна).
+        4. В каждом шаге формирует Train/Test выборки.
+        5. Агрегирует результаты и генерирует отчеты.
+        """
+        self._validate_and_calc_wfo_steps()
 
         all_oos_trades = []
         step_results = []
         last_study = None
 
         for step_num in range(1, self.num_steps + 1):
+            # Расчет номеров окон
             train_start = step_num - 1
             train_end = train_start + self.settings["train_periods"]
             test_start = train_end
@@ -377,19 +453,21 @@ class WFOEngine:
             train_slices = {}
             test_slices = {}
             instruments = self.settings["instrument_list"]
-
+            
+            # RAM (Fast)
             if self.preload_data:
-                # --- STRATEGY A: RAM (Fast) ---
+                # Если включен режим Preload - грузим всё сразу
+                self._preload_all_data()
                 for instr in instruments:
                     periods = self.preload_cache.get(instr)
                     if periods and len(periods) >= test_end:
                         train_slices[instr] = pd.concat(periods[train_start:train_end], ignore_index=True)
                         test_slices[instr] = pd.concat(periods[test_start:test_end], ignore_index=True)
+            # Disk (Low RAM)
             else:
-                # --- STRATEGY B: Disk JIT (Low RAM) ---
-                # Параллельная загрузка с диска для ускорения JIT режима
+                # Параллельная загрузка с диска для ускорения
                 with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future_to_instr = {executor.submit(self._load_instrument_periods, instr): instr for instr in instruments}
+                    future_to_instr = {executor.submit(self._load_instrument_data_chunks, instr): instr for instr in instruments}
                     
                     for future in tqdm(concurrent.futures.as_completed(future_to_instr), total=len(instruments), desc=f"Loading Step {step_num}", leave=False):
                         instr = future_to_instr[future]
@@ -406,14 +484,14 @@ class WFOEngine:
                 break
 
             # Выполнение шага
-            oos_df, summary, study = self._optimize_step(step_num, train_slices, test_slices)
+            real_execution_trades, summary, study = self._optimize_step(step_num, train_slices, test_slices)
 
-            # Очистка локальных переменных шага (важно для JIT)
+            # Очистка локальных переменных шага
             del train_slices
             del test_slices
 
-            if not oos_df.empty:
-                all_oos_trades.append(oos_df)
+            if not real_execution_trades.empty:
+                all_oos_trades.append(real_execution_trades)
             step_results.append(summary)
             last_study = study
 

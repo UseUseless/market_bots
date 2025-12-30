@@ -1,8 +1,9 @@
 """
-Компонент детального просмотра (Detailed View).
+Детальный просмотр результатов.
 
 Этот модуль отвечает за визуализацию результатов конкретного бэктеста.
-Он строит интерактивные графики (Equity Curve, Drawdown, PnL) используя библиотеку Plotly.
+Он строит интерактивные графики (Equity Curve, Drawdown, PnL) используя библиотеку Plotly
+и отображает их в интерфейсе Streamlit.
 """
 
 import os
@@ -22,21 +23,21 @@ from app.shared.config import config
 
 PATH_CONFIG = config.PATH_CONFIG
 BACKTEST_CONFIG = config.BACKTEST_CONFIG
-EXCHANGE_SPECIFIC_CONFIG = app.infrastructure.feeds.backtest.provider.EXCHANGE_SPECIFIC_CONFIG
+EXCHANGE_SPECIFIC_CONFIG = config.EXCHANGE_SPECIFIC_CONFIG
 
 
 def plot_equity_and_drawdown(
         portfolio_equity: pd.Series,
         drawdown_percent: pd.Series,
         benchmark_equity: pd.Series
-):
+) -> None:
     """
-    Строит комбинированный график: Кривая капитала + Просадка.
+    Строит и отображает комбинированный график: Кривая капитала + Просадка.
 
     Args:
         portfolio_equity (pd.Series): Временной ряд капитала стратегии.
-        drawdown_percent (pd.Series): Временной ряд просадки в %.
-        benchmark_equity (pd.Series): Временной ряд капитала Buy & Hold.
+        drawdown_percent (pd.Series): Временной ряд просадки в процентах.
+        benchmark_equity (pd.Series): Временной ряд капитала бенчмарка (Buy & Hold).
     """
     if portfolio_equity.empty:
         st.warning("Нет данных для построения графика капитала.")
@@ -82,10 +83,14 @@ def plot_equity_and_drawdown(
     st.plotly_chart(fig, use_container_width=True)
 
 
-def plot_pnl_distribution(trades_df: pd.DataFrame):
+def plot_pnl_distribution(trades_df: pd.DataFrame) -> None:
     """
     Строит гистограмму распределения прибыли/убытков по сделкам.
-    Помогает оценить "толстые хвосты" и частоту выигрышей.
+
+    Помогает оценить частоту выигрышей и средний размер профита/лосса.
+
+    Args:
+        trades_df (pd.DataFrame): Таблица сделок (должна содержать колонку 'pnl').
     """
     fig = px.histogram(
         trades_df, x="pnl", nbins=50,
@@ -96,9 +101,14 @@ def plot_pnl_distribution(trades_df: pd.DataFrame):
     st.plotly_chart(fig, use_container_width=True)
 
 
-def plot_monthly_pnl(trades_df: pd.DataFrame):
+def plot_monthly_pnl(trades_df: pd.DataFrame) -> None:
     """
     Строит столбчатую диаграмму доходности по месяцам.
+
+    Агрегирует результаты сделок по календарным месяцам на основе времени выхода.
+
+    Args:
+        trades_df (pd.DataFrame): Таблица сделок (должна содержать 'exit_time' и 'pnl').
     """
     df = trades_df.copy()
     df['exit_time'] = pd.to_datetime(df['exit_time'])
@@ -118,14 +128,14 @@ def plot_monthly_pnl(trades_df: pd.DataFrame):
     st.plotly_chart(fig, use_container_width=True)
 
 
-def plot_trades_on_chart(historical_data: pd.DataFrame, trades_df: pd.DataFrame, interval_str: str):
+def plot_trades_on_chart(historical_data: pd.DataFrame, trades_df: pd.DataFrame, interval_str: str) -> None:
     """
-    Визуализирует точки входа и выхода на графике цены (Candlestick).
+    Визуализирует точки входа и выхода на свечном графике цены.
 
     Args:
-        historical_data: DataFrame со свечами (OHLCV).
-        trades_df: DataFrame со сделками.
-        interval_str: Интервал свечей (для визуальной коррекции меток).
+        historical_data (pd.DataFrame): DataFrame со свечами (OHLCV).
+        trades_df (pd.DataFrame): DataFrame со сделками.
+        interval_str (str): Интервал свечей (используется для визуального сдвига маркеров).
     """
     fig = go.Figure(data=go.Candlestick(
         x=historical_data['time'],
@@ -189,12 +199,15 @@ def plot_trades_on_chart(historical_data: pd.DataFrame, trades_df: pd.DataFrame,
     st.plotly_chart(fig, use_container_width=True)
 
 
-def render_detailed_view(filtered_df: pd.DataFrame):
+def render_detailed_view(filtered_df: pd.DataFrame) -> None:
     """
-    Главная функция отрисовки страницы детального анализа.
+    Отрисовка страницы детального анализа.
+
+    Позволяет выбрать конкретный файл бэктеста из списка, загружает его данные,
+    рассчитывает метрики и отображает графики (Equity, PnL, Trades).
 
     Args:
-        filtered_df (pd.DataFrame): Список бэктестов после фильтрации в сайдбаре.
+        filtered_df (pd.DataFrame): Список доступных бэктестов (после фильтрации в сайдбаре).
     """
     st.header("Детальный анализ стратегии")
 

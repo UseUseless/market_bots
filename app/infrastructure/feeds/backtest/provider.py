@@ -1,8 +1,10 @@
 """
 Модуль поставщика данных для бэктеста.
 
-Содержит реализацию `MarketDataProvider`, которая эмулирует потоковую передачу данных
-на основе статического DataFrame. Это позволяет "проигрывать" историю свеча за свечой.
+Содержит:
+1. `BacktestDataLoader`: Утилита для загрузки и очистки исторических данных с диска.
+2. `BacktestDataProvider`: Эмулятор потока данных (реализация `MarketDataProvider`),
+   который воспроизводит историю свеча за свечой.
 """
 import logging
 import os
@@ -25,11 +27,18 @@ class BacktestDataLoader:
 
     Обеспечивает подготовку "чистого" DataFrame для движка бэктестинга.
     Умеет загружать данные, заполнять пропуски и нарезать историю на периоды.
+
+    Attributes:
+        exchange (str): Название биржи.
+        instrument_id (str): Тикер инструмента.
+        interval (str): Интервал свечей.
+        data_path (str): Путь к корневой директории данных.
+        file_path (str): Полный путь к целевому файлу .parquet.
     """
 
     def __init__(self, exchange: str, instrument_id: str, interval_str: str, data_path: str):
         """
-        Инициализирует обработчик.
+        Инициализирует загрузчик.
 
         Args:
             exchange (str): Название биржи (tinkoff/bybit).
@@ -47,7 +56,13 @@ class BacktestDataLoader:
 
     def _resample_and_fill_gaps(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Выравнивает временную сетку и заполняет пропуски (Gap Filling).
+        Выравнивает временную сетку и заполняет пропуски.
+
+        Args:
+            df (pd.DataFrame): Исходный DataFrame.
+
+        Returns:
+            pd.DataFrame: DataFrame с заполненными пропусками.
         """
         if df.empty:
             return df
@@ -94,6 +109,12 @@ class BacktestDataLoader:
     def _filter_main_session(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Фильтрует данные, оставляя только основную торговую сессию.
+
+        Args:
+            df (pd.DataFrame): Исходный DataFrame.
+
+        Returns:
+            pd.DataFrame: Отфильтрованный DataFrame.
         """
         exchange_config = EXCHANGE_SPECIFIC_CONFIG.get(self.exchange)
         if not exchange_config or not exchange_config.get("SESSION_START_UTC"):
@@ -120,9 +141,6 @@ class BacktestDataLoader:
         Returns:
             pd.DataFrame: Готовый к использованию DataFrame или пустой DF при ошибке.
         """
-        # logger.info(f"Загрузка данных: {self.file_path}...")
-        # Убрал лишний лог, чтобы не спамить при WFO на 50 инструментов
-
         try:
             if not os.path.exists(self.file_path):
                 return pd.DataFrame()
@@ -149,9 +167,6 @@ class BacktestDataLoader:
         """
         Загружает данные и разбивает их на N равных частей для WFO.
 
-        Это перенесенная логика из бывшего engine/optimization/splitter.py.
-        Теперь инфраструктура сама отвечает за предоставление "чанков" данных.
-
         Args:
             total_periods (int): Количество частей, на которые нужно разбить историю.
 
@@ -163,11 +178,8 @@ class BacktestDataLoader:
         if df.empty:
             return []
 
-        # Используем numpy для разбиения (аналог того, что было в splitter.py)
-        # np.array_split корректно работает с DataFrame
         try:
             chunks = np.array_split(df, total_periods)
-            # Конвертируем обратно в чистый список (numpy возвращает массив объектов)
             return [chunk for chunk in chunks if not chunk.empty]
         except Exception as e:
             logger.error(f"Ошибка при нарезке данных для {self.instrument_id}: {e}")
@@ -191,14 +203,13 @@ class BacktestDataProvider(MarketDataProvider):
 
     def __init__(self, data: pd.DataFrame, interval: str):
         """
-        Инициализирует фид.
+        Инициализация.
 
         Args:
             data (pd.DataFrame): DataFrame с историей и предрасчитанными индикаторами.
                                  Должен быть отсортирован по времени.
             interval (str): Таймфрейм (например, '5min').
         """
-        # Сбрасываем индекс, чтобы работать с integer-location (iloc) от 0 до N
         self._data = data.reset_index(drop=True)
         self._interval = interval
         self._current_index = -1
@@ -212,8 +223,6 @@ class BacktestDataProvider(MarketDataProvider):
     def next(self) -> bool:
         """
         Перемещает курсор времени на одну свечу вперед.
-
-        Этот метод вызывает движок бэктеста в основном цикле.
 
         Returns:
             bool: True, если данные еще есть (симуляция продолжается).
@@ -254,9 +263,7 @@ class BacktestDataProvider(MarketDataProvider):
         if self._current_index < 0:
             return pd.DataFrame()
 
-        # Вычисляем начало окна. Не может быть меньше 0.
         start_index = max(0, self._current_index - length + 1)
         end_index = self._current_index + 1
 
-        # Возвращаем копию, чтобы стратегия случайно не изменила исходные данные
         return self._data.iloc[start_index:end_index].copy()

@@ -6,12 +6,27 @@
 оптимизации (WFO) и отображения результатов в отчетах.
 
 Каждая метрика описывается словарем с метаданными:
-- **name**: Человекочитаемое название.
+- **name**: Человеческое название.
 - **direction**: Направление оптимизации ('maximize' или 'minimize').
 - **description**: Краткое пояснение сути метрики.
 """
 
 from typing import Dict, Any
+
+# TODO Сделать так, чтоб сюда добавляли коэффициент и он сразу внедрялся во все отчеты.
+"""
+app/core/analysis/constants.py
+# ... внутри METRIC_CONFIG
+"avg_trade": {
+    "name": "Avg Trade ($)",
+    "direction": "maximize",
+    "description": "Средний PnL на одну сделку.",
+    "format": "{:.2f}",
+    "is_percent": False,
+    "priority": 45
+}
+Остальное см. в metrics.py
+"""
 
 # Реестр метрик.
 # Ключ словаря должен совпадать с именем метода в `PortfolioMetricsCalculator`.
@@ -61,7 +76,7 @@ METRIC_CONFIG: Dict[str, Dict[str, Any]] = {
         "direction": "minimize",
         "description": "Максимальное падение капитала в процентах от пика."
     },
-    # Экспериментальные / Кастомные метрики
+    # Экспериментальные / Кастомные метрики (свои)
     "custom_metric": {
         "name": "Custom (PF * WR / MDD)",
         "direction": "maximize",

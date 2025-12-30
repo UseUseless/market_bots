@@ -34,16 +34,21 @@ class ConfigFactory:
         3. Глобальные настройки системы (комиссии, капитал).
 
         Args:
-            mode: Режим запуска (BACKTEST/LIVE/OPTIMIZATION).
-            exchange: Биржа.
-            instrument: Тикер.
-            interval: Таймфрейм.
-            strategy_name: Имя класса стратегии.
-            strategy_params_override: Параметры для переопределения дефолтов.
-            risk_config_override: Настройки риск-менеджера.
+            mode (RunModeType): Режим запуска (BACKTEST, LIVE, OPTIMIZATION).
+            exchange (str): Название биржи (например, 'bybit').
+            instrument (str): Тикер инструмента (например, 'BTCUSDT').
+            interval (str): Временной интервал (например, '1h').
+            strategy_name (str): Имя класса стратегии (должно быть в AVAILABLE_STRATEGIES).
+            strategy_params_override (Optional[Dict[str, Any]], optional): Параметры стратегии 
+                для переопределения дефолтных значений. Defaults to None.
+            risk_config_override (Optional[Dict[str, Any]], optional): Настройки риск-менеджера 
+                (тип, параметры). Defaults to None.
 
         Returns:
             TradingConfig: Готовый DTO.
+
+        Raises:
+            ValueError: Если стратегия с указанным именем не найдена в реестре.
         """
         # 1. Получение класса стратегии и дефолтных параметров
         strategy_cls = AVAILABLE_STRATEGIES.get(strategy_name)

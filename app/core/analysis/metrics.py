@@ -1,9 +1,8 @@
 """
 Модуль расчета финансовых метрик.
 
-Отвечает за вычисление показателей эффективности стратегии (Performance Metrics)
-на основе истории сделок. Используется для генерации отчетов и в качестве
-целевых функций для оптимизатора (Optuna).
+Вычисление показателей эффективности стратегии на основе истории сделок. 
+Используется для генерации отчетов и в качестве целевых функций для оптимизатора (Optuna).
 """
 
 from typing import Dict, Any
@@ -13,10 +12,43 @@ import pandas as pd
 
 from app.core.analysis.constants import METRIC_CONFIG
 
+# TODO Сделать так, чтоб сюда добавляли коэффициент и он сразу внедрялся во все отчеты.
+"""
+constants.py: Добавляем туда правила форматирования (нужен ли знак %, сколько знаков после запятой).
+metrics.py: Он просто считает все, что есть в конфиге.
+Отчеты: Они перестают знать имена метрик. Они просто бегут циклом по конфигу и выводят всё, что там есть.
+
+Пример после изменений
+app/core/analysis/metrics.py
+def _calculate_avg_trade(self) -> float:
+    if len(self.trades) == 0: return 0.0
+    return self.trades['pnl'].mean()
+
+# ... и добавить маппинг в метод calculate()
+method_map = {
+    # ... старые ...
+    "avg_trade": self._calculate_avg_trade, # <--- Добавили
+}
+
+В PortfolioMetricsCalculator.calculate использовать getattr, чтобы маппинг не писать руками:
+def calculate(self, metric_key: str) -> float:
+        # Пытаемся найти метод с именем _calculate_{metric_key}
+        method_name = f"_calculate_{metric_key}"
+        
+        if hasattr(self, method_name):
+            return getattr(self, method_name)()
+            
+        # Если метода нет, может это просто колонка в dataframe? (fallback)
+        if metric_key in self.trades.columns:
+             return self.trades[metric_key].iloc[-1]
+             
+        # Если совсем ничего нет
+        return 0.0
+"""
 
 class PortfolioMetricsCalculator:
     """
-    Калькулятор метрик портфеля стратегии.
+    Калькулятор метрик.
 
     Принимает DataFrame сделок и рассчитывает набор статистических показателей.
     Выполняет предварительные расчеты (Equity Curve, Returns) при инициализации
@@ -31,7 +63,7 @@ class PortfolioMetricsCalculator:
 
     def __init__(self, trades_df: pd.DataFrame, initial_capital: float, annualization_factor: int = 252):
         """
-        Инициализирует калькулятор и выполняет pre-calculation.
+        Инициализирует калькулятор и выполняет предварительные расчеты.
 
         Args:
             trades_df (pd.DataFrame): DataFrame закрытых сделок.
@@ -47,7 +79,7 @@ class PortfolioMetricsCalculator:
         self.initial_capital = initial_capital
         self.annualization_factor = annualization_factor
 
-        # --- Предварительные расчеты (Vectorized) ---
+        # Предварительные расчеты (Vectorized)
 
         # 1. Кривая капитала (Equity Curve)
         self.trades['cumulative_pnl'] = self.trades['pnl'].cumsum()

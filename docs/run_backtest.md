@@ -1,192 +1,228 @@
 ```mermaid
-flowchart TB
-    %% --- 1. СТИЛИ ---
+flowchart TD
+    %% ==========================================
+    %% 1. СТИЛИ
+    %% ==========================================
     classDef folder fill:#fff3e0,stroke:#e65100,stroke-width:2px,stroke-dasharray: 5 5;
     classDef file fill:#e1f5fe,stroke:#01579b,stroke-width:2px;
     classDef func fill:#fff9c4,stroke:#fbc02d,stroke-width:1px;
     classDef ext fill:#e1bee7,stroke:#4a148c,stroke-width:2px,stroke-dasharray: 5 5;
     classDef logic fill:#fce4ec,stroke:#880e4f,stroke-width:1px,stroke-dasharray: 5 5;
-    classDef loop fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px;
+    classDef db fill:#e0f2f1,stroke:#00695c,stroke-width:2px;
 
-    %% --- 2. СТРУКТУРА ---
-    Entry([CLI Entry]):::file
-    %% Папка scripts
-    subgraph SCRIPTS ["📂 scripts"]
-        direction LR
-        subgraph RUN ["📄 run_backtest.py"]
-            direction LR
-            ParseArgs[Parse CLI Arguments]:::logic
-            RunSingleBackExt["Запуск бэктеста
-            📄.../backtest/runners.py
-            ⚡run_single_backtest_flow"]:::ext
-        end
-    end
-    
-    %% Папка app/core/engine/backtest
-    subgraph CoreEngine ["📂 app/core/engine/backtest"]
-    direction LR
-        subgraph S_RUNNERS ["📄 runners.py"]
-            subgraph RunSingleBacktest [run_single_backtest_flow]
-                direction LR
-                Config[_create_config]:::func
-                RunBackEngine[Запуск движка бэктеста BacktestEngine.run]:::ext
-                GenerateReports["Запуск анализа
-                📄...core\analysis\session.py
-                ⚡AnalysisSession.generate_all_reports и сохранение результатов"]:::ext
-            end
-        end
-
-        subgraph ENGINE ["📄 engine.py"]
-        direction LR
-            subgraph BacktestRun [⚡BacktestEngine.run]
-            direction LR
-                subgraph InitComponents [_initialize_components]
-                    direction LR
-                    LoadData["Загружает метаданные инструмента
-                📄...app\infrastructure\files\file_io.py
-                ⚡load_instrument_info"]:::ext
-                    InitStrategy["Инициализация стратегии
-                📄...app/strategies/catalog/*strategy*.py
-                ⚡*StrategyClass*.__init__"]:::ext
-                    InitPortfolio["Инициализация портфеля
-                📄...app/core/portfolio.py
-                ⚡Portfolio.__init__"]:::ext
-                    InitBacktestExecutionHandler["Инициализация исполнителя ордеров
-                ⚡BacktestExecutionHandler.init()"]:::func
-                end
-
-                subgraph PrepareData["Подготовка свечей"]
-                    direction LR
-                    RunDataLoader["Загрузка скачанных свечей
-                📄...app\infrastructure\feeds\backtest\provider.py
-                ⚡BacktestDataLoader.load_raw_data()"]:::ext
-                
-                    EnrichData["Обработка свечей, расчет необходимых для стратегии данных по свечам
-                📄...app\strategies\catalog\*strategy*.py
-                ⚡Strategy.process_data()"]:::ext
-
-                    DataProvider["Выдает свечи движку
-                📄...app\infrastructure\feeds\backtest\provider.py
-                ⚡BacktestDataProvider.init()"]:::ext
-                end
-
-                subgraph EventLoop ["🔄 Цикл обработки свечей"]
-                    direction TB
-                    LoopStart{"Проверяет есть ли следующая свеча и возвращает её
-                📄...app\infrastructure\feeds\backtest\provider.py
-                ⚡BacktestDataProvider.next()"
-                    }:::ext
-                    GetCandle["Получает свечу+индикаторы
-                📄...app\infrastructure\feeds\backtest\provider.py
-                ⚡BacktestDataProvider.get_current_candle()"]:::ext
-                    
-                    subgraph P1 ["Этап 1: Исполнение ордеров"]
-                        direction TB
-                        CheckPending{Есть ли ордера на исполнение?}:::logic
-                    end
-                    
-                    subgraph P2 ["Этап 2: Проверка SL/TP"]
-                        direction TB
-                        OnMarket["Проверяет не пробила ли цена SL/TP
-                    📄...app/core/portfolio.py
-                    ⚡Portfolio.on_market_data()"]:::logic
-                    end
-                    
-                    subgraph P3 ["Этап 3: Проверка сигнала"]
-                        direction TB
-                        StrategySignal["Проверяет есть ли сигнал
-                        📄...app/strategies/catalog/*strategy*.py
-                        ⚡*StrategyClass*.on_candle()"]:::ext
-                    end
-                    
-                    subgraph ExecOrder["⚡BacktestExecutionHandler.execute_order()"]
-                        CalcPrice["Считаем цену с учетом проскальзывания _simulate_slippage и комиссии"]:::func
-                    end
-
-                    subgraph ProcessEvent ["Обработка событий"]
-                        direction TB
-                        QueueLoop{"Проверяет есть ли в очереди событие"
-                        }:::loop
-
-                        CheckInstance["Проверяет класс события"]:::logic
-                        
-                        subgraph SignalEvent["Обработка SignalEvent"]
-                            direction TB
-                            OnSignal["Обрабатывает сигнал и создает ордер (на покупку или продажу - новая позиция или разворот и закрытие старой)
-                        📄...app/core/portfolio.py
-                        ⚡Portfolio.on_signal()"]:::ext
-                        end
-
-                        subgraph FillEvent["Обработка FillEvent"]
-                            direction TB
-                            OnFill["Обрабатывает выполненую сделку, считает баланс
-                        📄...app/core/portfolio.py
-                        ⚡Portfolio.on_fill()"]:::ext
-                        end
-
-                        OrderEvent["Обработка OrderEvent"]:::logic
-                    end
-                end
-                ResultBuild[Создание результатов бэктеста]:::func
+    %% ==========================================
+    %% 2. ТОЧКА ВХОДА
+    %% ==========================================
+    subgraph Root ["📂 market_bots (root)"]
+        LauncherFile["📄 launcher.py
+        ⚡main()"]:::file
+        
+        subgraph AdaptersCLI ["📂 app/adapters/cli"]
+            subgraph MenuFile ["📄 menu.py"]
+                MenuCtrl["⚡main()
+                (Interactive Menu)"]:::func
             end
         end
     end
 
-    %% --- 3. СВЯЗИ ---
-    %% run_backtest.py
-    Entry ==> ParseArgs
-    ParseArgs ==>|Settings from CLI Dict| RunSingleBackExt
-    RunSingleBackExt ==>|Settings from CLI Dict| Config
+    User((User)) --> LauncherFile
+    LauncherFile --> MenuCtrl
 
-    %% runners.py
-    Config ==>|TradingConfig| RunBackEngine
+    %% ==========================================
+    %% 3. СКРИПТЫ
+    %% ==========================================
+    MenuCtrl =="subprocess"==> ScriptsFolder
 
-    %% Engine Flow
-    RunBackEngine ==> InitComponents
-    InitComponents ==> PrepareData
-    PrepareData ==> LoopStart
+    subgraph ScriptsFolder ["📂 scripts"]
+        direction TB
+        subgraph S_Manage ["📄 manage_data.py"]
+            ManageEntry["⚡main()"]:::func
+        end
+        subgraph S_Back ["📄 run_backtest.py"]
+            BackEntry["⚡main()"]:::func
+        end
+        subgraph S_Optim ["📄 run_optimization.py"]
+            OptimEntry["⚡main()"]:::func
+        end
+        subgraph S_Live ["📄 run_signals.py"]
+            LiveEntry["⚡main()"]:::func
+        end
+        subgraph S_Dash ["📄 run_dashboard.py"]
+            DashEntry["⚡main()"]:::func
+        end
+    end
 
-    %% Loop Flow
-    LoopStart ==>|Свечи есть| GetCandle
+    %% ==========================================
+    %% 4. ИНФРАСТРУКТУРА ДАННЫХ (DATA & FEEDS)
+    %% ==========================================
+    subgraph InfraFiles ["📂 app/infrastructure/files"]
+        subgraph DataMgrFile ["📄 data_manager.py"]
+            UpdateFlow["⚡update_lists_flow"]:::func
+            DownFlow["⚡download_data_flow"]:::func
+        end
+    end
 
-    %%P1
-    GetCandle ==> P1
-    CheckPending -->|Ордера есть| ExecOrder
-    ExecOrder <-->|Генерируем FillEvent| ProcessEvent
+    subgraph InfraExchanges ["📂 app/infrastructure/exchanges"]
+        subgraph BaseExFile ["📄 base.py"]
+            ExClient["⚡ExchangeDataGetter
+            (Bybit / Tinkoff)"]:::ext
+        end
+    end
 
-    %%P2
-    P1 ==>|Ордеров нет| P2
+    subgraph InfraBackFeeds ["📂 app/infrastructure/feeds/backtest"]
+        subgraph BTProvFile ["📄 provider.py"]
+            BTLoader["⚡BacktestDataLoader
+            (Load & Split Parquet)"]:::func
+            BTFeed["⚡BacktestDataProvider
+            (Next Candle Iterator)"]:::func
+        end
+    end
 
-    OnMarket <-->|Пробило SL/TP - генерируем OrderEvent| ProcessEvent
+    subgraph InfraLiveFeeds ["📂 app/infrastructure/feeds/live"]
+        subgraph LiveProvFile ["📄 provider.py"]
+            LiveProv["⚡LiveDataProvider
+            (Buffer + WebSocket)"]:::func
+        end
+    end
 
-    %%P3
-    P2 ====> P3
-    StrategySignal <-->|Есть сигнал- генерируем SignalEvent| ProcessEvent
-    P3 ==> LoopStart
-
-    %% Exit Flow
-    LoopStart ==>|Свечи закончились| ResultBuild
-    ResultBuild ==>|Результаты бэктеста Dict + Все сделки DF| GenerateReports
-
-    %% Init Components Flow
-    LoadData--> InitStrategy
-    InitStrategy--> InitPortfolio
-    InitPortfolio--> InitBacktestExecutionHandler
-
-    %% Prepare Data Flow
-    RunDataLoader-->|Скачанные свечи| EnrichData
-    EnrichData -->|Подготовленные свечи| DataProvider
+    %% Связи Data Flow
+    ManageEntry --> UpdateFlow & DownFlow
+    UpdateFlow & DownFlow --> ExClient
+    ExClient -.-> FS_Parquet[("📂 data/*.parquet")]:::db
     
-    %% Process Events
-    QueueLoop -->|Есть событие| CheckInstance
-    CheckInstance -->|SignalEvent| SignalEvent
-    CheckInstance -->|FillEvent| FillEvent
-    CheckInstance -->|OrderEvent| OrderEvent
-    OrderEvent --> ExecOrder
+    %% Чтение данных
+    BTLoader -.-> FS_Parquet
+    LiveProv -- "Warmup (REST)" --> ExClient
 
-    %% --- 4. ПРИМЕНЕНИЕ СТИЛЕЙ ---
-    class SCRIPTS,CoreEngine folder;
-    class RUN,S_RUNNERS,ENGINE file;
-    class BacktestRun,P1,P2,P3,ExecOrder,ProcessEvent func;
-    class SignalEvent,FillEvent logic
+    %% ==========================================
+    %% 5. ОБЩЕЕ ЯДРО (СТРАТЕГИИ И МЕТРИКИ)
+    %% ==========================================
+    subgraph StrategiesFolder ["📂 app/strategies"]
+        StrategyClass["⚡BaseStrategy (Impl)
+        (Logic & Indicators)"]:::logic
+    end
+
+    subgraph CoreAnalysis ["📂 app/core/analysis"]
+        subgraph SessionFile ["📄 session.py"]
+            AnalSession["⚡AnalysisSession
+            (Orchestrator)"]:::func
+        end
+        subgraph MetricsFile ["📄 metrics.py"]
+            CalcMetrics["⚡PortfolioMetricsCalculator"]:::func
+        end
+    end
+
+    %% ==========================================
+    %% 6. ДВИЖКИ БЭКТЕСТА И ОПТИМИЗАЦИИ
+    %% ==========================================
+    subgraph CoreBacktest ["📂 app/core/engine/backtest"]
+        subgraph RunnersFile ["📄 runners.py"]
+            RunSingle["⚡run_single_backtest_flow"]:::func
+        end
+        subgraph EngineFile ["📄 engine.py"]
+            BTEngine["⚡BacktestEngine.run()
+            (Event Loop)"]:::func
+        end
+    end
+
+    subgraph CoreOptim ["📂 app/core/engine/optimization"]
+        subgraph WFOFile ["📄 engine.py"]
+            WFOEngine["⚡WFOEngine.run()
+            (Optuna Loop)"]:::func
+            OptimizeStep["⚡_optimize_step()"]:::func
+        end
+    end
+
+    %% Связи Бэктеста
+    BackEntry --> RunSingle
+    RunSingle --> BTEngine
+    BTEngine --> BTFeed
+    BTFeed <--> BTLoader
+    
+    %% Важно: Engine создает экземпляры стратегий
+    BTEngine -- "Inits" --> StrategyClass
+    
+    %% Отчеты Бэктеста
+    RunSingle --> AnalSession
+    AnalSession --> CalcMetrics
+    AnalSession -.-> FS_Reports[("📂 reports/")]:::db
+
+    %% Связи Оптимизации
+    OptimEntry --> WFOEngine
+    WFOEngine --> BTLoader
+    WFOEngine --> OptimizeStep
+    OptimizeStep -- "Train/Test Loop" --> BTEngine
+    
+    %% Прямой расчет метрик в цикле (Optimization Phase)
+    OptimizeStep -- "Direct Calc" --> CalcMetrics
+    %% Финальный отчет
+    WFOEngine --> AnalSession
+
+    %% ==========================================
+    %% 7. LIVE TRADING CORE
+    %% ==========================================
+    subgraph CoreLive ["📂 app/core/engine/live"]
+        subgraph OrchFile ["📄 orchestrator.py"]
+            LiveOrch["⚡run_live_monitor_flow
+            (AsyncIO Setup)"]:::func
+        end
+        subgraph SignalEngFile ["📄 engine.py"]
+            SigEngine["⚡SignalEngine
+            (Task Manager)"]:::func
+        end
+    end
+
+    subgraph AdaptersTg ["📂 app/adapters/telegram"]
+        subgraph PubFile ["📄 publisher.py"]
+            TgSender["⚡TelegramSignalSender"]:::func
+        end
+    end
+
+    subgraph InfraDB ["📂 app/infrastructure/database"]
+        subgraph ReposFile ["📄 repositories.py"]
+            ConfigRepo["⚡ConfigRepository"]:::func
+        end
+        subgraph LogFile ["📄 signal_logger.py"]
+            DBLogger["⚡DBSignalLogger"]:::func
+        end
+    end
+
+    %% Связи Live
+    LiveEntry --> LiveOrch
+    LiveOrch --> ConfigRepo
+    ConfigRepo <--> DB_Postgres[("🐘 PostgreSQL")]:::db
+    
+    LiveOrch --> SigEngine
+    SigEngine -- "Spawns Task" --> StrategyClass
+    StrategyClass <--> LiveProv
+    
+    %% Поток сигналов
+    StrategyClass -- "SignalEvent" --> SigEngine
+    SigEngine --> TgSender & DBLogger
+    DBLogger -.-> DB_Postgres
+
+    %% ==========================================
+    %% 8. DASHBOARD
+    %% ==========================================
+    subgraph AdaptDash ["📂 app/adapters/dashboard"]
+        subgraph DashMain ["📄 main.py"]
+            StreamlitEntry["⚡main() (Streamlit)"]:::func
+        end
+        subgraph DashComps ["📂 components"]
+            DataLoader["📄 data_loader.py"]:::func
+        end
+    end
+
+    DashEntry --> StreamlitEntry
+    StreamlitEntry --> DataLoader
+    DataLoader -.-> FS_Logs[("📂 logs/*.jsonl")]:::db
+    StreamlitEntry <--> DB_Postgres
+    
+    %% Дашборд использует ядро аналитики для пересчета на лету
+    StreamlitEntry --> AnalSession
+
+    %% ==========================================
+    %% 9. СТИЛИ ПАПОК
+    %% ==========================================
+    class Root,AdaptersCLI,ScriptsFolder,InfraData,InfraFiles,InfraExchanges,CoreBacktest,CoreOptim,CoreAnalysis,CoreLive,InfraBackFeeds,InfraLiveFeeds,StrategiesFolder,InfraDB,AdaptersTg,AdaptDash,DashComps folder;
 ```

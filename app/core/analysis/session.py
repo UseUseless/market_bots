@@ -1,10 +1,9 @@
 """
-Модуль сессии анализа (Analysis Session).
+Модуль анализа результатов.
 
 Этот класс служит оркестратором для пост-процессинга результатов бэктеста.
 Он объединяет расчет математических метрик и генерацию визуальных отчетов.
 
-Роль в архитектуре:
 После завершения симуляции (`BacktestEngine`), сырые данные (сделки и история цен)
 передаются сюда. Сессия превращает их в человекочитаемые результаты:
 коэффициенты Шарпа, графики доходности и консольные таблицы.
@@ -74,14 +73,14 @@ class AnalysisSession:
         # Определяем коэффициент аннуализации (например, 252 дня для акций, 365 для крипты)
         annual_factor = EXCHANGE_SPECIFIC_CONFIG.get(exchange, {}).get("SHARPE_ANNUALIZATION_FACTOR", 252)
 
-        # --- 1. Расчет метрик (Portfolio & Benchmark) ---
+        # 1. Расчет метрик (Portfolio & Benchmark)
         portfolio_calc = PortfolioMetricsCalculator(trades_df, initial_capital, annual_factor)
         self.portfolio_metrics: Dict[str, Any] = portfolio_calc.calculate_all()
 
         benchmark_calc = BenchmarkMetricsCalculator(historical_data, initial_capital, annual_factor)
         self.benchmark_metrics: Dict[str, Any] = benchmark_calc.calculate_all()
 
-        # --- 2. Подготовка данных для графиков (Time Alignment) ---
+        # 2. Подготовка данных для графиков (Time Alignment)
         # Нам нужно, чтобы кривая капитала имела DatetimeIndex, а не просто номер сделки,
         # чтобы корректно наложить её на график цены бенчмарка.
 
